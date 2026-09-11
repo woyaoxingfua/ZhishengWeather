@@ -1,0 +1,136 @@
+//
+//  WeatherSnapshotCacheCompatTests.swift
+//  ZhishengWeatherTests
+//
+//  F-A-9 旧缓存兼容（静态侧核心用例，不联网）：
+//   - 旧版 App 写入的共享容器 JSON（无 `daily` 键）→ 新版解码成功且 `daily == nil`，
+//     其余字段值不变（R-1 的结构性保证）；
+//   - 含 `daily` 的新 JSON 往返编解码等值；
+//   - 解码 → 重编码 → 再解码链路稳定。
+//
+//  ⚠️ 兼容性依赖「合成 Codable 对缺失键返回 nil」——因此 `WeatherSnapshot`
+//  **禁止**手写 `init(from:)`、禁止引入 payloadVersion
+//  （ARCH-zhisheng-ios-FA-increment §2.3 / 回归风险 R-1）。
+//  若未来有人改动模型解码路径，本文件的用例应当场报错。
+//
+//  注意：JSONEncoder/Decoder 的默认 Date 策略为 timeIntervalSinceReferenceDate
+//  （Double，自 2001-01-01 起算），手写 JSON 中的时间字段按此构造期望值。
+//
+
+import XCTest
+@testable import ZhishengWeather
+
+final class WeatherSnapshotCacheCompatTests: XCTestCase {
+
+    /// 旧版（F-A 之前）共享容器 JSON：与 `WeatherSnapshot` 全字段一致，唯独没有 `daily` 键。
+    private static let legacyJSON = """
+    {
+      "location": { "name": "北京", "latitude": 39.9042, "longitude": 116.4074, "isFallback": true },
+      "temperature": 23.4,
+      "apparentTemperature": 21.0,
+      "weatherCode": 2,
+      "windSpeed": 3.2,
+      "windDirection": 135.0,
+      "humidity": 58,
+      "isDay": true,
+      "hourly": [
+        { "time": 1700000000.0, "temperature": 23.4, "weatherCode": 2 },
+        { "time": 1700003600.0, "temperature": 22.1, "weatherCode": 3 }
+      ],
+      "dailyHigh": 26.1,
+      "dailyLow": 15.2,
+      "fetchedAt": 1700000010.0
+    }
+    """
+
+    // MARK: - 旧缓存解码（F-A-9 静态侧核心）
+
+    func testLegacyJSONWithoutDailyKeyDecodesWithNilDaily() throws {
+        let snapshot = try JSONDecoder().decode(WeatherSnapshot.self,
+                                                from: Data(Self.legacyJSON.utf8))
+
+        XCTAssertNil(snapshot.daily, "旧缓存无 daily 键必须解码为 nil（F-A-9 兼容核心）")
+        // 其余字段值不变
+        XCTAssertEqual(snapshot.location.name, "北京")
+        XCTAssertEqual(snapshot.location.latitude, 39.9042, accuracy: 1e-9)
+        XCTAssertTrue(snapshot.location.isFallback)
+        XCTAssertEqual(snapshot.temperature, 23.4, accuracy: 0.001)
+        XCTAssertEqual(snapshot.apparentTemperature, 21.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.weatherCode, 2)
+        XCTAssertEqual(snapshot.windSpeed, 3.2, accuracy: 0.001)
+        XCTAssertEqual(snapshot.windDirection, 135.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.humidity, 58)
+        XCTAssertTrue(snapshot.isDay)
+        XCTAssertEqual(snapshot.hourly.count, 2)
+        XCTAssertEqual(snapshot.hourly.first?.temperature, 23.4, accuracy: 0.001)
+        XCTAssertEqual(snapshot.dailyHigh, 26.1, accuracy: 0.001)
+        XCTAssertEqual(snapshot.dailyLow, 15.2, accuracy: 0.001)
+        XCTAssertEqual(snapshot.fetchedAt, Date(timeIntervalSinceReferenceDate: 1_700_000_010))
+    }
+
+    // MARK: - 新 JSON 往返
+
+    func testSnapshotWithDailyRoundTripsThroughJSON() throws {
+        let date = Date(timeIntervalSinceReferenceDate: 1_700_000_000)
+        let snapshot = WeatherSnapshot(
+            location: .beijing,
+            temperature: 23.4,
+            apparentTemperature: 21.0,
+            weatherCode: 2,
+            windSpeed: 3.2,
+            windDirection: 135,
+            humidity: 58,
+            isDay: true,
+            hourly: [HourlyPoint(time: date, temperature: 23.4, weatherCode: 2)],
+            dailyHigh: 26.1,
+            dailyLow: 15.2,
+            daily: [
+                DailyForecast(date: date,
+                              weatherCode: 0,
+                              tempMax: 26.1,
+                              tempMin: 15.2,
+                              precipitationProbability: 10),
+                DailyForecast(date: date.addingTimeInterval(86_400),
+                              weatherCode: 61,
+                              tempMax: 24.0,
+                              tempMin: 14.0,
+                              precipitationProbability: nil)
+            ],
+            fetchedAt: date
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WeatherSnapshot.self, from: data)
+
+        XCTAssertEqual(decoded, snapshot, "含 daily 的快照必须往返编解码等值")
+        XCTAssertEqual(decoded.daily?.count, 2)
+        XCTAssertEqual(decoded.daily?.first?.tempMax, 26.1, accuracy: 0.001)
+        XCTAssertEqual(decoded.daily?.first?.precipitationProbability, 10)
+        XCTAssertNil(decoded.daily?.last?.precipitationProbability,
+                     "precip 为 nil 的行往返后必须仍是 nil（不得变 0）")
+    }
+
+    func testLegacyDecodedSnapshotCanBeReencodedAndDecodedAgain() throws {
+        let first = try JSONDecoder().decode(WeatherSnapshot.self,
+                                             from: Data(Self.legacyJSON.utf8))
+
+        let data = try JSONEncoder().encode(first)
+        let second = try JSONDecoder().decode(WeatherSnapshot.self, from: data)
+
+        XCTAssertNil(second.daily)
+        XCTAssertEqual(second, first, "解码 → 重编码 → 再解码链路必须稳定")
+    }
+
+    func testLegacyAndNewPayloadsCoexistInSharedStore() throws {
+        // 旧 JSON（无 daily）解码后重编码，再被读回 —— 模拟「新版 App 读旧缓存后写回」路径。
+        let legacy = try JSONDecoder().decode(WeatherSnapshot.self,
+                                              from: Data(Self.legacyJSON.utf8))
+        let payload = SharedWeatherPayload(snapshot: legacy,
+                                           updatedAt: Date(timeIntervalSinceReferenceDate: 1_700_000_500))
+        let data = try JSONEncoder().encode(payload)
+        let decodedPayload = try JSONDecoder().decode(SharedWeatherPayload.self, from: data)
+
+        XCTAssertNil(decodedPayload.snapshot.daily)
+        XCTAssertEqual(decodedPayload.snapshot, legacy)
+    }
+}

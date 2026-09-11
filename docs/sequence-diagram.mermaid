@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    participant App as ZhishengWeatherApp
+    participant VM as WeatherViewModel
+    participant LP as LocationProvider
+    participant SVC as WeatherService(actor)
+    participant EP as OpenMeteoEndpoint
+    participant MAP as OpenMeteoMapper
+    participant ST as AppGroupStore
+    participant WC as WidgetCenter
+
+    App->>VM: refresh()  (冷启动 / 下拉刷新 / scenePhase=.active)
+    VM->>VM: state = .loading（已有内容则保留）
+    VM->>LP: requestLocation()
+    LP->>LP: 请求「使用期间」授权（超时 5s）
+    alt 授权成功
+        LP-->>VM: LocationInfo(真实坐标, isFallback=false)
+    else 拒绝 / 失败 / 超时
+        LP-->>VM: LocationInfo.beijing
+    end
+    VM->>SVC: fetch(latitude, longitude)
+    SVC->>EP: url(latitude, longitude)
+    EP-->>SVC: URL（current + hourly + daily + timezone=auto + timeformat=unixtime）
+    SVC->>SVC: URLSession.data(from:) async
+    alt 请求/解码成功
+        SVC->>MAP: map(OpenMeteoResponse, location, now)
+        MAP-->>SVC: WeatherSnapshot
+        SVC-->>VM: WeatherSnapshot
+        VM->>VM: snapshot.location = resolved（覆盖城市名）
+        VM->>ST: save(SharedWeatherPayload(snapshot, Date()))
+        ST-->>VM: ok
+        VM->>WC: reloadAllTimelines()
+        VM->>VM: state = .loaded(snapshot)
+    else 抛出 WeatherError
+        SVC-->>VM: throws WeatherError
+        VM->>ST: loadSnapshot()
+        ST-->>VM: 上次缓存（可能为 nil）
+        VM->>VM: state = .failed(cached, message)
+    end
+    VM-->>App: UI 随 @Observable 自动重绘

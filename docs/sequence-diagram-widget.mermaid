@@ -1,0 +1,20 @@
+sequenceDiagram
+    autonumber
+    participant WK as WidgetKit
+    participant WP as WeatherProvider
+    participant ST as AppGroupStore
+    participant V as Small/MediumView
+
+    WK->>WP: getTimeline(in:context, completion:)
+    WP->>ST: load()
+    alt 共享容器有数据
+        ST-->>WP: SharedWeatherPayload(snapshot, updatedAt)
+        WP->>WP: 生成有数据 Entry（payload 非 nil）
+    else 无数据（未打开过 App）
+        ST-->>WP: nil
+        WP->>WP: 生成空态 Entry（payload=nil，温度显示 --°）
+    end
+    WP-->>WK: Timeline(entries:[entry], policy: .after(now + 45min))
+    WK->>V: body(entry) → 按 family 选 Small / Medium 视图
+    V->>V: .containerBackground(for: .widget) 渲染背景
+    Note over WK,WP: 主 App 每次成功取数后 reloadAllTimelines() 触发提前刷新

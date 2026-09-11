@@ -1,0 +1,94 @@
+name: iOS Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, ios ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lock Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Pick an available iPhone simulator
+        id: sim
+        run: |
+          set -euo pipefail
+          # 纪律：本段禁止用 head 提前关闭管道。
+          # head 读满一行即退出并关闭管道，上游会收到 SIGPIPE(141)，
+          # 在 `set -o pipefail` 下整条管道被判失败、step 直接挂掉。
+          # 改用 `grep -m1`：由 grep 自己在首个匹配处停止，不产生 SIGPIPE。
+          DEVICE=$(xcrun simctl list devices available \
+            | grep -Eom1 'iPhone [0-9]+( Pro Max| Pro| Plus| mini)?' \
+            | sed -E 's/[[:space:]]+$//' || true)
+          if [ -z "$DEVICE" ]; then
+            echo "::error::runner 上找不到任何可用 iPhone 模拟器"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
+          echo "Selected simulator: $DEVICE"
+
+      - name: Run unit tests (simulator)
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild test \
+            -project ZhishengWeather.xcodeproj \
+            -scheme ZhishengWeather \
+            -destination "platform=iOS Simulator,OS=latest,name=${{ steps.sim.outputs.device }}" \
+            -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -project ZhishengWeather.xcodeproj \
+            -scheme ZhishengWeather \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ZhishengWeather.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R build/ZhishengWeather.xcarchive/Products/Applications/ZhishengWeather.app build/Payload/
+          cd build && zip -r ZhishengWeather-unsigned.ipa Payload
+          ls -lh ZhishengWeather-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZhishengWeather-unsigned-ipa
+          path: build/ZhishengWeather-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            build/*.xcresult
+          if-no-files-found: ignore

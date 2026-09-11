@@ -1,0 +1,152 @@
+# ============================================================================
+# ZhishengWeather —— XcodeGen 工程定义（唯一工程真源）
+# ----------------------------------------------------------------------------
+# 本机为 Windows，无法编译 iOS，故 *.xcodeproj 不入库；
+# CI 侧执行 `xcodegen generate --spec project.yml` 生成工程后再构建。
+#
+# 三个 target：
+#   1. ZhishengWeather        （application，主 App）
+#   2. ZhishengWeatherWidget  （app-extension，WidgetKit 小组件）
+#   3. ZhishengWeatherTests   （bundle.unit-test，XCTest，宿主为主 App）
+#
+# 关键纪律：`Core/` 源码目录同时挂到「主 App」与「Widget」两个 target，
+# 实现"一份逻辑、两处复用"。因此 Core 内禁止 import UIKit / 使用 UIApplication。
+#
+# ── 部署目标：保持 iOS 17.0（团队裁定）──────────────────────────────────────
+# 结论：**不**下调到 16.0。原因逐项如下。
+#
+# 1. Widget 层的 `containerBackground(for: .widget)` 兼容层**保留**。
+#    iOS 17 起该修饰符是描述小组件背景的推荐写法；`ZhishengWeatherWidget/
+#    WidgetBackground.swift` 仍以 `if #available(iOS 17.0, *)` 双写，
+#    iOS 16 分支退回 `padding + background()`；TimelineProvider 侧同源判据
+#    为 `WidgetRuntime.isIOS17OrLater`。
+#    · 保留它的理由**不是**为了跑 iOS 16，而是**源码层收敛**：
+#      背景逻辑只在 `WidgetBackgroundModifier` 一处定义，Small / Medium /
+#      Large 三个视图不再各写一遍，也不会出现「某个视图漏写背景」的漂移。
+#    · 在部署目标 = 17.0 下，`#available` 的 else 分支被编译器**静态消除**，
+#      因此该兼容层是**零运行时开销**的纯源码组织手段。
+#    · 同时它是**未来下调的最低版本铺垫**：若日后真要支持 iOS 16，
+#      只需改本文件的部署目标 + 完成下方第 3 条的两项改造，Widget 侧无需再动。
+#
+# 2. 为什么不把部署目标改到 16.0：主 App 侧存在两处 **iOS 17 编译期依赖**，
+#    `#available` **语法上无法兜住**（它们不是"运行时可用性"问题，
+#    而是"该符号在 iOS 16 SDK 下根本不存在"）：
+#      a) `WeatherViewModel` 的 `@Observable` 宏（Observation 框架为 iOS 17+，
+#         `ZhishengWeatherApp` 用 `@State` 持有它）；
+#      b) `ZhishengWeatherApp` 的 `.onChange(of:) { _, newPhase in }` **双参**闭包
+#         （iOS 17 才引入该重载）。
+#    → 部署目标若为 16.0，这两处会直接编译失败，且无法用 `if #available` 包住。
+#
+# 3. 若日后确需支持 iOS 16，需先完成两项改造（属独立任务，需产品/架构确认）：
+#      a) `WeatherViewModel` 由 `@Observable` 改为 `ObservableObject` +
+#         `@Published`，`ContentView` / `ZhishengWeatherApp` 侧改用
+#         `@StateObject` / `@ObservedObject`；
+#      b) `ZhishengWeatherApp` 的 `.onChange(of:)` 改为旧的**单参**形式
+#         `.onChange(of:) { newPhase in }`。
+#    完成上述两项后，只需把本文件部署目标改为 16.0 即可（Widget 侧已就绪）。
+#
+# 4. 其余技术栈均 ≥ iOS 16 可用，无需 polyfill：
+#      · SwiftUI 网格 `LazyVGrid`                    → iOS 14+
+#      · `.refreshable`（下拉刷新）                  → iOS 15+
+#      · `.foregroundStyle` / `.symbolRenderingMode` → iOS 15+
+#      · `@Observable` / 双参 `.onChange` / `.containerBackground` → iOS 17+（见第 2 条）
+# ============================================================================
+name: ZhishengWeather
+
+options:
+  bundleIdPrefix: com.zhisheng
+  # 保持 iOS 17.0：主 App 侧有两处编译期 iOS 17 依赖（见文件头第 2 条），
+  # `#available` 无法兜住，故不下调。Widget 侧的兼容层保留不动。
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    # 显式锁定为 minimal，避免 Xcode 版本漂移导致并发检查升级、进而令
+    # CoreLocation / Task 捕获处产生编译错误。
+    SWIFT_STRICT_CONCURRENCY: minimal
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  # ── 主 App ──────────────────────────────────────────────────────────────
+  ZhishengWeather:
+    type: application
+    platform: iOS
+    sources:
+      - path: ZhishengWeather
+      - path: Core
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zhisheng.weather
+        INFOPLIST_FILE: Config/ZhishengWeather-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/ZhishengWeather.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
+    dependencies:
+      - target: ZhishengWeatherWidget
+        embed: true
+
+  # ── WidgetKit 小组件扩展 ────────────────────────────────────────────────
+  ZhishengWeatherWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ZhishengWeatherWidget
+      - path: Core
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zhisheng.weather.widget
+        INFOPLIST_FILE: Config/ZhishengWeatherWidget-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/ZhishengWeatherWidget.entitlements
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  # ── XCTest 单元测试（宿主为主 App）──────────────────────────────────────
+  ZhishengWeatherTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ZhishengWeatherTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zhisheng.weather.tests
+        GENERATE_INFOPLIST_FILE: YES
+        # 显式设定宿主，防止 CI 上因 TEST_HOST/BUNDLE_LOADER 缺失导致
+        # "Test bundle could not be loaded" 而挂掉。
+        # 说明：XcodeGen 对「依赖 application target 的 unit-test」通常会自动推导
+        # TEST_HOST，但不同版本行为存在差异，故此处显式写入，保证行为确定。
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/ZhishengWeather.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ZhishengWeather
+        BUNDLE_LOADER: $(TEST_HOST)
+    dependencies:
+      - target: ZhishengWeather
+
+# ── 显式 scheme（保证 CI 的 `-scheme ZhishengWeather` 含测试与归档）────────
+schemes:
+  ZhishengWeather:
+    build:
+      targets:
+        ZhishengWeather: all
+        ZhishengWeatherWidget: all
+        ZhishengWeatherTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: false
+      targets:
+        - ZhishengWeatherTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

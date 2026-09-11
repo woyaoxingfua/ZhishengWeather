@@ -1,0 +1,168 @@
+classDiagram
+    class LocationInfo {
+        +String name
+        +Double latitude
+        +Double longitude
+        +Bool isFallback
+        +beijing LocationInfo
+    }
+    class HourlyPoint {
+        +Date time
+        +Double temperature
+        +Int weatherCode
+        +id Date
+    }
+    class WeatherSnapshot {
+        +LocationInfo location
+        +Double temperature
+        +Double apparentTemperature
+        +Int weatherCode
+        +Double windSpeed
+        +Double windDirection
+        +Int humidity
+        +Bool isDay
+        +HourlyPoint[] hourly
+        +Double dailyHigh
+        +Double dailyLow
+        +Date fetchedAt
+        +moonPhase MoonPhase
+    }
+    class SharedWeatherPayload {
+        +WeatherSnapshot snapshot
+        +Date updatedAt
+    }
+    class OpenMeteoResponse {
+        +Current current
+        +Hourly hourly
+        +Daily daily
+        +String timezone
+        +Int utc_offset_seconds
+    }
+    class WeatherCondition {
+        +String symbolName
+        +String nightSymbolName
+        +String description
+    }
+    class WMOCodeMapper {
+        <<enum>>
+        +condition(code, isDay) WeatherCondition
+        +symbolName(code, isDay) String
+        +description(code) String
+    }
+    class MoonPhase {
+        +Name name
+        +Double illumination
+        +String symbolName
+        +Double age
+    }
+    class MoonCalculator {
+        <<enum>>
+        +phase(date) MoonPhase
+        +illumination(date) Double
+        +age(date) Double
+    }
+    class AppGroup {
+        <<enum>>
+        +String identifier
+        +String payloadKey
+        +String locationKey
+    }
+    class AppGroupStore {
+        -UserDefaults defaults
+        +save(payload) throws
+        +save(snapshot, at) throws
+        +load() SharedWeatherPayload
+        +loadSnapshot() WeatherSnapshot
+        +updatedAt Date
+        +clear()
+    }
+    class WeatherProviding {
+        <<protocol>>
+        +fetch(lat, lon) WeatherSnapshot
+    }
+    class WeatherError {
+        <<enum>>
+        +badURL
+        +badStatus(Int)
+        +network(String)
+        +decoding(String)
+    }
+    class WeatherService {
+        <<actor>>
+        -URLSession session
+        +fetch(lat, lon) WeatherSnapshot
+    }
+    class OpenMeteoEndpoint {
+        <<enum>>
+        +url(lat, lon) URL
+    }
+    class OpenMeteoMapper {
+        <<enum>>
+        +map(response, location, now) WeatherSnapshot
+    }
+    class LocationProvider {
+        +LocationInfo current
+        +requestLocation() LocationInfo
+    }
+    class WeatherViewModel {
+        +State state
+        +LocationInfo location
+        +refresh() Void
+        +refreshIfNeeded() Void
+    }
+    class WeatherEntry {
+        +Date date
+        +SharedWeatherPayload payload
+    }
+    class WeatherProvider {
+        +placeholder(context) WeatherEntry
+        +getSnapshot(context, completion)
+        +getTimeline(context, completion)
+    }
+    class Theme {
+        <<enum>>
+        +Color background
+        +Color accent
+        +FontSize
+    }
+    class WeatherSymbol {
+        +Int code
+        +Bool isDay
+    }
+    class MetricCell {
+        +String icon
+        +String value
+        +String caption
+    }
+    class HourlyStrip {
+        +HourlyPoint[] points
+    }
+    class ContentView {
+        +WeatherViewModel viewModel
+    }
+
+    WeatherSnapshot *-- LocationInfo : 持有
+    WeatherSnapshot *-- HourlyPoint : 列表
+    SharedWeatherPayload *-- WeatherSnapshot : 包装
+    WeatherService ..|> WeatherProviding : 实现
+    WeatherService ..> OpenMeteoEndpoint : 构建 URL
+    WeatherService ..> OpenMeteoMapper : 调用
+    WeatherService ..> OpenMeteoResponse : 解码
+    WeatherService ..> WeatherError : 抛出
+    OpenMeteoMapper ..> WeatherSnapshot : 产出
+    WeatherSnapshot ..> MoonCalculator : 派生 moonPhase
+    WeatherSnapshot ..> WMOCodeMapper : 派生图标
+    MoonCalculator ..> MoonPhase : 产出
+    WMOCodeMapper ..> WeatherCondition : 产出
+    AppGroupStore ..> AppGroup : 读取常量
+    AppGroupStore ..> SharedWeatherPayload : 落盘
+    WeatherViewModel ..> WeatherProviding : 取数
+    WeatherViewModel ..> AppGroupStore : 读写
+    WeatherViewModel ..> LocationProvider : 定位
+    WeatherProvider ..> AppGroupStore : 只读
+    WeatherProvider ..> WeatherEntry : 产出
+    ContentView ..> WeatherViewModel : 观察
+    ContentView ..> WeatherSymbol : 复用
+    ContentView ..> MetricCell : 复用
+    ContentView ..> HourlyStrip : 复用
+    ContentView ..> Theme : 取色
