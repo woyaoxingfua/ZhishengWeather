@@ -236,6 +236,45 @@ else
     bad SC-38 "三视图文件不全，无法检查背景调用点"
 fi
 
+# SC-39 【F-C 防线①】AppIntentConfiguration 构造点全仓（widget 目录）恰好 1 处，
+#        且 StaticConfiguration 不得在非注释代码中出现（F-C-9：三 family 共用唯一构造点）
+if [ -d "$WIDGET_DIR" ]; then
+    intent_cnt=$(grep -rnE 'AppIntentConfiguration\(' "$WIDGET_DIR" 2>/dev/null | grep -cvE ':[0-9]+:\s*(//|\*)')
+    static_cnt=$(grep -rnE 'StaticConfiguration' "$WIDGET_DIR" 2>/dev/null | grep -cvE ':[0-9]+:\s*(//|\*)')
+    if [ "${intent_cnt:-0}" -eq 1 ] && [ "${static_cnt:-0}" -eq 0 ]; then
+        ok SC-39 "AppIntentConfiguration 恰 1 处且无 StaticConfiguration 残留（F-C-9：三 family 共用唯一构造点）"
+    else
+        bad SC-39 "配置构造点异常：AppIntentConfiguration=${intent_cnt}（应恰 1），StaticConfiguration=${static_cnt}（应 0）"
+    fi
+else
+    bad SC-39 "无法检查配置构造点：widget 目录缺失"
+fi
+
+# SC-40 【F-C 防线②】widget 目录零网络符号（配置解析在 widget 进程执行且预算极低，
+#        一旦联网「编辑小组件」会卡死 —— F-C-8 / AC-C8 的静态防线）
+if [ -d "$WIDGET_DIR" ]; then
+    hit=$(grep -rnE '\bURLSession\b|\bdataTask\b|\bNSURLRequest\b|\bdataTaskPublisher\b' "$WIDGET_DIR" 2>/dev/null | grep -vE ':[0-9]+:\s*(//|\*|///)' || true)
+    if [ -z "$hit" ]; then
+        ok SC-40 "widget 目录零网络符号（配置解析纯本地读，F-C-8）"
+    else
+        bad SC-40 "widget 目录出现网络符号（配置解析严禁联网）：$(echo "$hit" | sed -n '1p')"
+    fi
+else
+    bad SC-40 "无法检查 widget 网络符号：目录缺失"
+fi
+
+# SC-41 【F-C 防线③】kind 字符串逐字 = "ZhishengWeatherWidget"
+#        （§4.5.5：改 kind = 系统视作全新组件，用户已放置的全部实例失效）
+if [ -f "$WIDGET_DIR/ZhishengWidgetBundle.swift" ]; then
+    if grep -qE 'let kind: String = "ZhishengWeatherWidget"' "$WIDGET_DIR/ZhishengWidgetBundle.swift"; then
+        ok SC-41 "widget kind 逐字不变（\"ZhishengWeatherWidget\"，防存量组件失效）"
+    else
+        bad SC-41 "widget kind 字符串被改动 —— 系统将视作全新组件，用户已放置的全部实例失效（§4.5.5）"
+    fi
+else
+    bad SC-41 "无法检查 kind：ZhishengWidgetBundle.swift 缺失"
+fi
+
 # ---------------------------------------------------------------------------
 printf '\n── L2 源码纪律层 ───────────────────────────────────────────\n'
 # ---------------------------------------------------------------------------
@@ -509,10 +548,10 @@ printf '\n提醒：以下三项静态检查 100%% 抓不到，必须真机验证
 printf '  1) Widget 能否被添加到桌面（长按桌面 → 添加组件 → 搜「枳生天气」）\n'
 printf '  2) App Group 是否真通（主 App 取数后，小组件是否显示真实数据）\n'
 printf '  3) 真机定位是否弹窗并返回真实坐标\n'
-printf '\nLarge 组件真机判据（架构师 §4.5.1 冻结编号 L-1~L-7，当前可执行）：\n'
+printf '\nLarge 组件真机判据（架构师 §4.5.1 冻结编号，当前可执行）：\n'
 printf '  L-1 尺寸选择器三档 / L-2 Large 正常渲染 / L-3 与 Medium 数据一致\n'
-printf '  L-4 下拉刷新三者同更 / L-5 编辑无配置项(反向判据) / L-6 大字号不溢出 / L-7 高对比度可读\n'
-printf '  (L-8~L-11 属 F-A 内容层，尚未实现，暂不可验收)\n'
+printf '  L-4 下拉刷新三者同更 / L-5 编辑应出现城市配置项 / L-6 大字号不溢出 / L-7 高对比度可读\n'
+printf '  L-8~L-11 逐日 3 列（F-A 已落地，现可执行；L-5 期望值已随 F-C 反转）\n'
 
 if [ "$FAIL_N" -gt 0 ]; then
     printf '\n静态验收结果：FAIL %d 项 —— 请修复后重跑。\n' "$FAIL_N"

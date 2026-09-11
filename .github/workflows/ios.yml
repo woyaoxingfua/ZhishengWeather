@@ -22,8 +22,22 @@ jobs:
         with:
           xcode-version: '15.4'
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen (pinned 2.42.0)
+        run: |
+          set -euo pipefail
+          # 纪律：禁止 brew install xcodegen —— brew 最新版(>=2.44.1)生成
+          # objectVersion 77（Xcode 26 工程格式），被锁定的 Xcode 15.4 拒读：
+          # "future Xcode project file format (77)"（首跑 CI 实测踩坑）。
+          # 故钉住 2.42.0：Xcode 15 同代版本，输出旧格式。升级 Xcode 前不得解钉。
+          curl -sL --retry 3 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/2.42.0/xcodegen.zip" \
+            -o /tmp/xcodegen.zip
+          unzip -q -o /tmp/xcodegen.zip -d /tmp/xcodegen
+          sudo mkdir -p /usr/local/bin /usr/local/share
+          sudo cp /tmp/xcodegen/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
+          sudo cp -R /tmp/xcodegen/xcodegen/share/xcodegen /usr/local/share/
+          sudo chmod +x /usr/local/bin/xcodegen
+          xcodegen version
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
