@@ -43,13 +43,14 @@ struct CityDirectory: Equatable, Sendable {
 
     /// 定位结果 upsert（AC-B2 / Q5 / AC-B3）。
     ///
-    /// 规则（ARCH-FB §2.3，写死避免实现歧义）：
+    /// 规则（ARCH-FB §2.3 + CI 实测裁定修正，优先级从高到低）：
     /// 1. `location.isFallback == true`（定位被拒/失败/超时）→ 不新增"当前位置"，no-op；
-    /// 2. 规范化 id 命中已有城市：
-    ///    - 该项是"当前位置"项 → 就地更新其坐标（名称保持"当前位置"，id 命中即不变）；
-    ///    - 该项是手动城市 → 不新增、不改动（Q5：坐标几乎重合，视为同一城市）；
-    /// 3. 未命中：已有"当前位置"项 → 就地更新该项（坐标与 id 同步更新，
-    ///    选中 id 若指向旧 id 则跟随）；否则列表尾部新增一项"当前位置"。
+    /// 2. **已有"当前位置"项 → 一律就地更新**（坐标与规范化 id 同步；选中 id 若指向
+    ///    旧 id 则跟随）。即使新 id 与某手动城市重合，"当前位置"项也要跟随用户真实
+    ///    坐标（Q5 的"视为同一城市"仅在**尚无**当前位置项时适用——否则用户移动到
+    ///    已收藏的城市后，当前位置项会滞留旧坐标）；
+    /// 3. 无"当前位置"项且规范化 id 命中已有城市 → 不新增、不改动（Q5）；
+    /// 4. 无"当前位置"项且未命中 → 列表尾部新增一项"当前位置"。
     ///    不变式：列表中至多一个 `isCurrentLocation == true` 的项。
     ///
     /// - Parameter location: 定位结果。
@@ -61,24 +62,12 @@ struct CityDirectory: Equatable, Sendable {
 
         let newID = City.makeID(latitude: location.latitude, longitude: location.longitude)
 
-        // 规则 2：规范化 id 命中已有城市。
-        if let index = cities.firstIndex(where: { $0.id == newID }) {
-            if cities[index].isCurrentLocation {
-                // 命中"当前位置"项：id 相同，仅坐标可能有亚精度漂移，就地刷新。
-                guard cities[index].latitude != location.latitude
-                        || cities[index].longitude != location.longitude else { return false }
-                cities[index].latitude = location.latitude
-                cities[index].longitude = location.longitude
-                return true
-            } else {
-                // 命中手动城市：视为同一城市，不新增、不改动。
-                return false
-            }
-        }
-
-        // 规则 3：未命中。
+        // 规则 2：已有"当前位置"项 → 一律就地更新（优先级最高，见 doc 注释）。
         if let index = cities.firstIndex(where: { $0.isCurrentLocation }) {
-            // 已有"当前位置"项：就地更新（坐标变了 → 规范化 id 变）。
+            // id 与坐标完全一致 → 无变化。
+            guard cities[index].id != newID
+                    || cities[index].latitude != location.latitude
+                    || cities[index].longitude != location.longitude else { return false }
             let oldID = cities[index].id
             cities[index].id = newID
             cities[index].latitude = location.latitude
@@ -87,15 +76,20 @@ struct CityDirectory: Equatable, Sendable {
                 selectedID = newID
             }
             return true
-        } else {
-            // 无"当前位置"项：列表尾部新增（保持至多一项不变式）。
-            let city = City(name: "当前位置",
-                            latitude: location.latitude,
-                            longitude: location.longitude,
-                            isCurrentLocation: true)
-            cities.append(city)
-            return true
         }
+
+        // 规则 3：无"当前位置"项，id 命中已有城市（手动城市重合，Q5）→ no-op。
+        if cities.contains(where: { $0.id == newID }) {
+            return false
+        }
+
+        // 规则 4：列表尾部新增（保持至多一项不变式）。
+        let city = City(name: "当前位置",
+                        latitude: location.latitude,
+                        longitude: location.longitude,
+                        isCurrentLocation: true)
+        cities.append(city)
+        return true
     }
 
     // MARK: - 增 / 切 / 删 / 排

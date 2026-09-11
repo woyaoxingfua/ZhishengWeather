@@ -109,6 +109,12 @@ final class CitySearchModelTests: XCTestCase {
         let model = CitySearchModel(provider: provider, debounceSeconds: 0)
 
         model.queryChanged("第一输入")
+        // CI 实测：两次 queryChanged 在主 actor 上同步连发时，第一次的防抖 Task
+        // 会在起跑前就被第二次的 cancel() 掐死——竞态根本没构造出来（唯一发出的
+        // 请求反而是 index 0 的延迟请求）。这里让出主线程 0.1s，确保第一次请求
+        // 真正进入飞行中（generation=1 已记录、provider 已挂起在不可取消的
+        // sleep 上），后续第二次输入才能测到"晚到响应被代际号丢弃"（AC-B18）。
+        try? await Task.sleep(nanoseconds: 100_000_000)
         model.queryChanged("第二输入")
 
         // 等到两个响应都返回（延迟 0.4s + 余量）。
