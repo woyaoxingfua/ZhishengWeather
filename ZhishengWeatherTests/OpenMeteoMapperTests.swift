@@ -600,8 +600,11 @@ final class OpenMeteoMapperTests: XCTestCase {
 
         XCTAssertEqual(snapshot.dailyHigh, 28.0, accuracy: 1e-9,
                        "兜底索引 = min(1, count-1) = 1 → 取第 1 行高温")
-        XCTAssertNil(snapshot.yesterday, "兜底索引=1 时无 -1 行之外的第 0 行可作 yesterday…"
-            + "实际上 todayIndex-1=0 是昨天形态的近似，允许非 nil；此处仅记录行为")
+        // CI run12 勘误：todayIndex=1 时 yesterday = todayIndex-1 = 0 行（合法非 nil），
+        // 实现行为正确（取第 0 行做"昨日形态近似"），原断言 XCTAssertNil 自相矛盾。
+        let yesterday = try XCTUnwrap(snapshot.yesterday)
+        XCTAssertEqual(yesterday.tempMax, 30.0, accuracy: 1e-9,
+                       "yesterday 应为兜底索引的前一行（第 0 行，30°）")
     }
 
     // MARK: - Helpers

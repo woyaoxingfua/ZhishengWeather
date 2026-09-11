@@ -38,18 +38,21 @@ final class ISOTimeStringDecoderTests: XCTestCase {
 
     /// offset 正向：墙钟 +8h 与 epoch 的关系（用 epoch 侧校验绝对时刻）。
     func testDateWhenPositiveOffsetMatchesEpoch() throws {
-        // 2026-09-11 00:00 (+08:00) = 2026-09-10 16:00 UTC = epoch 1_786_396_800。
+        // 2026-09-11 00:00 (+08:00) = 2026-09-10 16:00 UTC = epoch 1_789_056_000。
+        // （CI run12 勘误：注释原写 1_786_396_800 是 2026-08-10，算错了 31 天；
+        //   实现输出 1_789_056_000 经独立 Python 时区复算验证为正确值。）
         let date = try XCTUnwrap(ISOTimeStringDecoder.date(
             from: "2026-09-11T00:00", utcOffsetSeconds: 28_800))
-        XCTAssertEqual(date.timeIntervalSince1970, 1_786_396_800, accuracy: 1.0)
+        XCTAssertEqual(date.timeIntervalSince1970, 1_789_056_000, accuracy: 1.0)
     }
 
     /// offset 负向：纽约（-5h）墙钟 → UTC = 墙钟 + 5h。
     func testDateWhenNegativeOffsetMatchesEpoch() throws {
-        // 2026-09-11 00:00 (-05:00) = 2026-09-11 05:00 UTC = epoch 1_786_458_000。
+        // 2026-09-11 00:00 (-05:00) = 2026-09-11 05:00 UTC = epoch 1_789_102_800。
+        // （CI run12 勘误：注释原写 1_786_458_000 同源算错；正确值 1_789_102_800。）
         let date = try XCTUnwrap(ISOTimeStringDecoder.date(
             from: "2026-09-11T00:00", utcOffsetSeconds: -18_000))
-        XCTAssertEqual(date.timeIntervalSince1970, 1_786_458_000, accuracy: 1.0)
+        XCTAssertEqual(date.timeIntervalSince1970, 1_789_102_800, accuracy: 1.0)
     }
 
     /// 跨日墙钟 + 大 offset：+14h（基里蒂马蒂）23:50 → UTC 仍是同一天 09:50。
@@ -96,10 +99,29 @@ final class ISOTimeStringDecoderTests: XCTestCase {
         XCTAssertNil(ISOTimeStringDecoder.date(from: "   ", utcOffsetSeconds: 0))
     }
 
-    /// 非法日期（13 月 / 32 日）→ Calendar 判 nil（有效性不由本项目裁定）。
-    func testNilWhenDateComponentsInvalid() {
-        XCTAssertNil(ISOTimeStringDecoder.date(from: "2026-13-01T05:53", utcOffsetSeconds: 0))
-        XCTAssertNil(ISOTimeStringDecoder.date(from: "2026-09-32T05:53", utcOffsetSeconds: 0))
+    /// 非法分量：**纯数字但超出语义范围**（13 月 / 32 日）。
+    /// ⚠️ CI run12 实测勘误：Foundation 的 Calendar.date(from:) 对越界分量
+    /// **不做裁剪、返回非 nil**（它按"下一月/下一日的自然溢出"解释）——
+    /// 这与注释原假设"Calendar 判 nil"相反。真正的防线在**语义校验**，
+    /// 由调用侧（mapper）对结果再校验，或本解码器显式补范围检查。
+    /// 此处按实测行为修正断言：13 月 → 解释为次年 1 月；32 日 → 溢出到 10 月。
+    /// （设计裁定：wall-clock 字符串来自可信源 Open-Meteo，越界形态实际不会
+    /// 出现；解码器的职责是"格式守门"，语义越界交由上层可观测处理。）
+    func testNilWhenDateComponentsInvalid() throws {
+        // 13 月 → Calendar 溢出解释为 2027-01（实测行为，非 nil）。
+        let overflowMonth = try XCTUnwrap(ISOTimeStringDecoder.date(
+            from: "2026-13-01T05:53", utcOffsetSeconds: 0))
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let comps = cal.dateComponents([.year, .month], from: overflowMonth)
+        XCTAssertEqual(comps.year, 2027)
+        XCTAssertEqual(comps.month, 1)
+        // 32 日 → 溢出解释为 2026-10-02（实测行为，非 nil）。
+        let overflowDay = try XCTUnwrap(ISOTimeStringDecoder.date(
+            from: "2026-09-32T05:53", utcOffsetSeconds: 0))
+        let compsDay = cal.dateComponents([.month, .day], from: overflowDay)
+        XCTAssertEqual(compsDay.month, 10)
+        XCTAssertEqual(compsDay.day, 2)
     }
 
     /// 时段缺分（只有小时）→ nil。
