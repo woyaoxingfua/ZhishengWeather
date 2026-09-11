@@ -62,7 +62,8 @@ final class WeatherSnapshotCacheCompatTests: XCTestCase {
         XCTAssertEqual(snapshot.humidity, 58)
         XCTAssertTrue(snapshot.isDay)
         XCTAssertEqual(snapshot.hourly.count, 2)
-        XCTAssertEqual(snapshot.hourly.first?.temperature, 23.4, accuracy: 0.001)
+        // 带 accuracy: 的 XCTAssertEqual 只收非可选 Double（CI 实测），可选链结果需先解包。
+        XCTAssertEqual(try XCTUnwrap(snapshot.hourly.first).temperature, 23.4, accuracy: 0.001)
         XCTAssertEqual(snapshot.dailyHigh, 26.1, accuracy: 0.001)
         XCTAssertEqual(snapshot.dailyLow, 15.2, accuracy: 0.001)
         XCTAssertEqual(snapshot.fetchedAt, Date(timeIntervalSinceReferenceDate: 1_700_000_010))
@@ -104,8 +105,10 @@ final class WeatherSnapshotCacheCompatTests: XCTestCase {
 
         XCTAssertEqual(decoded, snapshot, "含 daily 的快照必须往返编解码等值")
         XCTAssertEqual(decoded.daily?.count, 2)
-        XCTAssertEqual(decoded.daily?.first?.tempMax, 26.1, accuracy: 0.001)
-        XCTAssertEqual(decoded.daily?.first?.precipitationProbability, 10)
+        // 同上：accuracy 重载不接受 Double?，先 XCTUnwrap 解出首日。
+        let firstDay = try XCTUnwrap(decoded.daily?.first)
+        XCTAssertEqual(firstDay.tempMax, 26.1, accuracy: 0.001)
+        XCTAssertEqual(firstDay.precipitationProbability, 10)
         XCTAssertNil(decoded.daily?.last?.precipitationProbability,
                      "precip 为 nil 的行往返后必须仍是 nil（不得变 0）")
     }
