@@ -41,7 +41,9 @@ struct ContentView: View {
                 AppRouter.shared.handle(url: url, viewModel: viewModel)
             }
             // A1-8：快捷方式路由观察（AppDelegate 转发 → AppRouter 发布 → 这里消费）。
-            .onReceive(AppRouter.shared.$routeSubject) { route in
+            // ⚠️ @Observable 宏不合成 $投影（那是 ObservableObject/@Published 的机制），
+            // 观察用 onChange(of:) 监听值本身（CI run10 实测 has no member '$routeSubject'）。
+            .onChange(of: AppRouter.shared.routeSubject) { _, route in
                 handleRouterRoute(route)
             }
             // 跳转目的地注册（A1-8：搜索/设置暂路由城市列表页根，D-A3）。
