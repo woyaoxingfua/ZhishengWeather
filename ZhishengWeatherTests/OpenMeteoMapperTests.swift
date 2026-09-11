@@ -217,7 +217,7 @@ final class OpenMeteoMapperTests: XCTestCase {
 
     func testCurrentFieldsAndIsDayMapCorrectly() {
         let snapshot = OpenMeteoMapper.map(
-            makeResponse(times: [t0], temps: [18.0], codes: [3], isDay: 0, currentTemp: 18.3),
+            makeResponse(times: [t0], temps: [18.0], codes: [3], currentTemp: 18.3, isDay: 0),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -293,8 +293,8 @@ final class OpenMeteoMapperTests: XCTestCase {
     /// ② 四必需数组长度不齐 → 按最短截断（AC-A6）。
     func testDailyMismatchedRequiredArraysTruncateToShortest() {
         let daily = makeDaily(times: (0..<5).map { t0 + $0 * 86_400 },
-                              maxTemps: (0..<4).map { 20.0 },
-                              minTemps: (0..<5).map { 10.0 },
+                              maxTemps: (0..<4).map { _ in 20.0 },
+                              minTemps: (0..<5).map { _ in 10.0 },
                               codes: [1, 2, 3],
                               precip: nil)
 
