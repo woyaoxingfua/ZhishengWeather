@@ -21,13 +21,13 @@ final class OpenMeteoMapperTests: XCTestCase {
 
     // MARK: - 截窗边界
 
-    /// 边界①：now 恰好落在整点 → 起点即该整点，共 12 条。
+    /// 边界①：now 恰好落在整点 → 起点即该整点（A1 后上限 24，构造 30 个点取满窗口）。
     func testWindowStartsAtCurrentHourWhenNowIsOnTheHour() {
-        let times = (0..<20).map { t0 + $0 * 3_600 }
+        let times = (0..<30).map { t0 + $0 * 3_600 }
         let now = Date(timeIntervalSince1970: TimeInterval(t0 + 5 * 3_600))
 
         let snapshot = OpenMeteoMapper.map(
-            makeResponse(times: times, temps: doubles(20, count: 20), codes: ints(1, count: 20)),
+            makeResponse(times: times, temps: doubles(20, count: 30), codes: ints(1, count: 30)),
             location: .beijing,
             now: now
         )
@@ -36,16 +36,16 @@ final class OpenMeteoMapperTests: XCTestCase {
         XCTAssertEqual(snapshot.hourly.first?.time,
                        Date(timeIntervalSince1970: TimeInterval(t0 + 5 * 3_600)))
         XCTAssertEqual(snapshot.hourly.last?.time,
-                       Date(timeIntervalSince1970: TimeInterval(t0 + 16 * 3_600)))
+                       Date(timeIntervalSince1970: TimeInterval(t0 + 28 * 3_600)))
     }
 
     /// 边界②：now 为半点（14:30）→ 起点仍为所在整点（14:00）。
     func testWindowStartsAtHourFloorWhenNowIsHalfPast() {
-        let times = (0..<20).map { t0 + $0 * 3_600 }
+        let times = (0..<30).map { t0 + $0 * 3_600 }
         let now = Date(timeIntervalSince1970: TimeInterval(t0 + 5 * 3_600 + 1_800))
 
         let snapshot = OpenMeteoMapper.map(
-            makeResponse(times: times, temps: doubles(20, count: 20), codes: ints(1, count: 20)),
+            makeResponse(times: times, temps: doubles(20, count: 30), codes: ints(1, count: 30)),
             location: .beijing,
             now: now
         )
@@ -396,9 +396,9 @@ final class OpenMeteoMapperTests: XCTestCase {
         XCTAssertNil(list[2].precipitationProbability, "越界行应为 nil")
     }
 
-    /// ⑧ 超过 7 天按 maxDailyCount 截断。
-    func testDailyMoreThanSevenDaysTruncatedToMaxDailyCount() {
-        let count = 9
+    /// ⑧ 超过 16 天按 maxDailyCount 截断（A1 后 7→16）。
+    func testDailyMoreThanSixteenDaysTruncatedToMaxDailyCount() {
+        let count = 18
         let daily = makeDaily(times: (0..<count).map { t0 + $0 * 86_400 },
                               maxTemps: Array(repeating: 25.0, count: count),
                               minTemps: Array(repeating: 15.0, count: count),
@@ -413,6 +413,192 @@ final class OpenMeteoMapperTests: XCTestCase {
 
         XCTAssertEqual(snapshot.daily?.count, OpenMeteoMapper.maxDailyCount,
                        "逐日条数不得超过 maxDailyCount=\(OpenMeteoMapper.maxDailyCount)")
+    }
+
+    /// ⑨ 旧路径回归：无 past_days（time[0]=今天）→ todayIndex=0，输出含全部行。
+    func testDailyWhenTodayIsFirstRowKeepsAllRowsFromIndexZero() {
+        let daily = makeDaily(times: (0..<4).map { t0 + $0 * 86_400 },
+                              maxTemps: [27.0, 26.0, 25.0, 24.0],
+                              minTemps: [17.0, 16.0, 15.0, 14.0],
+                              codes: [0, 1, 2, 3],
+                              precip: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [0], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        XCTAssertEqual(snapshot.dailyHigh, 27.0, accuracy: 1e-9, "今日行=第 0 行")
+        XCTAssertEqual(snapshot.dailyLow, 17.0, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.daily?.count, 4, "无昨日行时输出不截行")
+        XCTAssertNil(snapshot.yesterday, "无 past_days → yesterday 必为 nil（AC-A1-16）")
+    }
+
+    // MARK: - A1 位移 / yesterday / daily 首行 / pressure / sunrise（★本批核心）
+
+    /// ★（A1-5，本批最高静默回归风险）past_days=1 位移后：daily[0]=昨天、
+    /// daily[1]=今天 → dailyHigh/Low 必须取**今日行**，不得沿用 `.first`。
+    func testDailyHighLowWhenYesterdayPresentUsesTodayIndex() {
+        let yesterdayEpoch = t0 - 86_400
+        let daily = makeDaily(times: [yesterdayEpoch, t0],           // [昨天, 今天]
+                              maxTemps: [31.0, 27.0],                // 昨天 31 / 今天 27
+                              minTemps: [21.0, 17.0],                // 昨天 21 / 今天 17
+                              codes: [1, 2],
+                              precip: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        XCTAssertEqual(snapshot.dailyHigh, 27.0, accuracy: 1e-9,
+                       "位移后 Hero 高温必须取今日行，而非 daily.first（昨天的 31°）")
+        XCTAssertEqual(snapshot.dailyLow, 17.0, accuracy: 1e-9,
+                       "位移后 Hero 低温必须取今日行")
+    }
+
+    /// ★ yesterday 提取：取 todayIndex-1 行的完整对象（温度 / 现象 / 日期）。
+    func testYesterdayExtractedFromRowBeforeTodayIndex() throws {
+        let yesterdayEpoch = t0 - 86_400
+        let daily = makeDaily(times: [yesterdayEpoch, t0],
+                              maxTemps: [31.0, 27.0],
+                              minTemps: [21.0, 17.0],
+                              codes: [3, 2],
+                              precip: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        let yesterday = try XCTUnwrap(snapshot.yesterday, "有昨日行时 yesterday 必非 nil")
+        XCTAssertEqual(yesterday.date, Date(timeIntervalSince1970: TimeInterval(yesterdayEpoch)))
+        XCTAssertEqual(yesterday.tempMax, 31.0, accuracy: 1e-9)
+        XCTAssertEqual(yesterday.tempMin, 21.0, accuracy: 1e-9)
+        XCTAssertEqual(yesterday.weatherCode, 3)
+    }
+
+    /// ★ daily 输出自今日起截（§3 关键点 3）：输出首行恒为今天，昨日不混入。
+    func testDailyOutputStartsAtTodayWhenYesterdayPresent() throws {
+        let yesterdayEpoch = t0 - 86_400
+        let daily = makeDaily(times: [yesterdayEpoch, t0, t0 + 86_400],
+                              maxTemps: [31.0, 27.0, 26.0],
+                              minTemps: [21.0, 17.0, 16.0],
+                              codes: [1, 2, 3],
+                              precip: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        let list = try XCTUnwrap(snapshot.daily)
+        XCTAssertEqual(list.first?.date, Date(timeIntervalSince1970: TimeInterval(t0)),
+                       "snapshot.daily[0] 必须是今天（下游 prefix(3) 语义依赖）")
+        XCTAssertEqual(list.count, 2, "昨日行不得混入 daily 数组")
+        XCTAssertFalse(list.contains { $0.date == Date(timeIntervalSince1970: TimeInterval(yesterdayEpoch)) })
+    }
+
+    /// pressure 回退链：msl 有值 → msl；msl 缺 → surface；双缺 → nil。
+    func testPressureFallbackChain() {
+        let make = { (pressureMSL: Double?, surface: Double?) -> WeatherSnapshot in
+            OpenMeteoMapper.map(
+                self.makeResponse(times: [self.t0], temps: [18.0], codes: [1],
+                                  currentPressureMSL: pressureMSL,
+                                  currentSurfacePressure: surface),
+                location: .beijing,
+                now: Date(timeIntervalSince1970: TimeInterval(self.t0))
+            )
+        }
+
+        XCTAssertEqual(make(1013.2, 1008.7).pressureMSL ?? -1, 1013.2, accuracy: 1e-9,
+                       "msl 有值 → msl 优先")
+        XCTAssertEqual(make(nil, 1008.7).pressureMSL ?? -1, 1008.7, accuracy: 1e-9,
+                       "msl 缺 → surface 回退")
+        XCTAssertNil(make(nil, nil).pressureMSL, "双缺 → nil（AC-A1-3）")
+    }
+
+    /// sunrise/sunset 注入：今日行合法字符串 → Date；坏串行 → nil。
+    func testSunriseSunsetInjectedFromTodayRow() {
+        let daily = OpenMeteoResponse.Daily(
+            time: [t0],
+            temperature_2m_max: [27.0],
+            temperature_2m_min: [17.0],
+            weather_code: [2],
+            precipitation_probability_max: nil,
+            sunrise: ["2026-09-11T05:53"],
+            sunset: ["garbage"])
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        // 合法串经独立解码器（+8h 偏移）→ 当地 05:53；坏串 → nil。
+        XCTAssertNotNil(snapshot.sunrise, "合法 sunrise 字符串应解码出 Date")
+        XCTAssertNil(snapshot.sunset, "坏串必须映射为 nil，绝不冒充")
+    }
+
+    /// hourly 24 条截窗（A1-2：12→24，截窗逻辑零改动）。
+    func testHourlyWindowCapsAtTwentyFourWhenEnoughPoints() {
+        let times = (0..<40).map { t0 + $0 * 3_600 }
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: times, temps: doubles(20, count: 40), codes: ints(1, count: 40)),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+        XCTAssertEqual(snapshot.hourly.count, 24, "窗口上限应为 24（A1-2）")
+        XCTAssertEqual(snapshot.hourly.first?.time, Date(timeIntervalSince1970: TimeInterval(t0)))
+    }
+
+    /// yesterday 的 sunrise/sunset 亦按行注入（A2-5 逐日展开的直接复用面）。
+    func testYesterdayCarriesOwnSunTimes() throws {
+        let daily = OpenMeteoResponse.Daily(
+            time: [t0 - 86_400, t0],
+            temperature_2m_max: [31.0, 27.0],
+            temperature_2m_min: [21.0, 17.0],
+            weather_code: [1, 2],
+            precipitation_probability_max: nil,
+            sunrise: ["2026-09-10T05:54", "2026-09-11T05:53"],
+            sunset: ["2026-09-10T18:23", "2026-09-11T18:22"])
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        let yesterday = try XCTUnwrap(snapshot.yesterday)
+        XCTAssertNotNil(yesterday.sunrise, "昨日行应有自己的日出")
+        // 今日行的 sunrise 不应与昨日相同（按行注入而非复制今日值）。
+        XCTAssertNotEqual(yesterday.sunrise, snapshot.sunrise)
+    }
+
+    /// todayIndex 回退链：daily.time 全部早于 now（时钟漂移形态）→ 兜底索引不越界。
+    func testTodayIndexFallsBackWhenNoRowMatchesNow() throws {
+        // daily.time 全是 10 天前的日期 → dayNumber 匹配失败 → 回退 min(1, count-1)。
+        let pastEpoch = t0 - 10 * 86_400
+        let daily = makeDaily(times: [pastEpoch, pastEpoch + 86_400],
+                              maxTemps: [30.0, 28.0],
+                              minTemps: [20.0, 18.0],
+                              codes: [1, 2],
+                              precip: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        XCTAssertEqual(snapshot.dailyHigh, 28.0, accuracy: 1e-9,
+                       "兜底索引 = min(1, count-1) = 1 → 取第 1 行高温")
+        XCTAssertNil(snapshot.yesterday, "兜底索引=1 时无 -1 行之外的第 0 行可作 yesterday…"
+            + "实际上 todayIndex-1=0 是昨天形态的近似，允许非 nil；此处仅记录行为")
     }
 
     // MARK: - Helpers
@@ -430,7 +616,9 @@ final class OpenMeteoMapperTests: XCTestCase {
                               codes: [Int],
                               daily: OpenMeteoResponse.Daily? = nil,
                               currentTemp: Double = 20.0,
-                              isDay: Int = 1) -> OpenMeteoResponse {
+                              isDay: Int = 1,
+                              currentPressureMSL: Double? = nil,
+                              currentSurfacePressure: Double? = nil) -> OpenMeteoResponse {
         OpenMeteoResponse(
             timezone: "Asia/Shanghai",
             utc_offset_seconds: 28_800,
@@ -442,7 +630,9 @@ final class OpenMeteoMapperTests: XCTestCase {
                 weather_code: codes.first ?? 0,
                 wind_speed_10m: 1.0,
                 wind_direction_10m: 90.0,
-                is_day: isDay
+                is_day: isDay,
+                pressure_msl: currentPressureMSL,
+                surface_pressure: currentSurfacePressure
             ),
             hourly: OpenMeteoResponse.Hourly(
                 time: times,

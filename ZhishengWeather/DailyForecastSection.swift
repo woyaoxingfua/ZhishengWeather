@@ -2,16 +2,20 @@
 //  DailyForecastSection.swift
 //  ZhishengWeather（主 App target）
 //
-//  F-A 逐日预报区块：行渲染 + 3/7 天会话内切换。
+//  F-A 逐日预报区块：行渲染 + 3/7/15 天三档会话内切换（A1-3，ARCH-A1 §1.3）。
 //
-//  关键纪律（ARCH-zhisheng-ios-FA-increment §4.1 / PRD Q2）：
-//  - 3/7 展开状态**只存在于本视图的 `@State`**：不进 ViewModel、不进 snapshot、
-//    不写共享容器、不持久化。冷启动重建视图自动回 3 天。
+//  关键纪律（ARCH-zhisheng-ios-FA-increment §4.1 / ARCH-A1 §1.3）：
+//  - 档位状态**只存在于本视图的 `@State`**：不进 ViewModel、不进 snapshot、
+//    不写共享容器、不跨启动持久化。冷启动重建视图自动回 3 天
+//    （F-A"展开状态止步于 @State"的结构性隔离平移，L-9 纪律）。
+//  - 3 档选择控件：`Picker(.segmented)`；数据不足对应档位时该段禁用
+//    （`daily.count > 3` 时 7 段可用、`> 7` 时 15 段可用）。
 //  - 降水概率 nil → 显示 "--"（灰色），**绝不显示 0%**（AC-A5）。
 //  - 复用 `WMOCodeMapper`，不新增映射表（AC-A4）。
 //  - 「今天/周几」标签基于快照内的日期 + `Calendar.current.isDateInToday`，
 //    不取当前时刻构造 Date（与 Core「now 注入」纪律一致；UI 层允许 Calendar.current，
 //    先例见 LargeWeatherView 的图标昼夜判断）。
+//    A1 后 mapper 的 daily 输出自今日起截（daily[0] 恒为今天），本判断天然正确。
 //
 
 import SwiftUI
@@ -25,26 +29,23 @@ struct DailyForecastSection: View {
     /// 逐日数据（由调用方保证非空；nil / 空数组的隐藏判断在 ContentView 侧）。
     let daily: [DailyForecast]
 
-    /// 3/7 展开状态：会话内记忆，默认收起（3 天），不落盘（PRD Q2 / F-A-6）。
-    @State private var isExpanded: Bool = false
-
-    /// 展开时最多展示的天数。
-    private let expandedCount: Int = 7
-
-    /// 收起时展示的天数（AC-A2 / F-A-2 默认 3 天）。
-    private let collapsedCount: Int = 3
+    /// 三档切换状态：默认 3 天（AC-A1-8），会话内记忆，不落盘。
+    @State private var visibleDaysChoice: Int = 3
 
     /// 日期标签列固定宽度（iPhone SE 375pt 下不溢出，AC-A9 / F-A-8）。
     private let dateColumnWidth: CGFloat = 64
 
-    /// 当前应展示的天数。
+    /// 档位全集。
+    private let choices: [Int] = [3, 7, 15]
+
+    /// 当前应展示的天数：`daily.prefix(choice)`；数组不足 16 按实际渲染（AC-A1-9）。
     private var visibleDays: [DailyForecast] {
-        Array(daily.prefix(isExpanded ? expandedCount : collapsedCount))
+        Array(daily.prefix(visibleDaysChoice))
     }
 
-    /// 数据不足 4 天时切换无意义，隐藏按钮。
+    /// 数据不足 4 天时切换无意义，隐藏分段控件（判据由 isExpanded 时代平移）。
     private var canToggle: Bool {
-        daily.count > collapsedCount
+        daily.count > 3
     }
 
     var body: some View {
@@ -54,7 +55,7 @@ struct DailyForecastSection: View {
         }
     }
 
-    // MARK: - 标题 + 胶囊切换钮
+    // MARK: - 标题 + 三档分段控件
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -65,28 +66,24 @@ struct DailyForecastSection: View {
             Spacer(minLength: 8)
 
             if canToggle {
-                toggleButton
+                choicePicker
             }
         }
     }
 
-    /// 「7 天」↔「收起」胶囊按钮。
-    private var toggleButton: some View {
-        Button {
-            isExpanded.toggle()
-        } label: {
-            Text(isExpanded ? "收起" : "7 天")
-                .font(.system(size: Theme.FontSize.caption, weight: .medium))
-                .foregroundStyle(Theme.accent)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Theme.surface, in: Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(Theme.divider, lineWidth: 0.5)
-                )
+    /// 3/7/15 三段选择器：数据不足对应档位的段禁用（ARCH-A1 §1.3）。
+    /// （数据充足时三段逐个启用；150 天由 maxDailyCount=16 对齐服务端 forecast_days=16。）
+    private var choicePicker: some View {
+        Picker("展示天数", selection: $visibleDaysChoice) {
+            ForEach(choices, id: \.self) { choice in
+                Text("\(choice) 天")
+                    .tag(choice)
+            }
         }
-        .accessibilityLabel(isExpanded ? "收起，仅显示 3 天" : "展开 7 天预报")
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .disabled(!canToggle)
+        .accessibilityLabel("切换逐日预报展示天数")
     }
 
     // MARK: - 逐日行

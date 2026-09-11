@@ -3,8 +3,10 @@
 //  ZhishengWeatherWidget（Widget target）
 //
 //  @main WidgetBundle 入口 + 天气小组件定义。
-//  一个 widget 通过 supportedFamilies 同时支持 Small / Medium / Large 三种尺寸；
-//  具体渲染由 `ZhishengWeatherWidgetEntryView` 按 `@Environment(\.widgetFamily)` 分流。
+//  一个 widget 通过 supportedFamilies 支持 Small / Medium / Large 桌面三族
+//  （A1 后再追加 accessoryCircular / accessoryRectangular / accessoryInline
+//  锁屏三族，只增不减）；具体渲染由 `ZhishengWeatherWidgetEntryView`
+//  按 `@Environment(\.widgetFamily)` 分流。
 //
 //  F-C 桌面小组件城市选择：`StaticConfiguration` → `AppIntentConfiguration`
 //  （三 family 共用**全仓唯一一处** configuration 构造 + 同一 intent 类型，
@@ -41,11 +43,14 @@ struct ZhishengWeatherWidget: Widget {
         }
         .configurationDisplayName("枳生天气")
         .description("一眼查看当前天气、逐小时趋势与体感/湿度/风速等指标。")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        // A1-6：追加锁屏 accessory 三族（只增不减硬纪律，SC-35 基线为前三族）；
+        // `kind` / Intent / Provider 零改动（R-A2：已有组件保留性依赖 kind 不变）。
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge,
+                            .accessoryCircular, .accessoryRectangular, .accessoryInline])
     }
 }
 
-/// 依据系统给出的 family 选择 Small / Medium / Large 视图。
+/// 依据系统给出的 family 选择对应视图。
 ///
 /// `@unknown default` 不可省略：WidgetKit 未来新增 family（历史上已新增过
 /// `.systemExtraLarge`）时，缺省分支能保证老二进制不崩溃、不编译告警。
@@ -65,6 +70,15 @@ struct ZhishengWeatherWidgetEntryView: View {
 
         case .systemSmall:
             SmallWeatherView(entry: entry)
+
+        case .accessoryCircular:
+            AccessoryCircularWeatherView(entry: entry)
+
+        case .accessoryRectangular:
+            AccessoryRectangularWeatherView(entry: entry)
+
+        case .accessoryInline:
+            AccessoryInlineWeatherView(entry: entry)
 
         @unknown default:
             // 未知 / 未来新增尺寸：回落到 Small 布局（Smallest 也能放下，

@@ -82,13 +82,38 @@ final class OpenMeteoEndpointTests: XCTestCase {
 
     // MARK: - F-A 逐日预报参数
 
-    /// 显式声明 forecast_days=7：不传时依赖服务端默认值，一旦服务端策略变更
-    /// 会导致逐日长度漂移（A-G3 前提 / ARCH-FA §2.4）。
-    func testURLDeclaresForecastDaysSeven() throws {
+    /// ⚠️ A1 勘误：forecast_days 由 7 升 16（A1-3 显式防漂移），旧断言随任务更新。
+    func testURLDeclaresForecastDaysSixteen() throws {
         let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 39.9042, longitude: 116.4074))
         let query = try queryItems(url)
-        XCTAssertEqual(query["forecast_days"], "7",
-                       "必须显式声明 forecast_days=7，防服务端默认值变更")
+        XCTAssertEqual(query["forecast_days"], "16",
+                       "必须显式声明 forecast_days=16（今天 + 15 天，A1-3）")
+    }
+
+    /// A1-5：past_days=1（昨日对比的数据源）。
+    func testURLDeclaresPastDaysOne() throws {
+        let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 39.9042, longitude: 116.4074))
+        let query = try queryItems(url)
+        XCTAssertEqual(query["past_days"], "1",
+                       "必须显式声明 past_days=1（A1-5 昨日对比）")
+    }
+
+    /// A1-1：current 含气压双键。
+    func testURLCurrentFieldsContainPressureKeys() throws {
+        let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 0, longitude: 0))
+        let current = try XCTUnwrap(try queryItems(url)["current"])
+        let fields = current.split(separator: ",").map(String.init)
+        XCTAssertTrue(fields.contains("pressure_msl"), "current 缺少 pressure_msl")
+        XCTAssertTrue(fields.contains("surface_pressure"), "current 缺少 surface_pressure")
+    }
+
+    /// A1-4：daily 含 sunrise/sunset（AC-A1-11 请求面）。
+    func testURLDailyFieldsContainSunriseSunset() throws {
+        let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 0, longitude: 0))
+        let daily = try XCTUnwrap(try queryItems(url)["daily"])
+        let fields = daily.split(separator: ",").map(String.init)
+        XCTAssertTrue(fields.contains("sunrise"), "daily 缺少 sunrise")
+        XCTAssertTrue(fields.contains("sunset"), "daily 缺少 sunset")
     }
 
     /// daily 请求字段扩展为 4 字段（F-A），顺序无关断言。

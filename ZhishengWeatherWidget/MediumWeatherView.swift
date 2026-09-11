@@ -5,7 +5,7 @@
 //  Medium（约 338×155）——**独立布局**，不是 Small 的拉伸：
 //
 //    ┌───────────────────────────────────────────────┐
-//    │ 北京                    更新于 14:05           │  ← 头部
+//    │ 北京  [⟳]              更新于 14:05           │  ← 头部（A1-7 刷新钮）
 //    │ ┌──────────────┐ │ ┌───────────────────────┐  │
 //    │ │ ☁️ 23°       │ │ │  ↑25°  ↓15°           │  │  ← 左：当前天气横排
 //    │ │ 多云 · 体感21°│ │ │  湿度 58%  3.2 m/s 东南│  │     右：2 列指标网格
@@ -15,6 +15,10 @@
 //  刻意不用 HourlyStrip：Medium 宽度只有 ~338pt，横向滚动区在小组件里
 //  手势体验极差（且 iOS 16 上滚动组件在 widget 内易触发渲染问题）。
 //  改为「左 34% 当前天气 + 右 2×2 指标网格」，信息密度更高且完全静态。
+//
+//  A1-7：头部右上角刷新 Button(intent: WidgetRefreshIntent())——
+//  意图 openAppWhenRun 拉起主 App 强刷，widget 自身零网络零写入；
+//  交互组件是 iOS 17 API，经 WidgetRuntime 判据只在 17+ 渲染（同源判据）。
 //
 //  背景经 `widgetBackground(_:)` 双写（iOS 16 / 17 兼容）。
 //
@@ -49,7 +53,7 @@ struct MediumWeatherView: View {
         .widgetBackground { Theme.background }
     }
 
-    // MARK: - 头部
+    // MARK: - 头部（A1-7：右上角刷新按钮）
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -71,7 +75,22 @@ struct MediumWeatherView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.secondaryText)
                 .lineLimit(1)
+
+            if WidgetRuntime.isIOS17OrLater {
+                refreshButton
+            }
         }
+    }
+
+    /// 刷新按钮（A1-7）：点击 → openAppWhenRun 拉起主 App → 强刷 → reload。
+    private var refreshButton: some View {
+        Button(intent: WidgetRefreshIntent()) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("刷新天气")
     }
 
     // MARK: - 左栏：当前天气（图标 + 温度 + 现象 + 体感，横排）

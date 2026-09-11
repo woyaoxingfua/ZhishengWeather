@@ -96,15 +96,17 @@ final class OpenMeteoDecodingTests: XCTestCase {
 
     // MARK: - 逐小时截窗
 
-    func testHourlyWindowStartsAtNowAndCapsAtTwelve() throws {
+    func testHourlyWindowStartsAtNowAndCapsAtTwentyFour() throws {
         let dto = try decode(includeDaily: true)
         let now = Date(timeIntervalSince1970: TimeInterval(baseEpoch))
         let snapshot = OpenMeteoMapper.map(dto, location: .beijing, now: now)
 
-        XCTAssertEqual(snapshot.hourly.count, OpenMeteoMapper.maxHourlyCount)
+        // 数据源覆盖 [base-3h, base+20h] 共 24 点，now=base → 窗口 = base..base+20h
+        // 共 21 点（不足 24 按实际渲染，AC-A1-5）。
+        XCTAssertEqual(snapshot.hourly.count, 21)
         XCTAssertEqual(snapshot.hourly.first?.time, now)
         XCTAssertEqual(snapshot.hourly.last?.time,
-                       Date(timeIntervalSince1970: TimeInterval(baseEpoch + 11 * 3_600)))
+                       Date(timeIntervalSince1970: TimeInterval(baseEpoch + 20 * 3_600)))
     }
 
     // MARK: - 数组长度不齐 / hourly 为空
@@ -232,6 +234,157 @@ final class OpenMeteoDecodingTests: XCTestCase {
         let daily = try XCTUnwrap(dto.daily)
         XCTAssertNil(daily.weather_code, "weather_code 键缺失必须解码为 nil（D-1）")
         XCTAssertEqual(daily.precipitation_probability_max, [10])
+    }
+
+    // MARK: - A1 DTO 解码（pressure 双键 / sunrise/sunset 字符串）
+
+    /// pressure 双键齐全 → 解码成功且值透传（D-A1）。
+    func testCurrentPressureKeysDecode() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1,
+                       "pressure_msl": 1013.2, "surface_pressure": 1008.7 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": null
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(dto.current.pressure_msl ?? -1, 1013.2, accuracy: 0.001)
+        XCTAssertEqual(dto.current.surface_pressure ?? -1, 1008.7, accuracy: 0.001)
+
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        // mapper 回退语义：msl 优先（ARCH-A1 §1.1）。
+        XCTAssertEqual(snapshot.pressureMSL ?? -1, 1013.2, accuracy: 0.001)
+    }
+
+    /// pressure 键缺失 → 解码成功（不炸）且 snapshot.pressureMSL == nil（不冒充 0）。
+    func testCurrentPressureKeysMissingDecodeSafely() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": null
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        XCTAssertNil(dto.current.pressure_msl)
+        XCTAssertNil(dto.current.surface_pressure)
+
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(snapshot.pressureMSL, "双键均缺失 → nil（AC-A1-3：-- 而非 0）")
+    }
+
+    /// pressure 仅 msl 缺 → mapper 回退 surface（AC-A1-1 fallback 语义）。
+    func testPressureFallsBackToSurfaceWhenMSLMissing() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1,
+                       "pressure_msl": null, "surface_pressure": 1008.7 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": null
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(snapshot.pressureMSL ?? -1, 1008.7, accuracy: 0.001,
+                       "msl 为 null 时必须回退 surface_pressure")
+    }
+
+    /// daily.sunrise/sunset 正常解码为 String 数组（DTO 只存 String，A1-4 铁律 4）。
+    func testDailySunriseSunsetDecodeAsStrings() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": {
+            "time": [1700000000, 1700086400],
+            "temperature_2m_max": [26.1, 24.0],
+            "temperature_2m_min": [15.2, 14.0],
+            "weather_code": [0, 1],
+            "sunrise": ["2026-09-11T05:53", "2026-09-12T05:54"],
+            "sunset": ["2026-09-11T18:22", null]
+          }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let daily = try XCTUnwrap(dto.daily)
+        XCTAssertEqual(daily.sunrise?.first, "2026-09-11T05:53")
+        XCTAssertNil(daily.sunset?[1], "sunset null 元素必须解码为 nil（极地日期形态）")
+
+        // mapper 注入：今日行的字符串经 ISOTimeStringDecoder 解码为 Date。
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: TimeInterval(1_700_000_000)))
+        XCTAssertNotNil(snapshot.sunrise, "今日行 sunrise 字符串合法 → 解码出 Date")
+        XCTAssertNotNil(snapshot.sunset)
+    }
+
+    /// daily.sunrise 整键缺失 → 解码成功（不炸）且 snapshot.sunrise == nil。
+    func testDailySunriseKeyMissingDecodesSafely() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": {
+            "time": [1700000000],
+            "temperature_2m_max": [26.1],
+            "temperature_2m_min": [15.2]
+          }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(snapshot.sunrise)
+        XCTAssertNil(snapshot.sunset)
+    }
+
+    /// sunrise 坏串 → snapshot.sunrise == nil（不炸、不冒充，AC-A1-12 降级面）。
+    func testDailySunriseMalformedStringYieldsNilSnapshotSunrise() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": {
+            "time": [1700000000],
+            "temperature_2m_max": [26.1],
+            "temperature_2m_min": [15.2],
+            "sunrise": ["not-a-date"],
+            "sunset": ["2026-09-11T18:22"]
+          }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(snapshot.sunrise, "坏串必须映射为 nil（UI 隐藏该段）")
+        XCTAssertNotNil(snapshot.sunset, "好串不受坏串影响")
     }
 
     // MARK: - Helpers

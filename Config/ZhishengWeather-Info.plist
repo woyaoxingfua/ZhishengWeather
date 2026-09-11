@@ -22,8 +22,55 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- A1-7/A1-8：深链 scheme 注册（Widget 刷新按钮 → zhisheng://refresh）。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.zhisheng.weather</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>zhisheng</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于获取你所在位置的实时天气；拒绝授权时将使用默认城市（北京）。</string>
+	<!-- A1-8：Home Screen 静态快捷方式三项（刷新 / 搜索城市 / 设置）。
+	     type 逐字对应 AppRouter 的 shortcutType* 常量。 -->
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.zhisheng.weather.shortcut.refresh</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>刷新天气</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>立即更新当前城市</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>arrow.clockwise</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.zhisheng.weather.shortcut.search</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>搜索城市</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>添加并切换城市</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>magnifyingglass</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.zhisheng.weather.shortcut.settings</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>设置</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>偏好与关于</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>gearshape</string>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

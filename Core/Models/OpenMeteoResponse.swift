@@ -5,8 +5,13 @@
 //  Open-Meteo /v1/forecast 的原始 DTO。
 //  请求带 `timeformat=unixtime`，故所有时间字段均为 epoch 秒（Int），
 //  解析侧一律 `Date(timeIntervalSince1970:)`，不做字符串解析。
+//  ⚠️ **唯一例外**：daily.sunrise / daily.sunset（A1-4）绕过 unixtime
+//  全局参数，仍为 ISO 本地墙钟字符串 —— DTO 只存原始 String，
+//  解码走 `ISOTimeStringDecoder`（ARCH-A1 §1.4 四铁律）。
 //
 //  v1.1 修订：新增 `daily` 块（采纳 daily 参数）。
+//  v1.2 修订（A1）：Current +pressure_msl/surface_pressure（可选 Double，
+//    键缺失不炸，偏差备案 D-A1）；Daily +sunrise/sunset（[String]?，D-1 风格）。
 //
 
 import Foundation
@@ -26,6 +31,11 @@ struct OpenMeteoResponse: Codable, Sendable {
         let wind_direction_10m: Double
         /// 0 = 夜，1 = 昼。
         let is_day: Int
+        /// 海平面气压（hPa）。A1 新增，整键可选：服务端异常省略键时不炸
+        /// （偏差备案 D-A1；mapper 内 msl 优先、缺则回退 surface_pressure）。
+        let pressure_msl: Double?
+        /// 地面气压（hPa）。A1 新增，整键可选（同上）。
+        let surface_pressure: Double?
     }
 
     /// 逐小时序列。
@@ -47,6 +57,13 @@ struct OpenMeteoResponse: Codable, Sendable {
         let weather_code: [Int]?
         /// F-A 新增。整键可选 + 元素可选：Open-Meteo 可能返回 null 元素（AC-A5）。
         let precipitation_probability_max: [Int?]?
+        /// A1-4 新增。日出时刻，ISO 本地墙钟字符串（如 "2026-09-11T05:53"，
+        /// 无时区后缀）——⚠️ 不受 timeformat=unixtime 影响，**禁止**用 epoch
+        /// 路径解析；解码入口 = `ISOTimeStringDecoder.date(from:utcOffsetSeconds:)`。
+        /// 整键可选 + 元素可选（极地日期可能为 null 元素）。
+        let sunrise: [String?]?
+        /// A1-4 新增。日落时刻，同上。
+        let sunset: [String?]?
     }
 
     let timezone: String

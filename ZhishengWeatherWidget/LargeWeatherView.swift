@@ -5,7 +5,7 @@
 //  Large（约 338×354）——**独立布局**，不是 Medium 的纵向拉伸：
 //
 //    ┌───────────────────────────────────────────────┐
-//    │ 北京 · 默认城市                更新于 14:05     │  ← ① 头部
+//    │ 北京 · 默认城市  [⟳]          更新于 14:05     │  ← ① 头部（A1-7 刷新钮）
 //    │            ☁️                                  │
 //    │            23°        多云                     │  ← ② Hero：大温度 + 现象
 //    │        ↑25°  ↓15°  体感 21°                    │
@@ -33,6 +33,10 @@
 //
 //  3/7 切换**不存在于 Widget**（L-9 结构性保证）：固定 `prefix(3)`，
 //  不读、不写任何展开状态 —— widget 代码里根本没有 3/7 概念。
+//  （A1 后 mapper 的 daily 输出自今日起截，prefix(3) = 今天起 3 天，语义不变。）
+//
+//  A1-7：头部刷新 Button(intent: WidgetRefreshIntent())——openAppWhenRun
+//  拉起主 App 强刷，widget 自身零网络零写入；iOS 17+ 才渲染（同源判据）。
 //
 //  逐日图标**一律用日间符号**：Open-Meteo `daily.time` 是当日 00:00 的 epoch，
 //  现有 `isDaytime`（6:00–17:59 为昼）启发式对它必判「夜」，会产生
@@ -64,7 +68,7 @@ struct LargeWeatherView: View {
         .widgetBackground { Theme.background }
     }
 
-    // MARK: - ① 头部
+    // MARK: - ① 头部（A1-7：刷新按钮）
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -86,7 +90,22 @@ struct LargeWeatherView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.secondaryText)
                 .lineLimit(1)
+
+            if WidgetRuntime.isIOS17OrLater {
+                refreshButton
+            }
         }
+    }
+
+    /// 刷新按钮（A1-7）：点击 → openAppWhenRun 拉起主 App → 强刷 → reload。
+    private var refreshButton: some View {
+        Button(intent: WidgetRefreshIntent()) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("刷新天气")
     }
 
     // MARK: - ② Hero：大温度 + 现象 + 高低温/体感
