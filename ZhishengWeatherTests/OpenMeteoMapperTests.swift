@@ -151,7 +151,8 @@ final class OpenMeteoMapperTests: XCTestCase {
                                                         temperature_2m_max: [40.0],
                                                         temperature_2m_min: [-5.0],
                                                         weather_code: nil,
-                                                        precipitation_probability_max: nil)),
+                                                        precipitation_probability_max: nil,
+                                                        sunrise: nil, sunset: nil)),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -184,7 +185,8 @@ final class OpenMeteoMapperTests: XCTestCase {
                                                         temperature_2m_max: [],
                                                         temperature_2m_min: [],
                                                         weather_code: nil,
-                                                        precipitation_probability_max: nil)),
+                                                        precipitation_probability_max: nil,
+                                                        sunrise: nil, sunset: nil)),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -204,7 +206,8 @@ final class OpenMeteoMapperTests: XCTestCase {
                                                         temperature_2m_max: [30.0],
                                                         temperature_2m_min: [],
                                                         weather_code: nil,
-                                                        precipitation_probability_max: nil)),
+                                                        precipitation_probability_max: nil,
+                                                        sunrise: nil, sunset: nil)),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -643,18 +646,23 @@ final class OpenMeteoMapperTests: XCTestCase {
         )
     }
 
-    /// F-A：构造 DTO 逐日块（codes / precip 可传 nil 模拟键缺失）。
+    /// F-A/A1：构造 DTO 逐日块（codes / precip / sunrise / sunset 可传 nil 模拟键缺失；
+    /// sunrise/sunset 为 ISO 墙钟字符串数组，与 time 逐行对应，CI run11 修复）。
     private func makeDaily(times: [Int],
                            maxTemps: [Double],
                            minTemps: [Double],
                            codes: [Int]? = nil,
-                           precip: [Int?]? = nil) -> OpenMeteoResponse.Daily {
+                           precip: [Int?]? = nil,
+                           sunrise: [String?]? = nil,
+                           sunset: [String?]? = nil) -> OpenMeteoResponse.Daily {
         OpenMeteoResponse.Daily(
             time: times,
             temperature_2m_max: maxTemps,
             temperature_2m_min: minTemps,
             weather_code: codes,
-            precipitation_probability_max: precip
+            precipitation_probability_max: precip,
+            sunrise: sunrise,
+            sunset: sunset
         )
     }
 }
