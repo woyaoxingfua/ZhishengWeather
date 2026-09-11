@@ -31,7 +31,9 @@ struct WidgetCityEntity: AppEntity, Identifiable, Codable, Sendable {
     /// 哨兵实体（候选列表第一项；AC-C1 / AC-C2）。
     static let followApp = WidgetCityEntity(id: followAppID, name: "跟随 App", subtitle: nil)
 
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "城市"
+    /// Apple 规范形式：AppIntents 编译期抽取器要求 name 为字面量；
+    /// 直接 `= "城市"` 会触发 "Expect a compile-time constant literal"（CI 实测）。
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "城市")
 
     static var defaultQuery = WidgetCityQuery()
 
@@ -105,11 +107,15 @@ struct WidgetCityQuery: EntityQuery {
 /// 小组件配置 Intent（三 family 共用同一类型，F-C-9 防线）。
 struct WidgetCitySelectionIntent: WidgetConfigurationIntent {
 
-    static let title: LocalizedStringResource = "城市"
-    static let description = IntentDescription(
+    // 纪律：title / description 用 Apple 示例的 static var + 字面量形式，
+    // 编译期抽取器不接受非字面量表达式（CI 实测）。
+    static var title: LocalizedStringResource = "城市"
+    static var description = IntentDescription(
         "选择此小组件显示的城市；默认跟随主 App 当前选中城市。")
 
-    /// 非可选 + 默认哨兵（R-C1）。
-    @Parameter(title: "城市", default: WidgetCityEntity.followApp)
+    /// 非可选（R-C1）。**禁止加 `default:`**——AppIntents 要求 default 为
+    /// 编译期字面量，静态属性会挂编译（CI 实测）；默认值由
+    /// `WidgetCityQuery.defaultResult()` 提供哨兵（AC-C2：不是硬编码北京）。
+    @Parameter(title: "城市")
     var city: WidgetCityEntity
 }
