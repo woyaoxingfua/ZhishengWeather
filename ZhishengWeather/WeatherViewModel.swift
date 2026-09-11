@@ -54,12 +54,16 @@ final class WeatherViewModel {
     /// 回到前台时的「新鲜度」阈值：15 分钟内不重复取数。
     private let freshnessWindow: TimeInterval = 15 * 60
 
+    /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），
+    /// `LocationProvider()` 是 @MainActor 隔离 init，直接作 default 会挂编译
+    /// （CI 实测）。故 default 用 nil，真正创建移到 init 体内——init 体内
+    /// 已处于 @MainActor 隔离，合法。
     init(service: WeatherProviding = WeatherService(),
          store: AppGroupStore = AppGroupStore(),
-         locationProvider: LocationProvider = LocationProvider()) {
+         locationProvider: LocationProvider? = nil) {
         self.service = service
         self.store = store
-        self.locationProvider = locationProvider
+        self.locationProvider = locationProvider ?? LocationProvider()
 
         // ── F-B：载入城市目录（AC-B1 / F-B-1）────────────────────────────
         // 三分支裁定（F-B 核验后补）：

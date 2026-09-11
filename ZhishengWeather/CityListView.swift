@@ -124,7 +124,7 @@ struct CityListView: View {
     /// 左滑删除：仅剩 1 项时给出提示且不执行（AC-B11）。
     private func handleDelete(_ offsets: IndexSet) {
         guard viewModel.directory.cities.count > 1 else {
-            showMinimumHint()
+            triggerMinimumHint()
             return
         }
         let ids = offsets.compactMap { index -> String? in
@@ -139,7 +139,9 @@ struct CityListView: View {
     }
 
     /// "至少保留一个城市"提示：显示 2 秒后自动消失。
-    private func showMinimumHint() {
+    /// 注意：方法名不能与 @State 属性 `showMinimumHint` 同名（CI 实测会触发
+    /// invalid redeclaration），故方法用 trigger 前缀区分。
+    private func triggerMinimumHint() {
         minimumHintTask?.cancel()
         showMinimumHint = true
         minimumHintTask = Task {

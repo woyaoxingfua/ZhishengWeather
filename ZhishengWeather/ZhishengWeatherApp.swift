@@ -12,6 +12,11 @@
 import SwiftUI
 
 @main
+/// @MainActor：App 结构体的存储属性初始化器默认在非隔离上下文求值，
+/// 而 WeatherViewModel 是 @MainActor 隔离类（CI 实测挂编译）。
+/// 给 App 标 @MainActor 后整个初始化过程都在主 actor 上，与 SwiftUI
+/// 官方推荐模式一致。
+@MainActor
 struct ZhishengWeatherApp: App {
 
     /// 视图模型是 App 级单例，用 @State 持有，注入到 ContentView。
