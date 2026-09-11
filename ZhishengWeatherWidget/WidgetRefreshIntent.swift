@@ -45,6 +45,14 @@ struct WidgetRefreshIntent: AppIntent {
     /// 纪律：同 WidgetCityIntent 的编译期字面量要求（CI 实测）。
     static var isDiscoverable: Bool = false
 
+    /// 深链常量（CI run9 实测勘误）：**必须与主 App 侧 `AppRouter.refreshURLString`
+    /// 逐字一致**（"zhisheng://refresh"，Info.plist CFBundleURLTypes 已注册 scheme）。
+    /// 不直接引用 AppRouter：它属于主 App target（ZhishengWeather/ 目录），
+    /// 本文件被两 target 同时编译，Widget target 的 sources 不含主 App 目录，
+    /// 引用会挂编译（run9 实测 cannot find 'AppRouter' in scope）。
+    /// 同步纪律：改动任一侧字面量必须同步另一侧（两端有 grep 可查的注释锚点）。
+    private static let refreshURLString = "zhisheng://refresh"
+
     /// 空构造：Button(intent: WidgetRefreshIntent()) 直用。
     init() {}
 
@@ -56,7 +64,7 @@ struct WidgetRefreshIntent: AppIntent {
     /// 主 App Info.plist 的 CFBundleURLTypes 注册。
     @MainActor
     func perform() async throws -> some IntentResult {
-        guard let url = URL(string: AppRouter.refreshURLString) else {
+        guard let url = URL(string: Self.refreshURLString) else {
             // URL 构造失败（理论上不可能，常量字面量）—— 仅放弃派发，
             // 主 App 仍会被 openAppWhenRun 拉起，用户手动刷新即可。绝不 fatalError。
             return .result()
