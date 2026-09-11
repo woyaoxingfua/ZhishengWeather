@@ -15,6 +15,10 @@
 import SwiftUI
 
 /// 城市列表页。
+/// @MainActor：SwiftUI 只对 body 推断主 actor 隔离，init 与辅助成员
+/// 默认非隔离，触碰 @MainActor 的 ViewModel/搜索模型会挂编译（CI 实测）。
+/// SwiftUI 本就在主 actor 上构建/更新视图，整体标注是官方推荐模式。
+@MainActor
 struct CityListView: View {
 
     /// 共享的视图模型（目录状态 + 动作）。

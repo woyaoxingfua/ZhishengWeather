@@ -11,6 +11,9 @@
 
 import SwiftUI
 
+/// @MainActor：同 CityListView——辅助成员（content 等）需主 actor 隔离
+/// 才能合法触碰 @MainActor 的 WeatherViewModel。
+@MainActor
 struct ContentView: View {
 
     let viewModel: WeatherViewModel

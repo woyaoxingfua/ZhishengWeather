@@ -17,6 +17,9 @@
 import SwiftUI
 
 /// 主屏逐日预报区块。
+/// @MainActor：与项目内其他 View 保持一致（SwiftUI 仅 body 推断主 actor，
+/// 整体标注消除 init/辅助成员的非隔离盲区）。
+@MainActor
 struct DailyForecastSection: View {
 
     /// 逐日数据（由调用方保证非空；nil / 空数组的隐藏判断在 ContentView 侧）。

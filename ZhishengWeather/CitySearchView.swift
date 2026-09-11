@@ -15,6 +15,9 @@
 import SwiftUI
 
 /// 城市搜索页。
+/// @MainActor：同 CityListView——SwiftUI 仅 body 推断主 actor，
+/// init/辅助成员需整体标注才能合法触碰 @MainActor 的 CitySearchModel。
+@MainActor
 struct CitySearchView: View {
 
     /// 搜索状态机（由列表页构造并注入 provider）。
