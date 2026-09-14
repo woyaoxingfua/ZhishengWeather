@@ -26,19 +26,16 @@ import UIKit
 /// 最小 AppDelegate：冷启动配置 + 快捷方式兜底转发。
 final class AppDelegate: NSObject, UIApplicationDelegate {
 
-    /// 冷启动：为每个连接场景返回配置，并指定本文件的 `SceneDelegate` 为窗口场景委托；
-    /// 同时从 `options.shortcutItems` 取冷启动快捷方式（App 未运行时触发，
-    /// 此时 `windowScene(_:performActionFor:)` 尚未就绪，是唯一的可靠入口）。
+    /// 冷启动：为每个连接场景返回配置，并指定本文件的 `SceneDelegate` 为窗口场景委托。
+    /// ⚠️ CI run14 勘误：`UIScene.ConnectionOptions` **没有** `shortcutItems` 成员
+    /// （该成员只存在于 SwiftUI Scene 的 `WindowGroup` 专属 options，UIKit 场景
+    /// 模型里不存在）。冷启动快捷方式的唯一可靠机制：App 运行后系统对
+    /// SceneDelegate 回调 `windowScene(_:performActionFor:)`（连接完成后派发），
+    /// 兜底由 ContentView 的 `.task` 消费 AppRouter 残留状态——两条路径均已就位，
+    /// 此处无需读 options。
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        // 冷启动快捷方式：App 未运行时，系统把待执行的 shortcutItem 放在 connect options 里。
-        if let shortcutItem = options.shortcutItems?.first {
-            Task { @MainActor in
-                AppRouter.shared.handleShortcut(type: shortcutItem.type)
-            }
-        }
-
         let config = UISceneConfiguration(name: "ZhishengWeather Configuration",
                                           sessionRole: connectingSceneSession.role)
         // 关键修正（P0-2）：必须指定 delegateClass，否则快捷方式回调不会被本 App 收到。
