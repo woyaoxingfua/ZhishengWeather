@@ -194,6 +194,19 @@ curl -s -H "Authorization: token $TOKEN" \
 
 ---
 
+### 2.6 顺带核实：xtool 现在支持小组件了吗？（2026-09-14 核查）
+
+**支持了，但我们不换——结论不变，理由如下。**
+
+当初出局 xtool 的裁定依据是"仅支持 Application target，App Extension 做不了"。这个事实**已经过时**：
+- 2025-07-14 PR #97（App Extensions 支持）已合入 main，`xtool.yml` 的 `extensions:` 段可声明 WidgetKit 扩展（`NSExtensionPointIdentifier: com.apple.widgetkit-extension`），v1.x 系列已发布到 1.19.2（2026-09-11）。
+
+**但不迁移的理由（成本收益算过）**：
+1. **迁移是无谓的重写**：现工程是 XcodeGen + `project.yml` 结构，xtool 是 SwiftPM + `xtool.yml` 结构——两套工程描述完全不通，换工具 = 全部 target 定义、资源、entitlements、Info.plist 重新组织一遍，而功能零增益。
+2. **CI 已经全绿**：GitHub Actions macOS 路线跑了 13 轮稳定出包，这套管线的价值在"已被证明"，xtool 路线价值在"理论上更省"——用已验证的换未验证的，风险单向。
+3. **云电脑上没有 iPhone 数据线**：xtool 的核心卖点（本地 `xtool dev` 直连真机装包）在云电脑场景不成立——USB 透传到云端机器不现实。而我们的 IPA 签名安装本来就走 Sideloadly/AltStore，与构建机无关。
+4. **真用得上 xtool 的场景**：如果你哪天想要"不依赖 GitHub Actions 的本地构建"（比如 Actions 排队烦了），可以那时再评估——届时工程迁移是一次性成本，且有完整文档在手。
+
 ## 5. iPhone 侧（自签安装，与开发机无关）
 
 1. 从 Actions 最新绿 run 下载 `ZhishengWeather-unsigned-ipa` artifact 并解压（zip 里是 .ipa）
