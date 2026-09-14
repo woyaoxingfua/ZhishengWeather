@@ -168,6 +168,9 @@ final class WeatherViewModel {
             }
 
             WidgetCenter.shared.reloadAllTimelines()
+            // 过期丢弃（P1-A）：刷新期间用户若切换城市，当前结果已非选中城市，丢弃不应用，
+            // 避免把旧城市的快照覆盖到新选中的界面。
+            guard directory.selectedID == selectedCity.id else { return }
             state = .loaded(snapshot)
         } catch {
             let cached = store.loadSnapshot()
@@ -182,7 +185,8 @@ final class WeatherViewModel {
     /// 取数失败 → 回退选中 id（防 header 与数据错位）并置 .failed。
     /// - Parameter id: 目标城市 id。
     func select(_ id: String) async {
-        guard !isRefreshing else { return }
+        // 注意：不在此处用 `isRefreshing` 门闩拦截（P1-A 修复）——即便有刷新在途也应
+        // 立即响应用户切城，过期结果由 fetchAndApply / refresh 内的 selectedID 校验丢弃。
         guard let previousID = directory.selectedID else { return }
         guard directory.select(id), let city = directory.selectedCity else { return }
 
@@ -196,7 +200,7 @@ final class WeatherViewModel {
     /// 添加搜索结果并选中（AC-B5 / AC-B8）。去重判定由 CityDirectory.add 裁定。
     /// - Parameter city: 搜索结果构造的城市。
     func addAndSelect(_ city: City) async {
-        guard !isRefreshing else { return }
+        // 同上（P1-A 修复）：不拦截用户操作，过期结果由 fetchAndApply 内 selectedID 校验丢弃。
         let previousID = directory.selectedID
 
         let added = directory.add(city)
@@ -217,7 +221,7 @@ final class WeatherViewModel {
     /// 删除当前选中 → 目录自动回退选中 → 立即对回退后的选中城市取数 + 落盘 + reload。
     /// - Parameter id: 要删除的城市 id。
     func remove(_ id: String) async {
-        guard !isRefreshing else { return }
+        // 同上（P1-A 修复）：不拦截用户操作，过期结果由 fetchAndApply 内 selectedID 校验丢弃。
         let wasSelected = (directory.selectedID == id)
         guard directory.remove(id) else { return }
 
@@ -250,6 +254,20 @@ final class WeatherViewModel {
         await refresh()
     }
 
+    /// 消费 Widget 强刷标志位并强制刷新（A1-7）。
+    /// 由 `ZhishengWeatherApp` 在 scenePhase `.active` 时优先调用：有标志位则绕过
+    /// `refreshIfNeeded` 的新鲜度节流强制刷新；无则交由 `refreshIfNeeded` 节流。
+    /// - Returns: 是否确有强刷请求并已（强制）触发；false 表示无待办，调用方转 `refreshIfNeeded`。
+    func consumePendingForceRefreshAndRefresh() async -> Bool {
+        guard store.consumePendingForceRefresh() else { return false }
+        // 显式用户意图（点 Widget 刷新按钮）：即便有刷新在途也强制重新取数。
+        // 先清门闩，确保 refresh() 不被自身的 isRefreshing 去重拦截；
+        // 过期结果由 refresh() 内的 selectedID 校验丢弃。
+        isRefreshing = false
+        await refresh()
+        return true
+    }
+
     // MARK: - Private
 
     /// 取数 → 覆盖 location（R-3：覆盖源 = 城市信息）→ 会话缓存 → 落盘 → reload → 更新 state。
@@ -278,6 +296,9 @@ final class WeatherViewModel {
             }
 
             WidgetCenter.shared.reloadAllTimelines()
+            // 过期丢弃（P1-A）：取数期间用户若又切换城市，仅当选中项仍是本次目标城市才应用，
+            // 否则丢弃，交由对应的 select/addAndSelect/remove 取数流程修正界面。
+            guard directory.selectedID == city.id else { return }
             state = .loaded(snapshot)
         } catch {
             // 切换失败：回退选中 id，避免 header 与数据错位（F-B-7）。

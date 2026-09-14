@@ -273,6 +273,66 @@ final class AppGroupStoreTests: XCTestCase {
                        "读取路径绝不改写既有字节（留待用户显式操作时修正）")
     }
 
+    // MARK: - PendingForceRefresh 标志位（A1-7 Widget 强刷）
+
+    func testConsumeWithoutMarkReturnsFalse() throws {
+        let store = try XCTUnwrap(store)
+        XCTAssertFalse(store.consumePendingForceRefresh(), "未标记时消费应为 false")
+    }
+
+    func testMarkThenConsumeReturnsTrueExactlyOnce() throws {
+        let store = try XCTUnwrap(store)
+        store.markPendingForceRefresh()
+        XCTAssertTrue(store.consumePendingForceRefresh(), "标记后首次消费应为 true")
+        XCTAssertFalse(store.consumePendingForceRefresh(), "消费一次后应被清除，再次消费为 false")
+        XCTAssertFalse(store.consumePendingForceRefresh(), "连续多次消费保持 false（幂等）")
+    }
+
+    func testMarkUsesIndependentKeyAndDoesNotDisturbExistingData() throws {
+        let store = try XCTUnwrap(store)
+        // 标志位使用独立 key，不应污染 payload / cities / selectedCityID 既有数据。
+        let snapshot = Self.sampleSnapshot(fetchedAt: Date())
+        try store.save(snapshot: snapshot, at: Date())
+        try store.saveCities([City.beijingDefault])
+        try store.saveSelectedCityID(City.beijingDefault.id)
+
+        store.markPendingForceRefresh()
+        XCTAssertTrue(store.consumePendingForceRefresh())
+
+        XCTAssertNotNil(store.loadSnapshot(), "标志位写入/消费不应清除天气载荷")
+        guard case .loaded = store.loadCities() else {
+            return XCTFail("标志位不应清除城市列表")
+        }
+        XCTAssertEqual(store.selectedCityID, City.beijingDefault.id)
+    }
+
+    // MARK: - 写后回读校验（防静默失败，A1 修复批）
+
+    func testSavePayloadRoundTripWithVerification() throws {
+        let store = try XCTUnwrap(store)
+        let snapshot = Self.sampleSnapshot(fetchedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNoThrow(try store.save(snapshot: snapshot, at: Date()),
+                         "写后回读校验应成功（内存 suite 立即可读回）")
+        XCTAssertNotNil(store.loadSnapshot())
+    }
+
+    func testSaveCitiesRoundTripWithVerification() throws {
+        let store = try XCTUnwrap(store)
+        let cities = [City.beijingDefault,
+                      City(name: "杭州", latitude: 30.25, longitude: 120.17, isCurrentLocation: false)]
+        XCTAssertNoThrow(try store.saveCities(cities))
+        guard case .loaded(let loaded) = store.loadCities() else {
+            return XCTFail("城市列表写后回读应成功")
+        }
+        XCTAssertEqual(loaded, cities)
+    }
+
+    func testSaveSelectedCityIDRoundTripWithVerification() throws {
+        let store = try XCTUnwrap(store)
+        XCTAssertNoThrow(try store.saveSelectedCityID("39.90,116.41"))
+        XCTAssertEqual(store.selectedCityID, "39.90,116.41")
+    }
+
     // MARK: - Helpers
 
     private static func sampleSnapshot(fetchedAt: Date,

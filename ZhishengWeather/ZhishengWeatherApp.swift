@@ -3,7 +3,7 @@
 //  ZhishengWeather
 //
 //  主 App 入口。持有并注入 WeatherViewModel；监听 scenePhase，
-//  回到前台时触发一次节流刷新（refreshIfNeeded）。
+//  回到前台时：优先消费 Widget 强刷标志位（有则强刷），否则触发节流刷新（refreshIfNeeded）。
 //  A1-8：经 @UIApplicationDelegateAdaptor 挂最小 AppDelegate（快捷方式回调转发）。
 //
 //  注意：本文件属于主 App target，允许使用主 App 专有 API；
@@ -39,7 +39,14 @@ struct ZhishengWeatherApp: App {
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
-            Task { await viewModel.refreshIfNeeded() }
+            Task {
+                // 优先消费 Widget 刷新按钮写入的强刷标志位（A1-7）：有则绕过新鲜度
+                // 节流强制刷新；无标志位再按 15 分钟新鲜度窗口节流刷新（原有逻辑不变）。
+                if await viewModel.consumePendingForceRefreshAndRefresh() {
+                    return
+                }
+                await viewModel.refreshIfNeeded()
+            }
         }
     }
 }

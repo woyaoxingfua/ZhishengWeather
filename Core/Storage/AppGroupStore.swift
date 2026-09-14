@@ -15,6 +15,14 @@ import Foundation
 /// App Group 共享容器的读写器。
 final class AppGroupStore {
 
+    // MARK: - 错误类型
+
+    /// 共享容器写入相关错误。
+    enum AppGroupStoreError: Error, Equatable {
+        /// 写入后立即读回校验不一致（共享容器异常 / entitlement 缺失导致回落私有容器等）。
+        case writeVerificationMismatch(key: String)
+    }
+
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -27,10 +35,18 @@ final class AppGroupStore {
         self.defaults = defaults ?? .standard
     }
 
-    /// 写入完整载荷。
+    /// 写入完整载荷（写后回读校验，不一致抛错防静默失败）。
     func save(_ payload: SharedWeatherPayload) throws {
         let data = try encoder.encode(payload)
         defaults.set(data, forKey: AppGroup.payloadKey)
+        try verifyWritten(data, forKey: AppGroup.payloadKey)
+    }
+
+    /// 写后回读校验（防静默失败）：立即读回刚写入的 Data，不一致则抛错。
+    private func verifyWritten(_ expected: Data, forKey key: String) throws {
+        guard let read = defaults.data(forKey: key), read == expected else {
+            throw AppGroupStoreError.writeVerificationMismatch(key: key)
+        }
     }
 
     /// 以给定时间戳写入快照。
@@ -95,10 +111,12 @@ final class AppGroupStore {
     }
 
     /// 写入城市列表（仅用户显式操作时调用，PRD §3.4 时机约束）。
+    /// 写后回读校验，不一致抛错防静默失败。
     /// - Parameter cities: 城市数组（数组顺序即展示顺序，D-2）。
     func saveCities(_ cities: [City]) throws {
         let data = try encoder.encode(cities)
         defaults.set(data, forKey: AppGroup.citiesKey)
+        try verifyWritten(data, forKey: AppGroup.citiesKey)
     }
 
     /// 当前选中城市 id；无键时为 nil（未初始化语义）。
@@ -111,9 +129,32 @@ final class AppGroupStore {
     }
 
     /// 写入选中城市 id（仅用户显式操作时调用）。
+    /// 写后回读校验，不一致抛错防静默失败。
     /// - Parameter id: 目标城市 id。
     func saveSelectedCityID(_ id: String) throws {
         defaults.set(id, forKey: AppGroup.selectedCityIDKey)
+        guard defaults.string(forKey: AppGroup.selectedCityIDKey) == id else {
+            throw AppGroupStoreError.writeVerificationMismatch(key: AppGroup.selectedCityIDKey)
+        }
+    }
+
+    // MARK: - 强刷待办标志（Widget 刷新按钮 → 主 App）
+
+    /// 标记「有待处理的强刷请求」。由 Widget 刷新按钮 intent（主 App 进程内执行）
+    /// 写入，独立 key，不污染 payload / cities 既有数据。
+    func markPendingForceRefresh() {
+        defaults.set(true, forKey: AppGroup.pendingForceRefreshKey)
+    }
+
+    /// 读取并清除强刷待办标志（read-then-clear，幂等：多次调用仅首个返回 true）。
+    /// 主 App 在 scenePhase 回到前台时调用；返回 true 即触发强制刷新。
+    /// - Returns: 是否存在待处理强刷请求。
+    @discardableResult
+    func consumePendingForceRefresh() -> Bool {
+        let pending = defaults.bool(forKey: AppGroup.pendingForceRefreshKey)
+        guard pending else { return false }
+        defaults.removeObject(forKey: AppGroup.pendingForceRefreshKey)
+        return true
     }
 
     // MARK: - 共享容器可用性探测

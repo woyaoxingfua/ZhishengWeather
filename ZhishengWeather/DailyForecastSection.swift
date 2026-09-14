@@ -8,8 +8,9 @@
 //  - 档位状态**只存在于本视图的 `@State`**：不进 ViewModel、不进 snapshot、
 //    不写共享容器、不跨启动持久化。冷启动重建视图自动回 3 天
 //    （F-A"展开状态止步于 @State"的结构性隔离平移，L-9 纪律）。
-//  - 3 档选择控件：`Picker(.segmented)`；数据不足对应档位时该段禁用
-//    （`daily.count > 3` 时 7 段可用、`> 7` 时 15 段可用）。
+//  - 3 档选择控件：`Picker(.segmented)`；档位随数据量动态生成（恒含 3 天；
+//    `daily.count > 3` 才出现 7 天、`> 7` 才出现 15 天），**不禁用段**（P1-C 修复：
+//    原 `.disabled(!canToggle)` 会把恒可用的「3 天」段一并禁用，属档位禁用错误）。
 //  - 降水概率 nil → 显示 "--"（灰色），**绝不显示 0%**（AC-A5）。
 //  - 复用 `WMOCodeMapper`，不新增映射表（AC-A4）。
 //  - 「今天/周几」标签基于快照内的日期 + `Calendar.current.isDateInToday`，
@@ -35,9 +36,6 @@ struct DailyForecastSection: View {
     /// 日期标签列固定宽度（iPhone SE 375pt 下不溢出，AC-A9 / F-A-8）。
     private let dateColumnWidth: CGFloat = 64
 
-    /// 档位全集。
-    private let choices: [Int] = [3, 7, 15]
-
     /// 当前应展示的天数：`daily.prefix(choice)`；数组不足 16 按实际渲染（AC-A1-9）。
     private var visibleDays: [DailyForecast] {
         Array(daily.prefix(visibleDaysChoice))
@@ -48,10 +46,33 @@ struct DailyForecastSection: View {
         daily.count > 3
     }
 
+    /// 依据数据量动态可调的档位（P1-C 修复：数据不足时不应出现禁用段）。
+    /// 3 天恒定可选；数据 `> 3` 天出现 7；数据 `> 7` 天出现 15。
+    private var availableChoices: [Int] {
+        var result = [3]
+        if daily.count > 3 { result.append(7) }
+        if daily.count > 7 { result.append(15) }
+        return result
+    }
+
+    /// 给定数据条数时允许的最大档位（与 `availableChoices` 末端一致），
+    /// 用于 `daily.count` 变化时夹紧过期的大档位选择。
+    private func maxChoice(for count: Int) -> Int {
+        count > 7 ? 15 : (count > 3 ? 7 : 3)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             rows
+        }
+        // P1-C 修复：数据条数变化时，若当前档位已超出可调范围（tags 动态裁剪后旧选择失效），
+        // 夹紧到最大可用档位，避免 picker 选中项越界 / 残留高挡位。
+        .onChange(of: daily.count) { _, newCount in
+            let max = maxChoice(for: newCount)
+            if visibleDaysChoice > max {
+                visibleDaysChoice = max
+            }
         }
     }
 
@@ -71,18 +92,17 @@ struct DailyForecastSection: View {
         }
     }
 
-    /// 3/7/15 三段选择器：数据不足对应档位的段禁用（ARCH-A1 §1.3）。
-    /// （数据充足时三段逐个启用；150 天由 maxDailyCount=16 对齐服务端 forecast_days=16。）
+    /// 3/7/15 动态档位选择器：标签随 `availableChoices` 生成，恒可用的「3 天」段
+    /// 永不被禁用（P1-C 修复：原 `.disabled(!canToggle)` 误伤恒可用段）。
     private var choicePicker: some View {
         Picker("展示天数", selection: $visibleDaysChoice) {
-            ForEach(choices, id: \.self) { choice in
+            ForEach(availableChoices, id: \.self) { choice in
                 Text("\(choice) 天")
                     .tag(choice)
             }
         }
         .pickerStyle(.segmented)
         .fixedSize()
-        .disabled(!canToggle)
         .accessibilityLabel("切换逐日预报展示天数")
     }
 

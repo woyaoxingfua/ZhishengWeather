@@ -21,9 +21,6 @@ struct ContentView: View {
 
     let viewModel: WeatherViewModel
 
-    /// 快捷方式"搜索城市"入口（A1-8）：push 城市列表页时的聚焦标记
-    /// （搜索页由 CityListView 内部读取；D-A3：设置项暂路由同一页根）。
-    @State private var showSearch: Bool = false
     /// 编程式 push（AppRouter 触发跳转用）。
     @State private var navigation: NavigationPath = NavigationPath()
 
@@ -40,11 +37,19 @@ struct ContentView: View {
             .onOpenURL { url in
                 AppRouter.shared.handle(url: url, viewModel: viewModel)
             }
-            // A1-8：快捷方式路由观察（AppDelegate 转发 → AppRouter 发布 → 这里消费）。
+            // A1-8：快捷方式路由观察（AppDelegate/SceneDelegate 转发 → AppRouter 发布 → 这里消费）。
             // ⚠️ @Observable 宏不合成 $投影（那是 ObservableObject/@Published 的机制），
-            // 观察用 onChange(of:) 监听值本身（CI run10 实测 has no member '$routeSubject'）。
-            .onChange(of: AppRouter.shared.routeSubject) { _, route in
-                handleRouterRoute(route)
+            // 观察用 onChange(of:) 监听 pendingRoute 值本身（其内 UUID 令牌保证同目的地也触发）。
+            .onChange(of: AppRouter.shared.pendingRoute) { _, pending in
+                handleRouterRoute(pending)
+            }
+            // 冷启动兜底：AppDelegate 在配置 Scene 前已读到 shortcutItems 并写入
+            // pendingRoute，而 @Observable 不会就「初始值」重复通知，故首值不触发上面的
+            // onChange；此处于视图首现时补消费一次首值（热启动的快捷方式仍走 onChange）。
+            .task {
+                if let pending = AppRouter.shared.pendingRoute {
+                    handleRouterRoute(pending)
+                }
             }
             // 跳转目的地注册（A1-8：搜索/设置暂路由城市列表页根，D-A3）。
             .navigationDestination(for: CityRoute.self) { _ in
@@ -53,11 +58,9 @@ struct ContentView: View {
         }
     }
 
-    /// 消费 AppRouter 发布的路由：刷新类直接执行，跳转类做 push。
-    private func handleRouterRoute(_ route: AppRouter.Route?) {
-        guard let consumed = AppRouter.shared.consume(route,
-                                                      viewModel: viewModel,
-                                                      showSearch: $showSearch) else { return }
+    /// 消费 AppRouter 发布的路由令牌：刷新类直接执行，跳转类做 push。
+    private func handleRouterRoute(_ pending: AppRouter.PendingRoute?) {
+        guard let consumed = AppRouter.shared.consume(pending, viewModel: viewModel) else { return }
         switch consumed {
         case .searchCity, .settings:
             navigation.append(CityRoute.cities)
