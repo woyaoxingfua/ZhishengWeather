@@ -24,7 +24,7 @@ final class AppRouterTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name), "无法创建临时 suite")
         store = AppGroupStore(defaults: defaults)
         // 注入 Stub 服务，避免 handle 调 refresh() 触发真实网络（即使 Task 未 await 也不污染）。
-        viewModel = WeatherViewModel(store: store, service: StubWeatherService(), locationProvider: nil)
+        viewModel = WeatherViewModel(service: StubWeatherService(), store: store, locationProvider: nil)
 
         // 清空单例状态，保证用例隔离（consume searchCity 不会触发网络）。
         AppRouter.shared.handleShortcut(type: AppRouter.shortcutTypeSearch)
