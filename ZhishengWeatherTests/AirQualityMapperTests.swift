@@ -22,16 +22,16 @@ final class AirQualityMapperTests: XCTestCase {
     """.data(using: .utf8)!
 
     private func decode(_ json: String) throws -> AirQualityResponse {
-        try JSONDecoder().decode(AirQualityResponse.self, from: json.data(using: .utf8)!)
+        try JSONDecoder().decode(AirQualityResponse.self, from: Data(json.utf8))
     }
 
     func testMapsAllFields() throws {
         let air = AirQualityMapper.map(try decode(fullJSON))
         XCTAssertEqual(air.usAqi, 78)
         XCTAssertEqual(air.europeanAqi, 53)
-        XCTAssertEqual(air.pm25, 30.9, accuracy: 1e-9)
-        XCTAssertEqual(air.pm10, 93.1, accuracy: 1e-9)
-        XCTAssertEqual(air.ozone, 71.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(air.pm25), 30.9, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(air.pm10), 93.1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(air.ozone), 71.0, accuracy: 1e-9)
         XCTAssertEqual(air.level, .moderate)
     }
 
@@ -45,7 +45,7 @@ final class AirQualityMapperTests: XCTestCase {
     func testPartialFieldsPreservedOthersNil() throws {
         let air = AirQualityMapper.map(try decode(
             "{ \"current\": { \"pm2_5\": 12.0, \"us_aqi\": 45 } }"))
-        XCTAssertEqual(air.pm25, 12.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(air.pm25), 12.0, accuracy: 1e-9)
         XCTAssertEqual(air.usAqi, 45)
         XCTAssertNil(air.pm10)
         XCTAssertNil(air.ozone)
@@ -57,7 +57,7 @@ final class AirQualityMapperTests: XCTestCase {
             "{ \"current\": { \"pm10\": -5.0, \"us_aqi\": -1, \"pm2_5\": 20.0 } }"))
         XCTAssertNil(air.pm10)
         XCTAssertNil(air.usAqi)
-        XCTAssertEqual(air.pm25, 20.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(air.pm25), 20.0, accuracy: 1e-9)
     }
 
     func testUsAqiDrivesLevelEuIndependent() throws {

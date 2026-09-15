@@ -32,12 +32,12 @@ final class AirQualityResponseTests: XCTestCase {
 
         let dto = try XCTUnwrap(try decoder.decode(AirQualityResponse.self, from: json))
         let current = try XCTUnwrap(dto.current)
-        XCTAssertEqual(current.pm2_5, 30.9, accuracy: 1e-9)
-        XCTAssertEqual(current.pm10, 93.1, accuracy: 1e-9)
-        XCTAssertEqual(current.carbon_monoxide, 552.0, accuracy: 1e-9)
-        XCTAssertEqual(current.nitrogen_dioxide, 18.4, accuracy: 1e-9)
-        XCTAssertEqual(current.sulphur_dioxide, 4.2, accuracy: 1e-9)
-        XCTAssertEqual(current.ozone, 71.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.pm2_5), 30.9, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.pm10), 93.1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.carbon_monoxide), 552.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.nitrogen_dioxide), 18.4, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.sulphur_dioxide), 4.2, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.ozone), 71.0, accuracy: 1e-9)
         XCTAssertEqual(current.us_aqi, 78)
         XCTAssertEqual(current.european_aqi, 53)
     }
