@@ -109,30 +109,26 @@ final class WeatherViewModelAirTests: XCTestCase {
     // MARK: - 过期守门（P1-A 平移）
 
     func testStaleAirResultDiscardedAfterCitySwitch() async throws {
+        // 机制点：后到城市的空气结果覆盖先到（守门不误杀合法新值）。
+        // 注意不用 refresh()——其定位链路在单测环境会走 60s 授权超时（CI 实测 60.5s），
+        // 会对空气 Task 注入不可控时序；fetchAndApply 路径时序确定。
         let store = try makeStore()
-        // 天气 Stub 慢一点无所谓——本用例的机制点：空气结果返回前 selectedID 已变。
-        let slowAir = StubAirService(.success(makeAir(usAqi: 999)))
         let vm = WeatherViewModel(service: StubWeather(snapshot: makeSnapshot()),
                                   store: store,
                                   locationProvider: LocationProvider(),
-                                  airService: slowAir)
+                                  airService: StubAirService(.success(makeAir(usAqi: 999))))
 
-        await vm.refresh()
-        await waitForAir(vm)
-        // refresh 后 airQuality = 北京（78）。
-        XCTAssertEqual(vm.airQuality?.usAqi, 78)
-
-        // 切换城市（走 addAndSelect 造第二个城市，目录至少一项不变式）。
+        // 初始只有默认北京；添加并选中"杭州" → 空气链路触发（Stub 恒 999）。
         let newCity = City(name: "杭州", latitude: 30.25, longitude: 120.17,
                            isCurrentLocation: false)
         await vm.addAndSelect(newCity)
-        await waitForAir(vm)
-        // 切城后空气链路重新触发，新城市结果（同 Stub 999）被应用——守门不误杀。
+
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline, vm.airQuality?.usAqi != 999 {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
-        XCTAssertEqual(vm.airQuality?.usAqi, 999)
+        XCTAssertEqual(vm.airQuality?.usAqi, 999,
+                       "空气结果应来自当前选中城市（守门放行合法新值）")
     }
 
     // MARK: - 天气失败 ≠ 空气不触发（双向隔离另一半）
