@@ -125,6 +125,9 @@ struct ContentView: View {
                 if let daily = snapshot.daily, !daily.isEmpty {
                     DailyForecastSection(daily: daily)
                 }
+                // A2-3：生活指数（本地估算，逐日区块之下、月相区之上，
+                // "本地建议"归组在数据展示后——ARCH-A2P1 §1.1④）。
+                LifeIndexSection(items: LifeIndexEngine.indices(for: snapshot))
                 moonSection(snapshot: snapshot)
                 footerSection(footerText, highlighted: footerHighlighted)
             }
@@ -277,7 +280,35 @@ struct ContentView: View {
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
+
+            // A2-4：月出月落行（本地近似，±10min）。任一存在才渲染；
+            // 全 nil（极地/无事件日）→ "今日无月出"式文案（AC-A2-14）。
+            if let moonText = moonRiseSetText(snapshot) {
+                Text(moonText)
+                    .font(.system(size: Theme.FontSize.caption))
+                    .foregroundStyle(Theme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
+    }
+
+    /// 「月出 09:58 · 月落 21:30」/「今日无月出」。
+    /// 坐标取 snapshot.location（选中城市），时刻格式复用 timeFormatter。
+    private func moonRiseSetText(_ snapshot: WeatherSnapshot) -> String? {
+        let events = MoonCalculator.moonEvents(for: snapshot.fetchedAt,
+                                               latitude: snapshot.location.latitude,
+                                               longitude: snapshot.location.longitude)
+        var parts: [String] = []
+        if let rise = events.rise {
+            parts.append("月出 \(Self.timeFormatter.string(from: rise))")
+        }
+        if let set = events.set {
+            parts.append("月落 \(Self.timeFormatter.string(from: set))")
+        }
+        if parts.isEmpty {
+            return "今日无月出"
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// 「日出 05:53 · 日落 18:22」；单侧缺失时只显示存在的一侧（AC-A1-12 降级面）。

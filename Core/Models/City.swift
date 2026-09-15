@@ -32,6 +32,11 @@ struct City: Codable, Equatable, Identifiable, Sendable {
     var admin1: String?
     /// 是否为"当前位置"项（随定位更新坐标）。
     var isCurrentLocation: Bool
+    /// 收藏星标（A2-6 新增，可选）。
+    /// 可选 + 合成 Codable（默认 nil = 未收藏）：旧共享容器 `[City]` JSON 缺此键
+    /// → 解码 nil、不失败（F-A-9 / A1 §2.1 同款纪律，禁手写 `init(from:)`）。
+    /// 置顶展示由 `CityDirectory.displayCities` 读取时稳定排序实现，不改写本数组。
+    var isFavorite: Bool? = nil
 
     /// 由字段构造（id 由 `makeID` 规范化生成）。
     /// - Parameters:

@@ -29,6 +29,8 @@ struct DailyForecastSection: View {
 
     /// 逐日数据（由调用方保证非空；nil / 空数组的隐藏判断在 ContentView 侧）。
     let daily: [DailyForecast]
+    /// 城市坐标（A2-5：展开行的月出月落计算用；由 ContentView 从 snapshot.location 透传）。
+    var coordinate: (latitude: Double, longitude: Double) = (39.9042, 116.4074)
 
     /// 三档切换状态：默认 3 天（AC-A1-8），会话内记忆，不落盘。
     @State private var visibleDaysChoice: Int = 3
@@ -111,86 +113,12 @@ struct DailyForecastSection: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(visibleDays) { day in
-                row(day)
+                // A2-5：逐行独立子视图（@State expanded 各自持有，AC-A2-16 不联动）。
+                DailyForecastRow(day: day, coordinate: coordinate)
             }
         }
     }
 
     /// 单行：日期标签列（固定宽）→ 图标 + 现象 → Spacer → 降水概率 → 高低温。
-    private func row(_ day: DailyForecast) -> some View {
-        HStack(spacing: 8) {
-            // 日期标签列：主标签「今天/周三」+ 次标签「M月d日」。
-            VStack(alignment: .leading, spacing: 1) {
-                Text(primaryLabel(for: day))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.primaryText)
-                    .lineLimit(1)
-                Text(Self.monthDayFormatter.string(from: day.date))
-                    .font(.system(size: Theme.FontSize.caption))
-                    .foregroundStyle(Theme.secondaryText)
-                    .lineLimit(1)
-            }
-            .frame(width: dateColumnWidth, alignment: .leading)
+    
 
-            WeatherSymbol(code: day.weatherCode, isDay: true, size: 18)
-
-            Text(WMOCodeMapper.description(for: day.weatherCode))
-                .font(.system(size: Theme.FontSize.caption))
-                .foregroundStyle(Theme.primaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 8)
-
-            // 降水概率：nil → "--"（灰色），绝不显示 0%（AC-A5）。
-            Text(precipitationText(for: day))
-                .font(.system(size: Theme.FontSize.caption))
-                .foregroundStyle(day.precipitationProbability == nil
-                                 ? Theme.secondaryText
-                                 : Theme.accentSecondary)
-                .lineLimit(1)
-
-            Text(temperatureText(for: day))
-                .font(.system(size: Theme.FontSize.caption, weight: .semibold))
-                .foregroundStyle(Theme.primaryText)
-                .lineLimit(1)
-        }
-    }
-
-    // MARK: - 取值
-
-    /// 主标签：今天 → 「今天」；其余 → 「周三」等（EEE, zh_CN）。
-    /// 判断基于快照内日期与 `Calendar.isDateInToday`，不构造当前时刻。
-    private func primaryLabel(for day: DailyForecast) -> String {
-        Calendar.current.isDateInToday(day.date) ? "今天"
-            : Self.weekdayFormatter.string(from: day.date)
-    }
-
-    /// 「80%」或「--」。
-    private func precipitationText(for day: DailyForecast) -> String {
-        guard let probability = day.precipitationProbability else { return "--" }
-        return "\(probability)%"
-    }
-
-    /// 「↑25° ↓15°」。
-    private func temperatureText(for day: DailyForecast) -> String {
-        "↑\(Int(day.tempMax.rounded()))° ↓\(Int(day.tempMin.rounded()))°"
-    }
-
-    // MARK: - 格式化工具
-
-    /// 「周三」（周几，zh_CN 缩写）。
-    private static let weekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "EEE"
-        return formatter
-    }()
-
-    /// 「9月11日」（DateFormatter 自动正确处理跨月 / 跨年，AC-A10）。
-    private static let monthDayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日"
-        return formatter
-    }()
-}

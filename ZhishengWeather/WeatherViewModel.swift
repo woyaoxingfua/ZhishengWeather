@@ -255,6 +255,14 @@ final class WeatherViewModel {
         saveCitiesQuietly()
     }
 
+    /// 切换城市收藏星标（A2-6）：显式用户操作 → 立即落盘（PRD §3.4）。
+    /// 展示置顶由 `CityDirectory.displayCities` 读取时派生，此处不改写数组顺序。
+    /// - Parameter id: 目标城市 id。
+    func toggleFavorite(_ id: String) {
+        directory.toggleFavorite(id)
+        saveCitiesQuietly()
+    }
+
     // MARK: - 回到前台节流
 
     /// 回到前台：仅当缓存过期时才刷新（原有逻辑不变）。

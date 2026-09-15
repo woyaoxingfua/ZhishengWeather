@@ -144,6 +144,29 @@ struct CityDirectory: Equatable, Sendable {
         cities.move(fromOffsets: fromOffsets, toOffset: toOffset)
     }
 
+    // MARK: - 收藏星标（A2-6）
+
+    /// 展示列表：收藏项置顶、组内保持原相对顺序（读取时稳定排序）。
+    ///
+    /// 裁定（ARCH-A2P1 §1.4）：**不改写 `cities` 与 `selectedID`** ——
+    /// 若在 add/move 后重排持久化数组，会与 AC-B9"排序不影响选中"及拖动
+    /// 语义冲突（非收藏项被反复拉回）。持久化数组保持用户操作意图，置顶
+    /// 仅是展示层派生视图；`selectedID` 永不因置顶而漂移。
+    /// - Invariant: 稳定排序保证同收藏态内相对顺序 = `cities` 原序（AC-A2-18）。
+    var displayCities: [City] {
+        let favorites = cities.filter { $0.isFavorite == true }
+        let rest = cities.filter { $0.isFavorite != true }
+        return favorites + rest
+    }
+
+    /// 切换星标（nil/false → true；true → false）。
+    /// id 不存在 → no-op。**只改字段，不重排数组**（置顶由 displayCities 派生）。
+    /// - Parameter id: 目标城市 id。
+    mutating func toggleFavorite(_ id: String) {
+        guard let index = cities.firstIndex(where: { $0.id == id }) else { return }
+        cities[index].isFavorite = !(cities[index].isFavorite ?? false)
+    }
+
     /// 当前选中城市；选中 id 失效（如数据损坏）时为 nil。
     var selectedCity: City? {
         guard let selectedID else { return nil }

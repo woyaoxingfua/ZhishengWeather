@@ -115,6 +115,17 @@ struct CityListView: View {
                     .foregroundStyle(Theme.accent)
                     .accessibilityLabel("当前选中")
             }
+
+            // A2-6：收藏星标按钮（☆/★）。点击只切换收藏，不触发选中。
+            Button {
+                viewModel.toggleFavorite(city.id)
+            } label: {
+                Image(systemName: city.isFavorite == true ? "star.fill" : "star")
+                    .font(.system(size: 14))
+                    .foregroundStyle(city.isFavorite == true ? Color(red: 0.95, green: 0.78, blue: 0.24) : Theme.secondaryText)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(city.isFavorite == true ? "取消收藏" : "收藏")
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
