@@ -14,7 +14,7 @@
 import Foundation
 
 /// 主屏可排序/可隐藏区块（顺序 = 主屏默认顺序）。
-enum HomeSection: String, CaseIterable, Sendable {
+enum HomeSection: String, CaseIterable, Identifiable, Sendable {
     case yesterday      // A1-5 昨日对比行
     case metrics        // 指标格（风速/湿度/气压）
     case airQuality     // A2-1 空气卡
@@ -22,6 +22,9 @@ enum HomeSection: String, CaseIterable, Sendable {
     case daily          // 逐日预报
     case lifeIndex      // A2-3 生活指数
     case moon           // 月相 + 日出日落 + 月出月落
+
+    /// Identifiable（主屏 ForEach 排序渲染用）。
+    var id: String { rawValue }
 
     /// UserDefaults 存储键（主 App 本地，非共享容器）。
     static let storageKey = "zs.weather.homeSections"
