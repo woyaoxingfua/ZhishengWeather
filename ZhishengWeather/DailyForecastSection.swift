@@ -122,7 +122,4 @@ struct DailyForecastSection: View {
             }
         }
     }
-
-    /// 单行：日期标签列（固定宽）→ 图标 + 现象 → Spacer → 降水概率 → 高低温。
-    
-
+}
