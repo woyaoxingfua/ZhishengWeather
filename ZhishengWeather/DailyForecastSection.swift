@@ -29,8 +29,10 @@ struct DailyForecastSection: View {
 
     /// 逐日数据（由调用方保证非空；nil / 空数组的隐藏判断在 ContentView 侧）。
     let daily: [DailyForecast]
-    /// 城市坐标（A2-5：展开行的月出月落计算用；由 ContentView 从 snapshot.location 透传）。
-    var coordinate: (latitude: Double, longitude: Double) = (39.9042, 116.4074)
+    /// 城市纬度（A2-5：展开行月出月落计算；ContentView 从 snapshot.location 透传）。
+    var latitude: Double = 39.9042
+    /// 城市经度（同上）。
+    var longitude: Double = 116.4074
 
     /// 三档切换状态：默认 3 天（AC-A1-8），会话内记忆，不落盘。
     @State private var visibleDaysChoice: Int = 3
@@ -114,7 +116,9 @@ struct DailyForecastSection: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(visibleDays) { day in
                 // A2-5：逐行独立子视图（@State expanded 各自持有，AC-A2-16 不联动）。
-                DailyForecastRow(day: day, coordinate: coordinate)
+                DailyForecastRow(day: day,
+                                 latitude: latitude,
+                                 longitude: longitude)
             }
         }
     }

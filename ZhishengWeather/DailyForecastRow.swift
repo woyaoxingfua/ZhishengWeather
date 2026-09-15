@@ -17,8 +17,10 @@ import SwiftUI
 struct DailyForecastRow: View {
 
     let day: DailyForecast
-    /// 城市坐标（月出月落计算用，父层从 snapshot.location 透传）。
-    let coordinate: (latitude: Double, longitude: Double)
+    /// 城市纬度（月出月落计算用）。
+    let latitude: Double
+    /// 城市经度。
+    let longitude: Double
 
     /// 本行展开态（逐行独立，AC-A2-16）。
     @State private var expanded: Bool = false
@@ -94,8 +96,8 @@ struct DailyForecastRow: View {
             }
             // 月出月落（MoonCalculator 本地近似，A2-4 引擎复用）。
             let moon = MoonCalculator.moonEvents(for: day.date,
-                                                 latitude: coordinate.latitude,
-                                                 longitude: coordinate.longitude)
+                                                 latitude: latitude,
+                                                 longitude: longitude)
             if moon.rise != nil || moon.set != nil {
                 detailLine(icon: "moon.stars.fill",
                            text: moonText(moon))

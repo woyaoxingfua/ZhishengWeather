@@ -123,7 +123,9 @@ struct ContentView: View {
                 // F-A 逐日区块：位于逐小时（④）之下、月相（⑤）之上（F-A-1）。
                 // daily 为 nil 或空数组时整块不渲染，连标题都不出（AC-A7）。
                 if let daily = snapshot.daily, !daily.isEmpty {
-                    DailyForecastSection(daily: daily)
+                    DailyForecastSection(daily: daily,
+                                         latitude: snapshot.location.latitude,
+                                         longitude: snapshot.location.longitude)
                 }
                 // A2-3：生活指数（本地估算，逐日区块之下、月相区之上，
                 // "本地建议"归组在数据展示后——ARCH-A2P1 §1.1④）。

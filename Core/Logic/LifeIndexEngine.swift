@@ -138,10 +138,11 @@ enum LifeIndexEngine {
 
     /// 洗车：今日降水概率（daily[0].precipitationProbability；nil = 未知 → 中性）。
     static func carWashIndex(for snapshot: WeatherSnapshot) -> LifeIndexItem {
-        let probability = snapshot.daily?.first?.precipitationProbability
-        guard let probability else {
+        let probabilityInt = snapshot.daily?.first?.precipitationProbability
+        guard let probabilityInt else {
             return LifeIndexItem(kind: .carWash, level: .neutral, value: nil)
         }
+        let probability = Double(probabilityInt)
         let level: LifeIndexLevel
         if probability >= washWetProbability {
             level = .avoid       // 不宜洗车
@@ -156,7 +157,7 @@ enum LifeIndexEngine {
 
     /// 运动：联合判据 —— 降水概率 < 30% 且气温 ∈ [10, 30]℃ 且无强天气码。
     static func exerciseIndex(for snapshot: WeatherSnapshot) -> LifeIndexItem {
-        let probability = snapshot.daily?.first?.precipitationProbability
+        let probability = snapshot.daily?.first?.precipitationProbability.map(Double.init)
         let high = snapshot.daily?.first?.tempMax ?? snapshot.dailyHigh
         let code = snapshot.daily?.first?.weatherCode ?? snapshot.weatherCode
 
