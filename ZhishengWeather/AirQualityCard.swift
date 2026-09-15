@@ -45,14 +45,15 @@ struct AirQualityCard: View {
                     .foregroundStyle(Theme.secondaryText)
             }
 
-            // 六项分测横向格（缺项 --）。
+            // 六项分测横向格（缺项 --；MetricCell 签名 = icon/value/caption，
+            // icon 用真实存在的 SF Symbol——运行时空白不报错，QA 静态查不出，须人工核）。
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                MetricCell(label: "PM2.5", value: concentration(airQuality.pm25, unit: "μg/m³"))
-                MetricCell(label: "PM10", value: concentration(airQuality.pm10, unit: "μg/m³"))
-                MetricCell(label: "O₃", value: concentration(airQuality.ozone, unit: "μg/m³"))
-                MetricCell(label: "NO₂", value: concentration(airQuality.nitrogenDioxide, unit: "μg/m³"))
-                MetricCell(label: "SO₂", value: concentration(airQuality.sulphurDioxide, unit: "μg/m³"))
-                MetricCell(label: "CO", value: concentration(airQuality.carbonMonoxide, unit: "μg/m³"))
+                MetricCell(icon: "airquality", value: concentration(airQuality.pm25, unit: "μg/m³"), caption: "PM2.5")
+                MetricCell(icon: "wind", value: concentration(airQuality.pm10, unit: "μg/m³"), caption: "PM10")
+                MetricCell(icon: "sun.max", value: concentration(airQuality.ozone, unit: "μg/m³"), caption: "臭氧 O₃")
+                MetricCell(icon: "cloud.fog", value: concentration(airQuality.nitrogenDioxide, unit: "μg/m³"), caption: "二氧化氮")
+                MetricCell(icon: "flame", value: concentration(airQuality.sulphurDioxide, unit: "μg/m³"), caption: "二氧化硫")
+                MetricCell(icon: "smoke", value: concentration(airQuality.carbonMonoxide, unit: "μg/m³"), caption: "一氧化碳")
             }
 
             // 欧标 AQI 辅助展示（不参与着色，Q2 裁定）。
