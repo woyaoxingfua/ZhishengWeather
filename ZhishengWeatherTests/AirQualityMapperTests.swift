@@ -19,7 +19,7 @@ final class AirQualityMapperTests: XCTestCase {
         "us_aqi": 78, "european_aqi": 53
       }
     }
-    """.data(using: .utf8)!
+    """
 
     private func decode(_ json: String) throws -> AirQualityResponse {
         try JSONDecoder().decode(AirQualityResponse.self, from: Data(json.utf8))

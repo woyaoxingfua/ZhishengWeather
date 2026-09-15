@@ -53,7 +53,7 @@ final class AirQualityResponseTests: XCTestCase {
         """.data(using: .utf8)!
 
         let current = try XCTUnwrap(try decoder.decode(AirQualityResponse.self, from: json).current)
-        XCTAssertEqual(current.pm2_5, 12.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(current.pm2_5), 12.0, accuracy: 1e-9)
         XCTAssertEqual(current.us_aqi, 45)
         XCTAssertNil(current.pm10)
         XCTAssertNil(current.carbon_monoxide)
