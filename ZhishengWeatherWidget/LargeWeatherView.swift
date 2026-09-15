@@ -59,6 +59,9 @@ struct LargeWeatherView: View {
             divider
             dailySection
             divider
+            // A2-8：逐时趋势条（4 小时，AC-A2-24）。
+            hourlyTrendSection
+            divider
             metricsSection
             Spacer(minLength: 0)
         }
@@ -159,6 +162,46 @@ struct LargeWeatherView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - 逐时趋势条（A2-8，AC-A2-24）
+
+    /// 未来 4 小时迷你趋势（hourly 已在共享容器，Widget 只读零网络）。
+    private var hourlyPoints: [HourlyPoint] {
+        Array(entry.payload?.snapshot.hourly.prefix(4) ?? [])
+    }
+
+    private var hourlyTrendSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("未来四小时")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.secondaryText)
+
+            if hourlyPoints.isEmpty {
+                Text("暂无逐时数据")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.secondaryText)
+            } else {
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(hourlyPoints) { point in
+                        hourlyColumn(point)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 单列：时刻 / 温度。
+    private func hourlyColumn(_ point: HourlyPoint) -> some View {
+        VStack(spacing: 3) {
+            Text(Self.hourFormatter.string(from: point.time))
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.secondaryText)
+            Text("\(Int(point.temperature.rounded()))°")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.primaryText)
         }
     }
 
@@ -267,4 +310,11 @@ struct LargeWeatherView: View {
     private func temperatureRangeText(for day: DailyForecast) -> String {
         "↑\(Int(day.tempMax.rounded()))° ↓\(Int(day.tempMin.rounded()))°"
     }
+
+    /// 逐时时刻格式（_widget 本地时区由系统环境提供）。
+    static let hourFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH时"
+        return formatter
+    }()
 }

@@ -103,34 +103,17 @@ struct ContentView: View {
                 topBar(snapshot: snapshot)
                 heroSection(snapshot: snapshot)
                 // A2-2：一句话摘要（Hero 温度下一行；nil → 整行隐藏，AC-A2-8）。
+                // 摘要与 Hero 同源展示，不参与模块排序（归组 Hero）。
                 if let summary = WeatherSummaryEngine.summary(for: snapshot) {
                     Text(summary)
                         .font(.system(size: Theme.FontSize.caption, weight: .medium))
                         .foregroundStyle(Theme.accentSecondary)
                 }
-                // A1-5：昨日对比行（Hero 下方独立小行，不进指标格；
-                // yesterday == nil → 整行不渲染，AC-A1-16）。
-                YesterdayComparisonSection(yesterday: snapshot.yesterday,
-                                           todayHigh: snapshot.dailyHigh,
-                                           todayLow: snapshot.dailyLow)
-                metricsSection(snapshot: snapshot)
-                // A2-1：空气质量卡（独立链路，airQuality == nil 整卡不渲染，
-                // 天气区块永不因空气 API 失败而变化，R5）。
-                if let airQuality = viewModel.airQuality {
-                    AirQualityCard(airQuality: airQuality)
+                // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
+                //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
+                ForEach(orderedVisibleSections) { section in
+                    sectionView(section, snapshot: snapshot)
                 }
-                hourlySection(snapshot: snapshot)
-                // F-A 逐日区块：位于逐小时（④）之下、月相（⑤）之上（F-A-1）。
-                // daily 为 nil 或空数组时整块不渲染，连标题都不出（AC-A7）。
-                if let daily = snapshot.daily, !daily.isEmpty {
-                    DailyForecastSection(daily: daily,
-                                         latitude: snapshot.location.latitude,
-                                         longitude: snapshot.location.longitude)
-                }
-                // A2-3：生活指数（本地估算，逐日区块之下、月相区之上，
-                // "本地建议"归组在数据展示后——ARCH-A2P1 §1.1④）。
-                LifeIndexSection(items: LifeIndexEngine.indices(for: snapshot))
-                moonSection(snapshot: snapshot)
                 footerSection(footerText, highlighted: footerHighlighted)
             }
             .padding(.horizontal, 20)
@@ -139,6 +122,47 @@ struct ContentView: View {
         }
         .refreshable {
             await viewModel.refresh()
+        }
+    }
+
+    // MARK: - A2-7 区块排序/隐藏
+
+    /// 当前用户排序且未被隐藏的区块。
+    private var orderedVisibleSections: [HomeSection] {
+        HomeSectionOrder.current().filter { !HomeSectionOrder.hidden().contains($0) }
+    }
+
+    /// 区块视图分发（每个 case 对应主屏一个既有区块；内容与原实现逐一对应）。
+    @ViewBuilder
+    private func sectionView(_ section: HomeSection, snapshot: WeatherSnapshot) -> some View {
+        switch section {
+        case .yesterday:
+            // A1-5：昨日对比行（yesterday == nil → 整行不渲染，AC-A1-16）。
+            YesterdayComparisonSection(yesterday: snapshot.yesterday,
+                                       todayHigh: snapshot.dailyHigh,
+                                       todayLow: snapshot.dailyLow)
+        case .metrics:
+            metricsSection(snapshot: snapshot)
+        case .airQuality:
+            // A2-1：空气卡（独立链路，airQuality == nil 整卡不渲染，R5）。
+            if let airQuality = viewModel.airQuality {
+                AirQualityCard(airQuality: airQuality)
+            }
+        case .hourly:
+            hourlySection(snapshot: snapshot)
+        case .daily:
+            // F-A 逐日区块：daily 为 nil 或空数组时整块不渲染（AC-A7）。
+            if let daily = snapshot.daily, !daily.isEmpty {
+                DailyForecastSection(daily: daily,
+                                     latitude: snapshot.location.latitude,
+                                     longitude: snapshot.location.longitude,
+                                     snapshot: snapshot)
+            }
+        case .lifeIndex:
+            // A2-3：生活指数（本地估算）。
+            LifeIndexSection(items: LifeIndexEngine.indices(for: snapshot))
+        case .moon:
+            moonSection(snapshot: snapshot)
         }
     }
 

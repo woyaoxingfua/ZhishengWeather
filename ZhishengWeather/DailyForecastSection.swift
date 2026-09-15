@@ -33,6 +33,8 @@ struct DailyForecastSection: View {
     var latitude: Double = 39.9042
     /// 城市经度（同上）。
     var longitude: Double = 116.4074
+    /// 所属快照（A2-9：15 天页构造透传用；nil 时隐藏入口）。
+    var snapshot: WeatherSnapshot?
 
     /// 三档切换状态：默认 3 天（AC-A1-8），会话内记忆，不落盘。
     @State private var visibleDaysChoice: Int = 3
@@ -92,6 +94,22 @@ struct DailyForecastSection: View {
 
             if canToggle {
                 choicePicker
+            }
+
+            // A2-9：数据 > 7 天时提供 15 天独立页入口（AC-A2-26）。
+            if daily.count > 7 {
+                NavigationLink {
+                    if let snapshot {
+                        FifteenDayView(snapshot: snapshot,
+                                       latitude: latitude,
+                                       longitude: longitude)
+                    }
+                } label: {
+                    Text("15 天")
+                        .font(.system(size: Theme.FontSize.caption, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                }
+                .accessibilityLabel("查看 15 天预报")
             }
         }
     }
