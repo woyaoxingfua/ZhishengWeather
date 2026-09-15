@@ -16,6 +16,9 @@ struct HourlyPoint: Codable, Equatable, Identifiable, Sendable {
     var temperature: Double
     /// WMO 天气码（0–99）。
     var weatherCode: Int
+    /// 降水概率（%，0–100）。A2-2 摘要引擎输入（A2 新增，可选）：
+    /// nil = 服务端未返回 / 元素 null / 旧缓存无此键（Widget 不消费，仅主屏摘要用）。
+    var precipitationProbability: Double? = nil
 
     /// 以时刻作为稳定标识（同一小时内唯一）。
     var id: Date { time }

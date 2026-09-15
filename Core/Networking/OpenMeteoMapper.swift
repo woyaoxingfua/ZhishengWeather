@@ -173,6 +173,14 @@ enum OpenMeteoMapper {
     ///   - utcOffsetSeconds: 同响应根级时区偏移（秒）。
     ///   - now: 当前时刻（注入，纪律同 map）。
     /// - Returns: 今日下标；daily 缺失或 time 数组为空时 nil。
+    /// 可选 Double 数组的安全下标取值（A2-2）：数组为 nil / 越界 / 元素 null → nil。
+    /// 可选数组不参与 alignedCount 对齐（服务端未返回时不拖短其他数组），
+    /// 逐点取值时以下标判断兜底（ARCH-A2 §1.3）。
+    private static func optionalDouble(_ array: [Double?]?, at index: Int) -> Double? {
+        guard let array, index < array.count else { return nil }
+        return array[index]
+    }
+
     private static func todayIndex(in daily: OpenMeteoResponse.Daily?,
                                    utcOffsetSeconds: Int,
                                    now: Date) -> Int? {
@@ -250,7 +258,8 @@ enum OpenMeteoMapper {
                 tempMin: daily.temperature_2m_min[index],
                 precipitationProbability: precipitation,
                 sunrise: decodedSunTime(from: daily.sunrise, at: index, utcOffsetSeconds: utcOffsetSeconds),
-                sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds)
+                sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds),
+                uvIndexMax: optionalDouble(daily.uv_index_max, at: index)
             ))
         }
         return Array(forecasts.prefix(maxDailyCount))
@@ -285,7 +294,8 @@ enum OpenMeteoMapper {
             tempMin: daily.temperature_2m_min[index],
             precipitationProbability: precipitation,
             sunrise: decodedSunTime(from: daily.sunrise, at: index, utcOffsetSeconds: utcOffsetSeconds),
-            sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds)
+            sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds),
+            uvIndexMax: optionalDouble(daily.uv_index_max, at: index)
         )
     }
 

@@ -102,12 +102,23 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 20) {
                 topBar(snapshot: snapshot)
                 heroSection(snapshot: snapshot)
+                // A2-2：一句话摘要（Hero 温度下一行；nil → 整行隐藏，AC-A2-8）。
+                if let summary = WeatherSummaryEngine.summary(for: snapshot) {
+                    Text(summary)
+                        .font(.system(size: Theme.FontSize.caption, weight: .medium))
+                        .foregroundStyle(Theme.accentSecondary)
+                }
                 // A1-5：昨日对比行（Hero 下方独立小行，不进指标格；
                 // yesterday == nil → 整行不渲染，AC-A1-16）。
                 YesterdayComparisonSection(yesterday: snapshot.yesterday,
                                            todayHigh: snapshot.dailyHigh,
                                            todayLow: snapshot.dailyLow)
                 metricsSection(snapshot: snapshot)
+                // A2-1：空气质量卡（独立链路，airQuality == nil 整卡不渲染，
+                // 天气区块永不因空气 API 失败而变化，R5）。
+                if let airQuality = viewModel.airQuality {
+                    AirQualityCard(airQuality: airQuality)
+                }
                 hourlySection(snapshot: snapshot)
                 // F-A 逐日区块：位于逐小时（④）之下、月相（⑤）之上（F-A-1）。
                 // daily 为 nil 或空数组时整块不渲染，连标题都不出（AC-A7）。

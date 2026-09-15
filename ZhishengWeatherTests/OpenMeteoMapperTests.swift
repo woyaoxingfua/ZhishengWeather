@@ -152,7 +152,7 @@ final class OpenMeteoMapperTests: XCTestCase {
                                                         temperature_2m_min: [-5.0],
                                                         weather_code: nil,
                                                         precipitation_probability_max: nil,
-                                                        sunrise: nil, sunset: nil)),
+                                                        sunrise: nil, sunset: nil, uv_index_max: nil)),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -186,7 +186,7 @@ final class OpenMeteoMapperTests: XCTestCase {
                                                         temperature_2m_min: [],
                                                         weather_code: nil,
                                                         precipitation_probability_max: nil,
-                                                        sunrise: nil, sunset: nil)),
+                                                        sunrise: nil, sunset: nil, uv_index_max: nil)),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -207,7 +207,7 @@ final class OpenMeteoMapperTests: XCTestCase {
                                                         temperature_2m_min: [],
                                                         weather_code: nil,
                                                         precipitation_probability_max: nil,
-                                                        sunrise: nil, sunset: nil)),
+                                                        sunrise: nil, sunset: nil, uv_index_max: nil)),
             location: .beijing,
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
@@ -534,7 +534,8 @@ final class OpenMeteoMapperTests: XCTestCase {
             weather_code: [2],
             precipitation_probability_max: nil,
             sunrise: ["2026-09-11T05:53"],
-            sunset: ["garbage"])
+            sunset: ["garbage"],
+            uv_index_max: nil)
 
         let snapshot = OpenMeteoMapper.map(
             makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
@@ -568,7 +569,8 @@ final class OpenMeteoMapperTests: XCTestCase {
             weather_code: [1, 2],
             precipitation_probability_max: nil,
             sunrise: ["2026-09-10T05:54", "2026-09-11T05:53"],
-            sunset: ["2026-09-10T18:23", "2026-09-11T18:22"])
+            sunset: ["2026-09-10T18:23", "2026-09-11T18:22"],
+            uv_index_max: nil)
 
         let snapshot = OpenMeteoMapper.map(
             makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
@@ -657,7 +659,8 @@ final class OpenMeteoMapperTests: XCTestCase {
                            codes: [Int]? = nil,
                            precip: [Int?]? = nil,
                            sunrise: [String?]? = nil,
-                           sunset: [String?]? = nil) -> OpenMeteoResponse.Daily {
+                           sunset: [String?]? = nil,
+                           uv: [Double?]? = nil) -> OpenMeteoResponse.Daily {
         OpenMeteoResponse.Daily(
             time: times,
             temperature_2m_max: maxTemps,
@@ -665,7 +668,26 @@ final class OpenMeteoMapperTests: XCTestCase {
             weather_code: codes,
             precipitation_probability_max: precip,
             sunrise: sunrise,
-            sunset: sunset
+            sunset: sunset,
+            uv_index_max: uv
         )
+    }
+
+    /// A2-2：uv_index_max 注入 DailyForecast（按行，今日行取值）。
+    func testUvIndexMaxInjectedIntoDailyRows() {
+        let daily = makeDaily(times: [t0, t0 + 86_400],
+                              maxTemps: [26.0, 25.0],
+                              minTemps: [15.0, 14.0],
+                              codes: [1, 2],
+                              precip: nil,
+                              uv: [7.5, nil])
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [1], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+        let list = snapshot.daily ?? []
+        XCTAssertEqual(list[0].uvIndexMax, 7.5)
+        XCTAssertNil(list[1].uvIndexMax)
     }
 }

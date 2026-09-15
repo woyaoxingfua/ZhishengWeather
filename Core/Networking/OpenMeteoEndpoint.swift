@@ -50,7 +50,8 @@ enum OpenMeteoEndpoint {
     ].joined(separator: ",")
 
     /// 逐小时字段。
-    static let hourlyFields = ["temperature_2m", "weather_code"].joined(separator: ",")
+    // A2-2：+precipitation_probability（逐时降水概率，摘要引擎输入）
+    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability"].joined(separator: ",")
 
     /// 逐日字段（v1.1 新增高低温；F-A 追加天气码与最大降水概率；
     /// A1 追加 sunrise/sunset——ISO 墙钟字符串，与 unixtime 解码路径隔离）。
@@ -61,7 +62,9 @@ enum OpenMeteoEndpoint {
         "precipitation_probability_max",
         // A1-4：日出日落（ISO 本地墙钟字符串，如 "2026-09-11T05:53"）。
         "sunrise",
-        "sunset"
+        "sunset",
+        // A2-2：UV 指数峰值（摘要引擎 UV 规则 + A2-5 逐日展开预埋）。
+        "uv_index_max"
     ].joined(separator: ",")
 
     /// 依据坐标拼装请求 URL；失败返回 nil（由调用方收敛为 `WeatherError.badURL`）。

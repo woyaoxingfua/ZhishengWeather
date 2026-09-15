@@ -43,6 +43,8 @@ struct OpenMeteoResponse: Codable, Sendable {
         let time: [Int]
         let temperature_2m: [Double]
         let weather_code: [Int]
+        /// A2-2 新增。逐时降水概率（%），元素/整键均可选（Open-Meteo 可能返回 null 元素）。
+        let precipitation_probability: [Double?]?
     }
 
     /// 逐日序列（用于当日高/低温 + F-A 逐日预报）。
@@ -64,6 +66,8 @@ struct OpenMeteoResponse: Codable, Sendable {
         let sunrise: [String?]?
         /// A1-4 新增。日落时刻，同上。
         let sunset: [String?]?
+        /// A2-2 新增。逐日 UV 指数峰值，元素/整键均可选。
+        let uv_index_max: [Double?]?
     }
 
     let timezone: String

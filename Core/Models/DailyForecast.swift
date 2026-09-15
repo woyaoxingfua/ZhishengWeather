@@ -34,6 +34,9 @@ struct DailyForecast: Codable, Equatable, Identifiable, Sendable {
     var sunrise: Date? = nil
     /// 当日日落（A1 新增，可选）。语义同 `sunrise`。
     var sunset: Date? = nil
+    /// 当日 UV 指数峰值（A2 新增，可选）。
+    /// nil = 服务端未返回 / 元素 null / 旧缓存无此键（A2-5 逐日展开直接复用）。
+    var uvIndexMax: Double? = nil
 
     /// 以日期作为稳定标识（自然日唯一）。
     var id: Date { date }

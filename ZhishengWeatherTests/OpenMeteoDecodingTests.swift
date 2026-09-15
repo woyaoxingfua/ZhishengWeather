@@ -448,4 +448,43 @@ final class OpenMeteoDecodingTests: XCTestCase {
         }
         """
     }
+
+    /// A2-2：daily.uv_index_max 解码（元素/整键可选，null → nil）。
+    func testDecodesUvIndexMaxOptionalArrays() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai", "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0,
+                       "relative_humidity_2m": 50, "apparent_temperature": 19.0,
+                       "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": { "time": [1699958400],
+                     "temperature_2m_max": [26.0], "temperature_2m_min": [15.0],
+                     "weather_code": null, "precipitation_probability_max": null,
+                     "sunrise": null, "sunset": null,
+                     "uv_index_max": [7.5, null] }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: json.data(using: .utf8)!)
+        let uv = try XCTUnwrap(dto.daily?.uv_index_max)
+        XCTAssertEqual(uv[0], 7.5)
+        XCTAssertNil(uv[1])
+    }
+
+    /// A2-2：daily 整键缺 uv_index_max → nil（服务端未返回不炸）。
+    func testMissingUvIndexMaxKeyDecodesAsNil() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai", "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0,
+                       "relative_humidity_2m": 50, "apparent_temperature": 19.0,
+                       "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: json.data(using: .utf8)!)
+        XCTAssertNil(dto.daily)
+    }
 }

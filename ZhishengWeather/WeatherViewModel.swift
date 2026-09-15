@@ -47,6 +47,11 @@ final class WeatherViewModel {
     private let service: WeatherProviding
     private let store: AppGroupStore
     private let locationProvider: LocationProvider
+    /// 空气质量第二链路（A2-1，独立域名，与天气链路物理分离）。
+    private let airService: AirQualityProviding
+    /// 空气质量（A2-1）：**仅存于 VM，不进 WeatherSnapshot/共享容器**
+    /// （ARCH-A2 §1.1①，Widget 载荷契约零改动）。nil = 未加载/取数失败/无关数据。
+    private(set) var airQuality: AirQuality? = nil
 
     /// 防止并发重复刷新。
     private var isRefreshing = false
@@ -60,10 +65,12 @@ final class WeatherViewModel {
     /// 已处于 @MainActor 隔离，合法。
     init(service: WeatherProviding = WeatherService(),
          store: AppGroupStore = AppGroupStore(),
-         locationProvider: LocationProvider? = nil) {
+         locationProvider: LocationProvider? = nil,
+         airService: AirQualityProviding = AirQualityService()) {
         self.service = service
         self.store = store
         self.locationProvider = locationProvider ?? LocationProvider()
+        self.airService = airService
 
         // ── F-B：载入城市目录（AC-B1 / F-B-1）────────────────────────────
         // 三分支裁定（F-B 核验后补）：
@@ -168,6 +175,10 @@ final class WeatherViewModel {
             }
 
             WidgetCenter.shared.reloadAllTimelines()
+            // A2-1：天气链路成功后顺序触发空气第二链路（独立 Task，失败绝不反噬天气）。
+            // 触发时机在落盘之后（ARCH-A2 §2.3），便于失败隔离测试断言顺序性。
+            let airCity = selectedCity
+            Task { await loadAir(for: airCity) }
             // 过期丢弃（P1-A）：刷新期间用户若切换城市，当前结果已非选中城市，丢弃不应用，
             // 避免把旧城市的快照覆盖到新选中的界面。
             guard directory.selectedID == selectedCity.id else { return }
@@ -296,6 +307,9 @@ final class WeatherViewModel {
             }
 
             WidgetCenter.shared.reloadAllTimelines()
+            // A2-1：天气链路成功后触发空气第二链路（独立 Task，失败绝不反噬天气）。
+            let airCity = city
+            Task { await loadAir(for: airCity) }
             // 过期丢弃（P1-A）：取数期间用户若又切换城市，仅当选中项仍是本次目标城市才应用，
             // 否则丢弃，交由对应的 select/addAndSelect/remove 取数流程修正界面。
             guard directory.selectedID == city.id else { return }
@@ -308,6 +322,23 @@ final class WeatherViewModel {
             }
             let cached = store.loadSnapshot()
             state = .failed(cached: cached, message: "暂无法获取\(city.name)天气，请稍后重试")
+        }
+    }
+
+    // MARK: - 空气质量第二链路（A2-1）
+
+    /// 拉取空气质量（独立 Task，R5 隔离）：
+    /// 失败只置 `airQuality = nil`，**绝不触碰 `state`**（天气主屏不受空气 API 影响）；
+    /// 成功赋值前以 `selectedID` 守门，丢弃滞后于切城的过期结果（P1-A 纪律平移）。
+    private func loadAir(for city: City) async {
+        do {
+            let aq = try await airService.fetch(latitude: city.latitude,
+                                                longitude: city.longitude)
+            guard directory.selectedID == city.id else { return }
+            airQuality = aq
+        } catch {
+            // 空气失败 = 无空气卡（整卡不渲染），天气 state 不动（AC-A2-4 / R-A2-1）。
+            airQuality = nil
         }
     }
 
