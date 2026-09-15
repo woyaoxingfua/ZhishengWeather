@@ -645,7 +645,8 @@ final class OpenMeteoMapperTests: XCTestCase {
             hourly: OpenMeteoResponse.Hourly(
                 time: times,
                 temperature_2m: temps,
-                weather_code: codes
+                weather_code: codes,
+                precipitation_probability: nil
             ),
             daily: daily
         )
