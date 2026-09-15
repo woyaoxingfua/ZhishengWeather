@@ -34,6 +34,7 @@ final class WeatherSummaryEngineTests: XCTestCase {
             dailyHigh: dailyHigh,
             dailyLow: 15.0,
             daily: daily,
+            yesterday: yesterday,
             fetchedAt: anchor
         )
     }
@@ -76,6 +77,8 @@ final class WeatherSummaryEngineTests: XCTestCase {
     func testRainSummaryAllBelowThresholdReportsNoRain() {
         let snapshot = makeSnapshot(hourly: makeHourly([10, 20, 30]))
         XCTAssertEqual(WeatherSummaryEngine.rainSummary(for: snapshot), "两小时内无雨")
+        // "两小时内无雨"属有效摘要（AC-A2-6），summary() 层级应命中而非静默。
+        XCTAssertEqual(WeatherSummaryEngine.summary(for: snapshot), "两小时内无雨")
     }
 
     func testRainSummaryNilWhenNoHourlyData() {
@@ -140,8 +143,11 @@ final class WeatherSummaryEngineTests: XCTestCase {
 
     // MARK: - 全不命中（AC-A2-8）
 
-    func testSummaryNilWhenNothingHits() {
-        let snapshot = makeSnapshot(hourly: makeHourly([10, 20, 30]),
+    func testSummaryNilWhenNoRuleHitsAtAll() {
+        // 注意：hourly 有概率数据（无强降水）→ rainSummary 命中"两小时内无雨"（AC-A2-6
+        // 明确含此表述，属有效摘要而非静默）。要测"全静默"需连概率数据也去掉，
+        // 且温差/风/UV 均不达阈 → nil。
+        let snapshot = makeSnapshot(hourly: [],
                                     windSpeed: 2.0,
                                     dailyHigh: 25.0,
                                     yesterday: makeYesterday(high: 24.0),

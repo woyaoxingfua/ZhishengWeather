@@ -56,6 +56,15 @@ final class WeatherViewModelAirTests: XCTestCase {
         return AppGroupStore(defaults: defaults)
     }
 
+    /// 轮询等待空气 Task 完成（refresh 返回时空气 Task 可能仍在途）。
+    private func waitForAir(_ vm: WeatherViewModel, timeout: TimeInterval = 2) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if vm.airQuality != nil { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     private func makeAir(usAqi: Int? = 78) -> AirQuality {
         AirQuality(usAqi: usAqi, europeanAqi: 53, pm25: 30.9, pm10: 93.1,
                    carbonMonoxide: nil, nitrogenDioxide: nil,
@@ -89,6 +98,7 @@ final class WeatherViewModelAirTests: XCTestCase {
                                   airService: StubAirService(.success(makeAir())))
 
         await vm.refresh()
+        await waitForAir(vm)
 
         guard case .loaded = vm.state else {
             XCTFail("天气应正常加载"); return
@@ -108,6 +118,7 @@ final class WeatherViewModelAirTests: XCTestCase {
                                   airService: slowAir)
 
         await vm.refresh()
+        await waitForAir(vm)
         // refresh 后 airQuality = 北京（78）。
         XCTAssertEqual(vm.airQuality?.usAqi, 78)
 
@@ -115,7 +126,12 @@ final class WeatherViewModelAirTests: XCTestCase {
         let newCity = City(name: "杭州", latitude: 30.25, longitude: 120.17,
                            isCurrentLocation: false)
         await vm.addAndSelect(newCity)
+        await waitForAir(vm)
         // 切城后空气链路重新触发，新城市结果（同 Stub 999）被应用——守门不误杀。
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, vm.airQuality?.usAqi != 999 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
         XCTAssertEqual(vm.airQuality?.usAqi, 999)
     }
 
