@@ -93,21 +93,31 @@ struct WeatherProvider: AppIntentTimelineProvider {
             WidgetCityResolver.mode(forEntityID: configuration.city.id),
             directory: directory)
 
-        // ③ 快照归属校验（R-C2 / AC-C6）：共享容器只有一份快照，
-        //    仅当它确实属于本实例目标城市（规范化坐标 id 相等）才下发；
-        //    不匹配 / 无快照 → payload 置 nil，绝不拿其他城市数据冒充。
-        let payload: SharedWeatherPayload?
-        if let city,
-           let loaded = store.load(),
-           city.id == City.makeID(latitude: loaded.snapshot.location.latitude,
-                                  longitude: loaded.snapshot.location.longitude) {
-            payload = loaded
-        } else {
-            payload = nil
+        // ③ 读载荷并**三态区分**（本轮：读失败不再静默成 nil，见 AppGroupStore.loadResult）。
+        let loadResult = store.loadResult()
+
+        // ④ 归属校验（R-C2 / AC-C6）：共享容器只有一份快照，
+        //    仅当它确实属于本实例目标城市（规范化坐标 id 相等）才算命中。
+        var ownershipMatches = false
+        if let city, case .loaded(let payload) = loadResult {
+            ownershipMatches = city.id == City.makeID(latitude: payload.snapshot.location.latitude,
+                                                     longitude: payload.snapshot.location.longitude)
         }
 
-        // ④ 构造 entry（无网络、无同步阻塞调用）。
-        return WeatherEntry(date: date, payload: payload, city: city,
-                            backgroundStyle: configuration.backgroundStyle)
+        // ⑤ 解析「下发的载荷 + 状态」——纯函数在 Core（可单测，Widget target 不被测试引入）。
+        //    容器不可用 / 损坏 → unavailable（如实说明）；归属不匹配 → missing（不冒充）；
+        //    过旧 → 仍下发数据 + stale（继续展示，只标注）。
+        let resolution = WidgetPayloadResolver.resolve(
+            containerAvailable: AppGroupStore.isSharedContainerAvailable,
+            loadResult: loadResult,
+            ownershipMatches: ownershipMatches,
+            now: date)
+
+        // ⑥ 构造 entry（无网络、无同步阻塞调用）。
+        return WeatherEntry(date: date,
+                            payload: resolution.payload,
+                            city: city,
+                            backgroundStyle: configuration.backgroundStyle,
+                            payloadStatus: resolution.status)
     }
 }

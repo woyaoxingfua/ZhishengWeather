@@ -167,6 +167,8 @@ struct MediumWeatherView: View {
     }
 
     private var conditionText: String {
+        // 本轮：共享容器不可用 → 如实说明（与「暂无数据」区分）。
+        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
         guard let snapshot else { return "暂无数据" }
         return WMOCodeMapper.description(for: snapshot.weatherCode)
     }
@@ -177,8 +179,10 @@ struct MediumWeatherView: View {
     }
 
     private var updateText: String {
+        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
         guard let payload = entry.payload else { return "" }
-        return "更新于 \(WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone))"
+        let time = WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
+        return entry.payloadStatus == .stale ? "更新于 \(time) · 已过期" : "更新于 \(time)"
     }
 
     /// D-4：时刻渲染时区 = 共享载荷携带的城市时区；缺省 → 设备时区。

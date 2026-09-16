@@ -70,14 +70,21 @@ struct SmallWeatherView: View {
         return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
+    /// 现象文案（空态安全兜底）。
+    ///
+    /// 本轮：共享容器不可用 / 载荷损坏时**如实说明**「共享数据不可用」，
+    /// 而不是混进「暂无数据」（二者对用户含义不同：一个是没取过数，一个是取不到）。
     private var conditionText: String {
+        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
         guard let snapshot else { return "暂无数据" }
         return WMOCodeMapper.description(for: snapshot.weatherCode)
     }
 
+    /// 更新时间；数据过旧 → 追加「已过期」标注（仍展示原数据）。
     private var timeText: String {
         guard let payload = entry.payload else { return "" }
-        return WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
+        let time = WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
+        return entry.payloadStatus == .stale ? "\(time) · 已过期" : time
     }
 
     /// D-4：时刻渲染时区 = 共享载荷携带的城市时区；缺省 → 设备时区。

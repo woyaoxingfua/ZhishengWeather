@@ -96,6 +96,8 @@ struct AccessoryRectangularWeatherView: View {
     }
 
     private var conditionText: String {
+        // 本轮：共享容器不可用 → 如实说明（锁屏同样的诚实降级纪律）。
+        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
         guard let snapshot else { return "暂无数据" }
         return WMOCodeMapper.description(for: snapshot.weatherCode)
     }
@@ -132,6 +134,8 @@ struct AccessoryInlineWeatherView: View {
     }
 
     private var conditionText: String {
+        // 本轮：共享容器不可用 → 如实说明（锁屏同样的诚实降级纪律）。
+        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
         guard let snapshot else { return "暂无数据" }
         return WMOCodeMapper.description(for: snapshot.weatherCode)
     }

@@ -23,6 +23,15 @@ struct WeatherEntry: TimelineEntry {
     let city: City?
     /// 底色三档（A3-5，per-instance AppIntent 参数；默认玻璃）。
     var backgroundStyle: WidgetBackgroundStyle = .glass
+    /// 载荷状态（本轮新增）：Widget 无网络，必须**如实说明**数据为何缺失 / 过旧。
+    ///
+    /// 由 `WidgetPayloadResolver.resolve(...)`（Core 纯函数、可单测）给出：
+    ///   - `.available`：正常；
+    ///   - `.stale`：有数据但过旧 → 照常渲染 + 标注「已过期」；
+    ///   - `.missing`：从未写入 / 归属不匹配 → 「暂无数据」；
+    ///   - `.unavailable`：共享容器不可用 / 载荷损坏 → 「共享数据不可用」（绝不静默留白）。
+    /// 默认值保证既有 `WeatherEntry(date:payload:city:)` 调用点零改动。
+    var payloadStatus: WidgetPayloadStatus = .available
     /// 视图取名唯一入口：实例目标城市优先，回退快照 location（placeholder 预览路径）。
     var displayCityName: String? { city?.name ?? payload?.snapshot.location.name }
 }
