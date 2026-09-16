@@ -58,8 +58,10 @@ struct ContentView: View {
                     CityListView(viewModel: viewModel)
                 case .settings:
                     // D-4：透传选中城市时区，设置页「最近更新」随城市时区显示。
+                    // D-5：透传新鲜度窗口（复用主循环常量）供「数据状态」判定 正常/陈旧。
                     SettingsView(lastUpdated: lastUpdatedDate,
-                                 timeZone: viewModel.selectedTimeZone)
+                                 timeZone: viewModel.selectedTimeZone,
+                                 freshnessWindow: viewModel.freshnessWindowInterval)
                 }
             }
         }
@@ -110,6 +112,15 @@ struct ContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 topBar(snapshot: snapshot)
+                // D-5：主屏陈旧提示 —— 共享容器里的主载荷已超过新鲜度窗口时给出**弱**提示，
+                // 便于真机判断主屏/小组件显示的是否为过期数据（复用主循环同一 freshnessWindow，
+                // 不新增第二个数字）。无载荷 / 未过期 → 不渲染。
+                if viewModel.isCachedPayloadStale {
+                    Text("缓存数据可能已过期（超过 \(Int(viewModel.freshnessWindowInterval / 60)) 分钟未更新）")
+                        .font(.system(size: Theme.FontSize.footnote))
+                        .foregroundStyle(Theme.accentSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 heroSection(snapshot: snapshot)
                 // A2-2：一句话摘要（Hero 温度下一行；nil → 整行隐藏，AC-A2-8）。
                 // 摘要与 Hero 同源展示，不参与模块排序（归组 Hero）。

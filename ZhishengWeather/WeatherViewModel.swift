@@ -52,6 +52,20 @@ final class WeatherViewModel {
         WeatherTimeFormatter.timeZone(for: directory.selectedCity)
     }
 
+    /// 新鲜度窗口（秒）的只读访问器：供诊断面板 / 陈旧提示复用**同一个**常量，
+    /// 避免在别处再写一个「15 分钟」字面量（诊断面板属于本轮新增消费方）。
+    var freshnessWindowInterval: TimeInterval { freshnessWindow }
+
+    /// 共享容器里的主载荷是否已超过新鲜度窗口（主屏「陈旧提示」用）。
+    ///
+    /// 数据源 = `SharedWeatherPayload.updatedAt`（Widget 读的同一份载荷），
+    /// 阈值复用主循环的 `freshnessWindow`，不新增第二个数字。
+    /// 无载荷（从未成功落盘）→ false（此时由 .loading / .failed 分支表达，不叠加提示）。
+    var isCachedPayloadStale: Bool {
+        guard let updated = store.updatedAt else { return false }
+        return Date().timeIntervalSince(updated) >= freshnessWindow
+    }
+
     private let service: WeatherProviding
     private let store: AppGroupStore
     private let locationProvider: LocationProvider
@@ -178,8 +192,12 @@ final class WeatherViewModel {
         let longitude = useResolved ? resolved.longitude : selectedCity.longitude
 
         do {
+            // 诊断：主天气链路上报 —— 尝试在请求前打点，成败在各自分支打点（纯追加，
+            // 不改失败隔离；记录器绝不向本方法抛错）。
+            await LinkHealthRecorder.shared.recordAttempt(.forecast, at: Date())
             var snapshot = try await service.fetch(latitude: latitude,
                                                    longitude: longitude)
+            await LinkHealthRecorder.shared.recordSuccess(.forecast, at: Date())
             // ── R-3（最高回归风险，改造即必踩）────────────────────────────
             // 快照 location 的覆盖源 = **选中城市**（selectedCity.locationInfo），
             // 不是定位结果。若沿用旧行为"用定位结果覆盖"，用户切到"杭州"后
@@ -221,6 +239,8 @@ final class WeatherViewModel {
             guard directory.selectedID == selectedCity.id else { return }
             state = .loaded(snapshot)
         } catch {
+            await LinkHealthRecorder.shared.recordFailure(.forecast, at: Date(),
+                                                          message: Self.message(for: error))
             let cached = store.loadSnapshot()
             state = .failed(cached: cached, message: Self.message(for: error))
         }
@@ -335,8 +355,11 @@ final class WeatherViewModel {
     ///   - fallbackID: 失败时回退到的选中城市 id；nil 表示不回退（如删除路径的自动回退已完成）。
     private func fetchAndApply(for city: City, fallbackID: String?) async {
         do {
+            // 诊断：主天气链路上报（与 refresh 路径同一链路；纯追加）。
+            await LinkHealthRecorder.shared.recordAttempt(.forecast, at: Date())
             var snapshot = try await service.fetch(latitude: city.latitude,
                                                    longitude: city.longitude)
+            await LinkHealthRecorder.shared.recordSuccess(.forecast, at: Date())
             // R-3：覆盖源 = 选中城市（与 refresh 路径同一覆盖点，ARCH-FB §3.2）。
             snapshot.location = city.locationInfo
 
@@ -367,6 +390,8 @@ final class WeatherViewModel {
             guard directory.selectedID == city.id else { return }
             state = .loaded(snapshot)
         } catch {
+            await LinkHealthRecorder.shared.recordFailure(.forecast, at: Date(),
+                                                          message: Self.message(for: error))
             // 切换失败：回退选中 id，避免 header 与数据错位（F-B-7）。
             if let fallbackID {
                 directory.select(fallbackID)
@@ -383,13 +408,18 @@ final class WeatherViewModel {
     /// 失败只置 `airQuality = nil`，**绝不触碰 `state`**（天气主屏不受空气 API 影响）；
     /// 成功赋值前以 `selectedID` 守门，丢弃滞后于切城的过期结果（P1-A 纪律平移）。
     private func loadAir(for city: City) async {
+        // 诊断：空气链路上报（纯追加；成功在 fetch 后、失败在本 catch 内打点）。
+        await LinkHealthRecorder.shared.recordAttempt(.airQuality, at: Date())
         do {
             let aq = try await airService.fetch(latitude: city.latitude,
                                                 longitude: city.longitude)
+            await LinkHealthRecorder.shared.recordSuccess(.airQuality, at: Date())
             guard directory.selectedID == city.id else { return }
             airQuality = aq
         } catch {
             // 空气失败 = 无空气卡（整卡不渲染），天气 state 不动（AC-A2-4 / R-A2-1）。
+            await LinkHealthRecorder.shared.recordFailure(.airQuality, at: Date(),
+                                                          message: error.localizedDescription)
             airQuality = nil
         }
     }
@@ -418,13 +448,18 @@ final class WeatherViewModel {
         ensembleCityID = city.id
         lastEnsembleFetchAt = Date()
 
+        // 诊断：集合链路上报（慢节奏守卫**跳过**时不计为一次尝试）。
+        await LinkHealthRecorder.shared.recordAttempt(.ensemble, at: Date())
         do {
             let forecast = try await ensembleService.fetch(latitude: city.latitude,
                                                            longitude: city.longitude)
+            await LinkHealthRecorder.shared.recordSuccess(.ensemble, at: Date())
             guard directory.selectedID == city.id else { return }
             ensemble = forecast
         } catch {
             // 集合失败 = 无集合区块（整块不渲染），天气 state 不动（隔离纪律）。
+            await LinkHealthRecorder.shared.recordFailure(.ensemble, at: Date(),
+                                                          message: error.localizedDescription)
             ensemble = nil
         }
     }

@@ -178,13 +178,18 @@ struct HistoricalWeatherView: View {
         let endString = formatter.string(from: end)
         dateRange = (startString, endString)
 
+        // 诊断：archive 链路上报（纯追加，不改失败隔离）。
+        await LinkHealthRecorder.shared.recordAttempt(.archive, at: Date())
         do {
             let historical = try await archiveService.fetch(latitude: latitude,
                                                             longitude: longitude,
                                                             startDate: startString,
                                                             endDate: endString)
+            await LinkHealthRecorder.shared.recordSuccess(.archive, at: Date())
             phase = .loaded(historical)
         } catch {
+            await LinkHealthRecorder.shared.recordFailure(.archive, at: Date(),
+                                                          message: error.localizedDescription)
             phase = .failure
         }
     }

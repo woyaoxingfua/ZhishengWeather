@@ -208,13 +208,18 @@ struct ClimateProfileView: View {
     private func load() async {
         phase = .loading
         let today = Date()
+        // 诊断：archive（历史 / 气候档案）链路上报 —— 纯追加，不改失败隔离。
+        await LinkHealthRecorder.shared.recordAttempt(.archive, at: Date())
         do {
             let profile = try await service.fetch(city: city,
                                                   today: today,
                                                   now: today,
                                                   currentYearHigh: currentYearHigh)
+            await LinkHealthRecorder.shared.recordSuccess(.archive, at: Date())
             phase = .loaded(profile)
         } catch {
+            await LinkHealthRecorder.shared.recordFailure(.archive, at: Date(),
+                                                          message: error.localizedDescription)
             phase = .failure
         }
     }

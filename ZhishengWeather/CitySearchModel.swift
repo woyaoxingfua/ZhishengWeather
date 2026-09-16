@@ -104,12 +104,18 @@ final class CitySearchModel {
         let token = generation
         phase = .loading
 
+        // 诊断：geocoding 链路上报（纯追加）。成败先打点，再走原有的过期丢弃判定
+        // —— 链路是否可用取决于网络结果，与结果是否被代际号丢弃无关。
+        await LinkHealthRecorder.shared.recordAttempt(.geocoding, at: Date())
         do {
             let cities = try await provider.search(name: name)
+            await LinkHealthRecorder.shared.recordSuccess(.geocoding, at: Date())
             // AC-B18：过期响应丢弃 —— 晚到的前序请求不得覆盖最新结果。
             guard token == generation else { return }
             phase = cities.isEmpty ? .empty : .results(cities)
         } catch {
+            await LinkHealthRecorder.shared.recordFailure(.geocoding, at: Date(),
+                                                          message: error.localizedDescription)
             // 过期请求的失败同样丢弃（避免旧失败的 failure 覆盖新请求的 loading/results）。
             guard token == generation else { return }
             phase = .failure
