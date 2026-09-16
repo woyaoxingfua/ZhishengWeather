@@ -103,6 +103,7 @@ struct SettingsView: View {
         }
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
+    }
 
     // MARK: - 静态
 
