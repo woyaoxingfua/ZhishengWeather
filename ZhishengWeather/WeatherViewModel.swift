@@ -44,6 +44,14 @@ final class WeatherViewModel {
     /// 会话内"最近一次已知温度"缓存（AC-B16，裁定：不跨启动持久化，冷启动 `--`）。
     private(set) var snapshotsByCity: [String: WeatherSnapshot] = [:]
 
+    /// 当前选中城市的时区（D-4 时间渲染用，方案 b）。
+    ///
+    /// `LocationInfo` 无时区字段，故时区从**选中的 `City`** 派生（不改模型 / 不改载荷）。
+    /// 缺省 / 非法 IANA 标识 → 设备时区（`WeatherTimeFormatter` 内裁定，保持既有行为）。
+    var selectedTimeZone: TimeZone {
+        WeatherTimeFormatter.timeZone(for: directory.selectedCity)
+    }
+
     private let service: WeatherProviding
     private let store: AppGroupStore
     private let locationProvider: LocationProvider

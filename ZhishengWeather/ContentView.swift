@@ -86,13 +86,13 @@ struct ContentView: View {
 
         case .loaded(let snapshot):
             mainScroll(snapshot: snapshot,
-                       footerText: "更新于 \(Self.timeFormatter.string(from: snapshot.fetchedAt))",
+                       footerText: "更新于 \(timeText(snapshot.fetchedAt))",
                        footerHighlighted: false)
 
         case .failed(let cached, let message):
             if let cached {
                 mainScroll(snapshot: cached,
-                           footerText: "更新于 \(Self.timeFormatter.string(from: cached.fetchedAt)) · \(message)",
+                           footerText: "更新于 \(timeText(cached.fetchedAt)) · \(message)",
                            footerHighlighted: true)
             } else {
                 emptyView(message: message)
@@ -222,7 +222,7 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("切换城市，当前 \(snapshot.location.name)")
 
-                Text(Self.dateFormatter.string(from: snapshot.fetchedAt))
+                Text(dateTimeText(snapshot.fetchedAt))
                     .font(.system(size: Theme.FontSize.caption))
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -360,10 +360,10 @@ struct ContentView: View {
                                                longitude: snapshot.location.longitude)
         var parts: [String] = []
         if let rise = events.rise {
-            parts.append("月出 \(Self.timeFormatter.string(from: rise))")
+            parts.append("月出 \(timeText(rise))")
         }
         if let set = events.set {
-            parts.append("月落 \(Self.timeFormatter.string(from: set))")
+            parts.append("月落 \(timeText(set))")
         }
         if parts.isEmpty {
             return "今日无月出"
@@ -375,10 +375,10 @@ struct ContentView: View {
     private func sunText(_ snapshot: WeatherSnapshot) -> String {
         var parts: [String] = []
         if let sunrise = snapshot.sunrise {
-            parts.append("日出 \(Self.timeFormatter.string(from: sunrise))")
+            parts.append("日出 \(timeText(sunrise))")
         }
         if let sunset = snapshot.sunset {
-            parts.append("日落 \(Self.timeFormatter.string(from: sunset))")
+            parts.append("日落 \(timeText(sunset))")
         }
         return parts.joined(separator: " · ")
     }
@@ -434,23 +434,20 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - 格式化工具
+    // MARK: - 格式化工具（D-4：按选中城市时区渲染，缺省回退设备时区）
 
-    /// 「9月11日 00:31」。
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日 HH:mm"
-        return formatter
-    }()
+    /// 「9月11日 00:31」——按**选中城市时区**渲染（`WeatherTimeFormatter` 内缓存格式器，
+    /// 不逐次新建）。
+    private func dateTimeText(_ date: Date) -> String {
+        WeatherTimeFormatter.string(from: date, format: "M月d日 HH:mm",
+                                    timeZone: viewModel.selectedTimeZone)
+    }
 
-    /// 「00:31」。
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
+    /// 「00:31」——按**选中城市时区**渲染（D-4；缺省回退设备时区）。
+    private func timeText(_ date: Date) -> String {
+        WeatherTimeFormatter.string(from: date, format: "HH:mm",
+                                    timeZone: viewModel.selectedTimeZone)
+    }
 
     /// 风向角度 → 8 方位中文。
     private static func windDirectionText(_ degrees: Double) -> String {
