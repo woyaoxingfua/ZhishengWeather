@@ -328,9 +328,9 @@ final class OpenMeteoDecodingTests: XCTestCase {
         """
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
         let daily = try XCTUnwrap(dto.daily)
-        XCTAssertEqual(daily.sunrise?.first?.isoString, "2026-09-11T05:53")
-        XCTAssertEqual(daily.sunset?.first?.isoString, "2026-09-11T18:22")
-        XCTAssertNil(daily.sunset?[1], "sunset null 元素必须解码为 nil（极地日期形态）")
+        XCTAssertEqual(sunTime(daily.sunrise)?.isoString, "2026-09-11T05:53")
+        XCTAssertEqual(sunTime(daily.sunset)?.isoString, "2026-09-11T18:22")
+        XCTAssertNil(sunTime(daily.sunset, at: 1), "sunset null 元素必须解码为 nil（极地日期形态）")
 
         // mapper 注入：今日行的字符串经 ISOTimeStringDecoder 解码为 Date。
         let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
@@ -363,9 +363,9 @@ final class OpenMeteoDecodingTests: XCTestCase {
         """
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
         let daily = try XCTUnwrap(dto.daily)
-        XCTAssertEqual(daily.sunrise?.first?.epochSeconds, 1_789_422_908,
+        XCTAssertEqual(sunTime(daily.sunrise)?.epochSeconds, 1_789_422_908,
                        "epoch 数字必须解为 .epoch，而非解码失败")
-        XCTAssertEqual(daily.sunset?.first?.epochSeconds, 1_789_472_520)
+        XCTAssertEqual(sunTime(daily.sunset)?.epochSeconds, 1_789_472_520)
 
         let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
                                            now: Date(timeIntervalSince1970: 1_700_000_000))
@@ -395,8 +395,8 @@ final class OpenMeteoDecodingTests: XCTestCase {
         """
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
         let daily = try XCTUnwrap(dto.daily)
-        XCTAssertEqual(daily.sunrise?.first?.epochSeconds, 1_789_422_908)
-        XCTAssertEqual(daily.sunset?.first?.isoString, "2026-09-11T18:22")
+        XCTAssertEqual(sunTime(daily.sunrise)?.epochSeconds, 1_789_422_908)
+        XCTAssertEqual(sunTime(daily.sunset)?.isoString, "2026-09-11T18:22")
     }
 
     /// daily.sunrise 整键缺失 → 解码成功（不炸）且 snapshot.sunrise == nil。
@@ -450,6 +450,18 @@ final class OpenMeteoDecodingTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// 取 `[FlexibleTime?]?` 指定下标的元素（默认首个）。
+    ///
+    /// ⚠️ **双层可选陷阱**：DTO 里 sunrise/sunset 是 `[FlexibleTime?]?`
+    /// （数组可缺 + 元素可 null），故 `times.first` 的类型是
+    /// `FlexibleTime??`。直接写 `times.first?.isoString` 只能解一层，
+    /// **编译失败**（`value of optional type 'FlexibleTime?' must be
+    /// unwrapped`）——CI run35 实测教训。统一走本助手返回扁平 `FlexibleTime?`。
+    private func sunTime(_ times: [FlexibleTime?]?, at index: Int = 0) -> FlexibleTime? {
+        guard let times, times.indices.contains(index) else { return nil }
+        return times[index]
+    }
 
     /// `includeDaily == false` 时写 `"daily": null`（模拟服务端未返回 daily）。
     private func decode(includeDaily: Bool) throws -> OpenMeteoResponse {

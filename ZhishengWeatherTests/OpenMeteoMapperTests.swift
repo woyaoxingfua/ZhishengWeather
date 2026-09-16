@@ -594,10 +594,11 @@ final class OpenMeteoMapperTests: XCTestCase {
             now: Date(timeIntervalSince1970: TimeInterval(t0))
         )
         XCTAssertEqual(snapshot.sunrise, Date(timeIntervalSince1970: day1))
-        // 逐日行各自取值，非复制今日
-        let firstDaily = try XCTUnwrap(snapshot.daily?.first)
+        // 逐日行各自取值，非复制今日（显式先解数组、再取元素，避开双层可选）
+        let dailyRows = try XCTUnwrap(snapshot.daily)
+        let firstDaily = try XCTUnwrap(dailyRows.first)
         XCTAssertEqual(firstDaily.sunrise, Date(timeIntervalSince1970: day1))
-        XCTAssertNotEqual(snapshot.daily?.last?.sunrise, firstDaily.sunrise)
+        XCTAssertNotEqual(dailyRows.last?.sunrise, firstDaily.sunrise)
     }
 
     /// hourly 24 条截窗（A1-2：12→24，截窗逻辑零改动）。
