@@ -5,9 +5,12 @@
 //  全局视觉常量：配色经「活动配色」ThemePalette 解析，字号与圆角为固定常量。
 //  仅使用 SwiftUI（无 UIKit），以保证可被 Widget target 编译。
 //
-//  本文件只做「配色抽层」：7 个语义色搬进 ThemePalette，活动配色默认 =
-//  既有深色配色，故 Theme.background 等 token 的取值与重构前**逐位一致**
-//  （零视觉变化，全部现有调用点零改动）。
+//  配色策略（已不再是单一「深色磷光终端风」）：
+//    · 深色 · 打磨磷光（ThemePalette.dark）
+//    · 浅色 · 清冷翡翠（ThemePalette.light）
+//  主 App 由三档「外观」设置（深色 / 浅色 / 跟随系统）选择，切换时重建视图树；
+//  小组件**只跟随系统深浅**（不读主 App 的 外观 设置）。
+//  两端各自把解析结果写入 `activePalette`，token 再经其解析；全部现有调用点零改动。
 //
 
 import SwiftUI

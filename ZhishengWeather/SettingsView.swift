@@ -2,8 +2,10 @@
 //  SettingsView.swift
 //  ZhishengWeather（主 App target）
 //
-//  设置页完整版（A3-4）：单位切换 + 数据源标注 + 数据状态（诊断）+ 关于页。
-//  单位偏好走共享容器（UnitPreference 在 Core/Models）。
+//  设置页完整版（A3-4）：外观切换 + 单位切换 + 数据源标注 + 数据状态（诊断）+ 关于页。
+//  单位偏好走共享容器（UnitPreference 在 Core/Models）；
+//  外观偏好走 **App 本地**标准 UserDefaults（AppearancePreference 在 Core/Models），
+//  不进共享容器（小组件只跟随系统深浅）。
 //
 //  D-4：时间渲染改按**传入时区**（默认设备时区）格式化，「最近更新」随选中城市时区显示。
 //  D-5（本轮）：新增「数据状态」—— 逐条数据链路的健康诊断（内存记录，无网络无落盘）。
@@ -29,6 +31,10 @@ struct SettingsView: View {
     /// 复用主循环**同一个**常量判定链路「正常 / 陈旧」，不在此再写一个 15 分钟字面量。
     var freshnessWindow: TimeInterval
 
+    /// 外观存储（由 ContentView 透传；本页「外观」行写入 → RootView 观察并重建视图树）。
+    var appearance: AppearanceStore
+
+    @State private var appearanceSetting = AppearancePreference.appearance()
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
     @State private var windSpeedUnit = UnitPreference.windSpeedUnit()
     @State private var pressureUnit = UnitPreference.pressureUnit()
@@ -37,6 +43,19 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            // 三档外观：深色 / 浅色 / 跟随系统（默认跟随系统）。
+            // 写入即触发 RootView 重建视图树（切换即重绘，无需重启 App）。
+            Section("外观") {
+                Picker("外观", selection: $appearanceSetting) {
+                    Text("深色").tag(AppearanceSetting.dark)
+                    Text("浅色").tag(AppearanceSetting.light)
+                    Text("跟随系统").tag(AppearanceSetting.system)
+                }
+                .onChange(of: appearanceSetting) { _, newValue in
+                    appearance.set(newValue)
+                }
+            }
+
             Section("单位") {
                 Picker("温度", selection: $temperatureUnit) {
                     Text("℃").tag("celsius")

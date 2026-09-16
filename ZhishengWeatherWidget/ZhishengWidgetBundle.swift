@@ -12,6 +12,10 @@
 //  （三 family 共用**全仓唯一一处** configuration 构造 + 同一 intent 类型，
 //  F-C-9 结构性防线）；`kind` 与 `supportedFamilies` 逐字不变（§4.5.5 回归防线）。
 //
+//  配色：小组件**只跟随系统深浅**——读自身 `@Environment(\.colorScheme)`，
+//  经纯函数解析后写入全局配色真源，**不读**主 App 的「外观」设置
+//  （对齐原版 0.0.5.1「小组件主题改为只跟随系统深浅」）。
+//
 //  入口由 `@main` 合成提供；Widget Extension 的 Info.plist 只需
 //  NSExtensionPointIdentifier = com.apple.widgetkit-extension 这一个键。
 //  不要写 principal class —— Swift struct 不符合 NSObject，不会被注册进
@@ -58,9 +62,24 @@ struct ZhishengWeatherWidgetEntryView: View {
 
     @Environment(\.widgetFamily) private var family
 
+    /// 系统深浅：小组件**只跟随系统**，绝不读主 App 的外观设置
+    /// （对齐原版 0.0.5.1「小组件主题改为只跟随系统深浅」）。
+    @Environment(\.colorScheme) private var colorScheme
+
     let entry: WeatherEntry
 
     var body: some View {
+        // 由**本视图自己的**系统深浅解析配色（外观档位恒为「跟随系统」），
+        // 写入全局配色真源；再以 `.id(配色)` 重建子树，保证系统深浅切换时可靠重绘。
+        let id = ThemePalette.resolve(appearance: .system, systemScheme: colorScheme)
+        let _ = Theme.activePalette = ThemePalette.palette(for: id)
+        familyContent
+            .id(id)
+    }
+
+    /// 依据系统给出的 family 选择对应视图。
+    @ViewBuilder
+    private var familyContent: some View {
         switch family {
         case .systemMedium:
             MediumWeatherView(entry: entry)

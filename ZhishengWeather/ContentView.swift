@@ -21,6 +21,9 @@ struct ContentView: View {
 
     let viewModel: WeatherViewModel
 
+    /// 外观存储（由 RootView 透传；设置页「外观」行写入，RootView 观察并重绘）。
+    let appearance: AppearanceStore
+
     /// 编程式 push（AppRouter 触发跳转用）。
     @State private var navigation: NavigationPath = NavigationPath()
 
@@ -61,7 +64,8 @@ struct ContentView: View {
                     // D-5：透传新鲜度窗口（复用主循环常量）供「数据状态」判定 正常/陈旧。
                     SettingsView(lastUpdated: lastUpdatedDate,
                                  timeZone: viewModel.selectedTimeZone,
-                                 freshnessWindow: viewModel.freshnessWindowInterval)
+                                 freshnessWindow: viewModel.freshnessWindowInterval,
+                                 appearance: appearance)
                 }
             }
         }
