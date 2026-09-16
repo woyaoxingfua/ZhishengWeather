@@ -2,12 +2,8 @@
 //  SettingsView.swift
 //  ZhishengWeather（主 App target）
 //
-//  设置页完整版（A3-4，AC-A3-8/9/10）：
-//   - 单位切换：温度 ℃/℉、风速 m/s↔km/h（UserDefaults 持久化，即时生效）；
-//   - 数据源标注：Open-Meteo + 最近请求时间（AC-A3-9）；
-//   - 关于：版本号 + 开源仓库链接（AC-A3-10）。
-//  单位偏好存主 App 本地 UserDefaults（显示层关注点，不进共享容器）；
-//  组件侧单位转换在渲染时按偏好换算（共享 payload 仍存 SI 原值）。
+//  设置页完整版（A3-4）：单位切换 + 数据源标注 + 关于页。
+//  单位偏好走共享容器（UnitPreference 在 Core/Models）。
 //
 
 import SwiftUI
@@ -18,7 +14,8 @@ struct SettingsView: View {
 
     /// 最近一次取数时刻（主屏透传，AC-A3-9）。
     let lastUpdated: Date?
-    /// 数据源名称（当前恒为 Open-Meteo；多源为未来扩展位）。
+
+    /// 数据源名称（当前恒为 Open-Meteo）。
     let dataSourceName: String = "Open-Meteo"
 
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
@@ -83,13 +80,11 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    // MARK: - 静态
-
     /// App 版本号（Info.plist MARKETING_VERSION，AC-A3-10）。
     static var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        return "\(version ?? "--") (\(build ?? "--"))"
+        return version ?? "--"
     }
 
     static let timeFormatter: DateFormatter = {
@@ -97,3 +92,4 @@ struct SettingsView: View {
         formatter.dateFormat = "MM-dd HH:mm"
         return formatter
     }()
+}
