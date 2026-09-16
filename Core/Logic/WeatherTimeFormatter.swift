@@ -10,6 +10,8 @@
 //  回退 `.current`（设备时区），保持既有行为、绝不硬编码固定偏移。
 //
 //  缓存纪律：`DateFormatter` 按 (格式, 时区) 复用，**禁止逐行/逐次新建**。
+//  并发纪律：本类型整体 `@MainActor`（缓存是未加锁共享可变状态，且 `DateFormatter`
+//  非线程安全）——由编译器强制"仅在主 actor 访问"，见下方类型注解。
 //
 //  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
 //
@@ -17,6 +19,13 @@
 import Foundation
 
 /// 时间渲染的时区裁定与格式化（纯逻辑 + 格式器缓存）。
+///
+/// **@MainActor（并发不变式，编译期强制）**：`formatterCache` 是未加锁的共享可变
+/// 状态，且 `DateFormatter` **非线程安全**。当前所有调用方（ContentView /
+/// WeatherViewModel / 单测）本来就都在主 actor，故不存在实际竞态；但此前没有任何
+/// 东西**约束**这一点——日后一旦从后台上下文误调，就是静默的数据竞争。标注本类型
+/// 使编译器替我们守住这条不变式（越界调用直接编译失败，而非线上偶发崩溃）。
+@MainActor
 enum WeatherTimeFormatter {
 
     // MARK: - 纯裁定（无共享状态，可纯单测）
@@ -40,20 +49,30 @@ enum WeatherTimeFormatter {
 
     // MARK: - 带缓存的格式化
 
-    /// 格式器缓存（键 = 格式 + 时区标识）。仅主线程（UI 渲染）访问。
+    /// 格式器缓存（键 = 格式 + **已解析**时区标识）。仅主 actor 访问（见类型上的
+    /// `@MainActor`，由编译器强制）。
     private static var formatterCache: [String: DateFormatter] = [:]
 
     /// 取（或构造并缓存）指定格式 + 时区的 `DateFormatter`。
+    ///
+    /// 缓存键 = `格式 | 已解析时区标识`。入参先被**规范化**为具体时区实例
+    /// （`TimeZone(identifier:)`），以保证：
+    ///   1. 键里存的是**解析后的标识**，而非 `.current` / `.autoupdatingCurrent`
+    ///      这类自动更新哨兵——运行时切换系统时区会得到新标识 → 新键 →
+    ///      新格式器，**绝不会命中过期实例**（沿用设备时区的调用方随之自动更新）；
+    ///   2. 存入格式器的是不带自动更新语义的确定实例（`.current` 本身即快照，双保险）。
     /// - Parameters:
     ///   - format: 例如 "HH:mm"、"M月d日 HH:mm"。
-    ///   - timeZone: 目标时区。
-    /// - Returns: 可复用的格式器实例（同一 (格式, 时区) 恒返回同一实例）。
+    ///   - timeZone: 目标时区（可直接传 `.current`，内部会解析为具体实例）。
+    /// - Returns: 可复用的格式器实例（同一 (格式, 已解析时区) 恒返回同一实例）。
     static func formatter(format: String, timeZone: TimeZone) -> DateFormatter {
-        let key = format + "|" + timeZone.identifier
+        // 规范化为具体实例；极端情形下 `TimeZone(identifier:)` 返回 nil 则沿用入参。
+        let resolvedTimeZone = TimeZone(identifier: timeZone.identifier) ?? timeZone
+        let key = format + "|" + resolvedTimeZone.identifier
         if let cached = formatterCache[key] { return cached }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = timeZone
+        formatter.timeZone = resolvedTimeZone
         formatter.dateFormat = format
         formatterCache[key] = formatter
         return formatter

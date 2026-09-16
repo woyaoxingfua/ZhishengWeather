@@ -85,6 +85,39 @@ final class WeatherTimeFormatterTests: XCTestCase {
         XCTAssertTrue(a === b, "同一 (格式, 时区) 必须复用同一 DateFormatter 实例")
     }
 
+    /// 缓存键必须是**解析后的时区标识**，而不是 `.current` 这类哨兵字面量：
+    /// 以 `.current` 取值与显式构造同一标识的时区，必须命中**同一实例**。
+    /// 同时缓存实例持有的时区必须是解析后的具体值。
+    func testFormatterCacheKeyUsesResolvedTimeZoneIdentifier() throws {
+        let viaCurrent = WeatherTimeFormatter.formatter(format: "HH:mm", timeZone: .current)
+        let explicit = try XCTUnwrap(TimeZone(identifier: TimeZone.current.identifier))
+        let viaExplicit = WeatherTimeFormatter.formatter(format: "HH:mm", timeZone: explicit)
+
+        XCTAssertTrue(viaCurrent === viaExplicit,
+                      "键 = 解析后标识；同一标识必命中同一实例")
+        XCTAssertEqual(viaCurrent.timeZone.identifier, TimeZone.current.identifier,
+                       "缓存实例持有解析后的具体时区（非自动更新哨兵）")
+    }
+
+    /// 键含「格式」维度：同一时区、不同格式 → 不同实例。
+    func testFormatterCacheKeyIncludesFormat() throws {
+        let tz = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let hourMinute = WeatherTimeFormatter.formatter(format: "HH:mm", timeZone: tz)
+        let monthDay = WeatherTimeFormatter.formatter(format: "M月d日", timeZone: tz)
+        XCTAssertFalse(hourMinute === monthDay, "不同格式必须各自独立缓存")
+    }
+
+    /// 键含「时区」维度：同一格式、不同时区 → 不同实例（否则会串时区渲染）。
+    func testFormatterCacheSeparatesDifferentTimeZones() throws {
+        let shanghai = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let newYork = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let sh = WeatherTimeFormatter.formatter(format: "HH:mm", timeZone: shanghai)
+        let ny = WeatherTimeFormatter.formatter(format: "HH:mm", timeZone: newYork)
+        XCTAssertFalse(sh === ny, "不同时区必须各自独立缓存")
+        XCTAssertEqual(sh.timeZone.identifier, "Asia/Shanghai")
+        XCTAssertEqual(ny.timeZone.identifier, "America/New_York")
+    }
+
     // MARK: - VM 派生属性 selectedTimeZone（方案 b）
 
     func testViewModelSelectedTimeZoneFollowsSelectedCity() throws {
