@@ -141,7 +141,7 @@ struct HistoricalWeatherView: View {
     /// 7 日内温度极值（条形标尺）。
     private var historicalRange: (min: Double, max: Double) {
         var values: [Double] = []
-        if phase.case .loaded(let historical) = phase {
+        if case .loaded(let historical) = phase {
             for day in historical.days {
                 if let lo = day.tempMin { values.append(lo) }
                 if let hi = day.tempMax { values.append(hi) }
