@@ -118,4 +118,22 @@ struct WidgetCitySelectionIntent: WidgetConfigurationIntent {
     /// `WidgetCityQuery.defaultResult()` 提供哨兵（AC-C2：不是硬编码北京）。
     @Parameter(title: "城市")
     var city: WidgetCityEntity
+
+    /// 底色三档（A3-5，AC-A3-11）：透明 / 玻璃 / 不透明。
+    /// 系统按 per-instance 持久化；默认"玻璃"（与 A1 前视觉一致）。
+    @Parameter(title: "底色", default: WidgetBackgroundStyle.glass)
+    var backgroundStyle: WidgetBackgroundStyle
+}
+
+/// 小组件底色三档（AppIntents 参数枚举）。
+enum WidgetBackgroundStyle: String, AppEnum, CaseIterable, Sendable {
+    case transparent
+    case glass
+    case opaque
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "底色")
+
+    static var caseDisplayRepresentations: [WidgetBackgroundStyle: DisplayRepresentation] {
+        [.transparent: "透明", .glass: "玻璃", .opaque: "不透明"]
+    }
 }

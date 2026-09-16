@@ -21,6 +21,8 @@ struct WeatherEntry: TimelineEntry {
     let payload: SharedWeatherPayload?
     /// 本实例解析出的目标城市（F-C）；nil = 目录不可用 → 空态（AC-C9 空表兜底）。
     let city: City?
+    /// 底色三档（A3-5，per-instance AppIntent 参数；默认玻璃）。
+    var backgroundStyle: WidgetBackgroundStyle = .glass
     /// 视图取名唯一入口：实例目标城市优先，回退快照 location（placeholder 预览路径）。
     var displayCityName: String? { city?.name ?? payload?.snapshot.location.name }
 }

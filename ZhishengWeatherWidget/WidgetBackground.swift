@@ -54,6 +54,19 @@ struct WidgetBackgroundModifier<Background: View>: ViewModifier {
     }
 }
 
+/// 底色三档的背景视图（A3-5）：
+///   opaque → 实底 Theme.background；glass → 半透明；transparent → 全透明。
+/// 各尺寸视图经 `entry.backgroundStyle` 传入。
+extension WidgetBackgroundStyle {
+    var backgroundView: Color {
+        switch self {
+        case .opaque: return Theme.background
+        case .glass: return Theme.background.opacity(0.55)
+        case .transparent: return .clear
+        }
+    }
+}
+
 extension View {
 
     /// 为小组件内容套上兼容 iOS 16 / 17 的背景。

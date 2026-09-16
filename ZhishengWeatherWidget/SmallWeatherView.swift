@@ -52,7 +52,7 @@ struct SmallWeatherView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .widgetBackground { Theme.background }
+        .widgetBackground { entry.backgroundStyle.backgroundView }
     }
 
     // MARK: - 取值（空态安全兜底）

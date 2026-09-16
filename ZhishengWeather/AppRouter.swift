@@ -134,8 +134,9 @@ final class AppRouter {
     }
 }
 
-/// NavigationPath 的值类型（CityListView 以 NavigationLink destination 语义注册）。
-/// 仅一个目的地；A3 设置页就绪后在此追加 case 即可。
+/// NavigationPath 的值类型（ContentView navigationDestination 注册）。
+/// A3：settings 已指向真实设置页（D-A3 备案解除）。
 enum CityRoute: Hashable {
     case cities
+    case settings
 }

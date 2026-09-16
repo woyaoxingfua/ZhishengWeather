@@ -51,9 +51,14 @@ struct ContentView: View {
                     handleRouterRoute(pending)
                 }
             }
-            // 跳转目的地注册（A1-8：搜索/设置暂路由城市列表页根，D-A3）。
-            .navigationDestination(for: CityRoute.self) { _ in
-                CityListView(viewModel: viewModel)
+            // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
+            .navigationDestination(for: CityRoute.self) { route in
+                switch route {
+                case .cities:
+                    CityListView(viewModel: viewModel)
+                case .settings:
+                    SettingsView(lastUpdated: lastUpdatedDate)
+                }
             }
         }
     }
@@ -62,8 +67,10 @@ struct ContentView: View {
     private func handleRouterRoute(_ pending: AppRouter.PendingRoute?) {
         guard let consumed = AppRouter.shared.consume(pending, viewModel: viewModel) else { return }
         switch consumed {
-        case .searchCity, .settings:
+        case .searchCity:
             navigation.append(CityRoute.cities)
+        case .settings:
+            navigation.append(CityRoute.settings)
         case .refresh:
             break // consume 内已处理强刷
         }
@@ -125,6 +132,13 @@ struct ContentView: View {
         }
     }
 
+    /// 最近一次取数时刻（设置页数据源标注，AC-A3-9）。
+    private var lastUpdatedDate: Date? {
+        if case .loaded(let snapshot) = viewModel.state { return snapshot.fetchedAt }
+        if case .failed(let cached, _) = viewModel.state { return cached?.fetchedAt }
+        return nil
+    }
+
     // MARK: - A2-7 区块排序/隐藏
 
     /// 当前用户排序且未被隐藏的区块。
@@ -163,6 +177,26 @@ struct ContentView: View {
             LifeIndexSection(items: LifeIndexEngine.indices(for: snapshot))
         case .moon:
             moonSection(snapshot: snapshot)
+            // A3-1：历史天气入口（独立第三链路页）。
+            NavigationLink {
+                HistoricalWeatherView(latitude: snapshot.location.latitude,
+                                      longitude: snapshot.location.longitude)
+            } label: {
+                HStack {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14))
+                    Text("过去 7 日")
+                        .font(.system(size: Theme.FontSize.caption, weight: .medium))
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .foregroundStyle(Theme.accent)
+                .padding(12)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
         }
     }
 

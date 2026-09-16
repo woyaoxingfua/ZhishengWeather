@@ -50,7 +50,7 @@ struct MediumWeatherView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .widgetBackground { Theme.background }
+        .widgetBackground { entry.backgroundStyle.backgroundView }
     }
 
     // MARK: - 头部（A1-7：右上角刷新按钮）

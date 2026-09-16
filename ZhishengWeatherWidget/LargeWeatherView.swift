@@ -68,7 +68,7 @@ struct LargeWeatherView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .widgetBackground { Theme.background }
+        .widgetBackground { entry.backgroundStyle.backgroundView }
     }
 
     // MARK: - ① 头部（A1-7：刷新按钮）

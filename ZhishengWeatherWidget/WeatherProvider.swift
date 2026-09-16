@@ -107,6 +107,7 @@ struct WeatherProvider: AppIntentTimelineProvider {
         }
 
         // ④ 构造 entry（无网络、无同步阻塞调用）。
-        return WeatherEntry(date: date, payload: payload, city: city)
+        return WeatherEntry(date: date, payload: payload, city: city,
+                            backgroundStyle: configuration.backgroundStyle)
     }
 }
