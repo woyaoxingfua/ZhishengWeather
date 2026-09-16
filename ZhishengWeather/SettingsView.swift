@@ -5,6 +5,8 @@
 //  设置页完整版（A3-4）：单位切换 + 数据源标注 + 关于页。
 //  单位偏好走共享容器（UnitPreference 在 Core/Models）。
 //
+//  D-4：时间渲染改按**传入时区**（默认设备时区）格式化，「最近更新」随选中城市时区显示。
+//
 
 import SwiftUI
 
@@ -17,6 +19,10 @@ struct SettingsView: View {
 
     /// 数据源名称（当前恒为 Open-Meteo）。
     let dataSourceName: String = "Open-Meteo"
+
+    /// 时间渲染时区（D-4）。默认设备时区；App 侧由 ContentView 透传
+    /// `viewModel.selectedTimeZone`。声明为**默认参数**，既有调用点保持源码兼容。
+    var timeZone: TimeZone = .current
 
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
     @State private var windSpeedUnit = UnitPreference.windSpeedUnit()
@@ -52,7 +58,10 @@ struct SettingsView: View {
                     HStack {
                         Text("最近更新")
                         Spacer(minLength: 8)
-                        Text(Self.timeFormatter.string(from: lastUpdated))
+                        // D-4：按传入时区渲染（复用 WeatherTimeFormatter 的格式器缓存）。
+                        Text(WeatherTimeFormatter.string(from: lastUpdated,
+                                                         format: "MM-dd HH:mm",
+                                                         timeZone: timeZone))
                             .foregroundStyle(Theme.secondaryText)
                     }
                 }
@@ -86,10 +95,4 @@ struct SettingsView: View {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         return version ?? "--"
     }
-
-    static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter
-    }()
 }

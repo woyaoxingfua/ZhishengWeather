@@ -9,6 +9,9 @@
 //   - 收起恢复紧凑单行（AC-A2-17）。
 //  紧凑行内容自 DailyForecastSection.row 平移而来（不复制档位逻辑——档位仍归父层）。
 //
+//  D-4：全部时刻/日期渲染改走 `WeatherTimeFormatter`，按**传入时区**（默认设备时区）
+//  格式化，并复用其 (格式, 时区) 格式器缓存——不再持有写死设备时区的静态格式器。
+//
 
 import SwiftUI
 
@@ -21,6 +24,9 @@ struct DailyForecastRow: View {
     let latitude: Double
     /// 城市经度。
     let longitude: Double
+    /// 时间渲染时区（D-4）。默认设备时区；由 DailyForecastSection / FifteenDayView
+    /// 透传 VM 的 `selectedTimeZone`。声明为**默认参数**，既有调用点保持源码兼容。
+    var timeZone: TimeZone = .current
 
     /// 本行展开态（逐行独立，AC-A2-16）。
     @State private var expanded: Bool = false
@@ -55,7 +61,10 @@ struct DailyForecastRow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.primaryText)
                     .lineLimit(1)
-                Text(Self.monthDayFormatter.string(from: day.date))
+                // D-4：按本行时区渲染日期（跨日边界需与城市时区一致）。
+                Text(WeatherTimeFormatter.string(from: day.date,
+                                                 format: "M月d日",
+                                                 timeZone: timeZone))
                     .font(.system(size: Theme.FontSize.caption))
                     .foregroundStyle(Theme.secondaryText)
                     .lineLimit(1)
@@ -128,10 +137,10 @@ struct DailyForecastRow: View {
     private func sunText(_ day: DailyForecast) -> String {
         var parts: [String] = []
         if let rise = day.sunrise {
-            parts.append("日出 \(Self.timeFormatter.string(from: rise))")
+            parts.append("日出 \(timeText(rise))")
         }
         if let set = day.sunset {
-            parts.append("日落 \(Self.timeFormatter.string(from: set))")
+            parts.append("日落 \(timeText(set))")
         }
         return parts.joined(separator: " · ")
     }
@@ -139,10 +148,10 @@ struct DailyForecastRow: View {
     private func moonText(_ events: (rise: Date?, set: Date?)) -> String {
         var parts: [String] = []
         if let rise = events.rise {
-            parts.append("月出 \(Self.timeFormatter.string(from: rise))")
+            parts.append("月出 \(timeText(rise))")
         }
         if let set = events.set {
-            parts.append("月落 \(Self.timeFormatter.string(from: set))")
+            parts.append("月落 \(timeText(set))")
         }
         return parts.joined(separator: " · ")
     }
@@ -151,7 +160,7 @@ struct DailyForecastRow: View {
 
     private func primaryLabel(for day: DailyForecast) -> String {
         Calendar.current.isDateInToday(day.date) ? "今天"
-            : Self.weekdayFormatter.string(from: day.date)
+            : WeatherTimeFormatter.string(from: day.date, format: "EEE", timeZone: timeZone)
     }
 
     private func precipitationText(for day: DailyForecast) -> String {
@@ -162,27 +171,11 @@ struct DailyForecastRow: View {
     private func temperatureText(for day: DailyForecast) -> String {
         "\(Int(day.tempMax.rounded()))° / \(Int(day.tempMin.rounded()))°"
     }
+
+    // MARK: - 时刻渲染（D-4：按本行时区，复用 WeatherTimeFormatter 缓存）
+
+    /// 「HH:mm」——按本行时区渲染（`WeatherTimeFormatter` 内缓存格式器，不逐次新建）。
+    private func timeText(_ date: Date) -> String {
+        WeatherTimeFormatter.string(from: date, format: "HH:mm", timeZone: timeZone)
+    }
 }
-
-// MARK: - 格式器（与 DailyForecastSection 同源；fileprivate 共享）
-
-extension DailyForecastRow {
-    static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
-
-    static let monthDayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M月d日"
-        return formatter
-    }()
-
-    static let weekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE"
-        return formatter
-    }()
-}
-

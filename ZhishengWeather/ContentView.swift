@@ -57,7 +57,9 @@ struct ContentView: View {
                 case .cities:
                     CityListView(viewModel: viewModel)
                 case .settings:
-                    SettingsView(lastUpdated: lastUpdatedDate)
+                    // D-4：透传选中城市时区，设置页「最近更新」随城市时区显示。
+                    SettingsView(lastUpdated: lastUpdatedDate,
+                                 timeZone: viewModel.selectedTimeZone)
                 }
             }
         }
@@ -167,10 +169,12 @@ struct ContentView: View {
         case .daily:
             // F-A 逐日区块：daily 为 nil 或空数组时整块不渲染（AC-A7）。
             if let daily = snapshot.daily, !daily.isEmpty {
+                // D-4：透传选中城市时区（逐日行/15 天页时刻按城市时区渲染）。
                 DailyForecastSection(daily: daily,
                                      latitude: snapshot.location.latitude,
                                      longitude: snapshot.location.longitude,
-                                     snapshot: snapshot)
+                                     snapshot: snapshot,
+                                     timeZone: viewModel.selectedTimeZone)
             }
         case .lifeIndex:
             // A2-3：生活指数（本地估算）。
@@ -312,7 +316,9 @@ struct ContentView: View {
             Text("未来数小时")
                 .font(.system(size: Theme.FontSize.sectionTitle, weight: .semibold))
                 .foregroundStyle(Theme.secondaryText)
-            HourlyStrip(points: snapshot.hourly)
+            // D-4：透传选中城市时区，逐小时条时刻按城市时区渲染。
+            HourlyStrip(points: snapshot.hourly,
+                        timeZone: viewModel.selectedTimeZone)
         }
     }
 

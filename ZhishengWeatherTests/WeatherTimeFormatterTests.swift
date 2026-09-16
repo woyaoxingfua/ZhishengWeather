@@ -149,4 +149,47 @@ final class WeatherTimeFormatterTests: XCTestCase {
         XCTAssertEqual(vm.selectedTimeZone.identifier, TimeZone.current.identifier,
                        "城市无时区 → 设备时区（既有行为）")
     }
+
+    // MARK: - D-4 app 侧接线：两个城市时区 → 同一时刻渲染不同（经 VM 透传）
+
+    /// 同一绝对时刻，经两个不同城市选中态派生的 `selectedTimeZone` 渲染，结果必须不同
+    /// ——即 App 侧（逐小时条 / 逐日行 / 设置页）改走 VM 透传的时区后，异地城市时间才正确。
+    func testSameInstantFormatsDifferentlyAcrossCityTimeZonesViaViewModel() throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let shanghai = City(name: "上海", latitude: 31.23, longitude: 121.47,
+                            isCurrentLocation: false, timeZoneIdentifier: "Asia/Shanghai")
+        let newYork = City(name: "纽约", latitude: 40.71, longitude: -74.01,
+                           isCurrentLocation: false, timeZoneIdentifier: "America/New_York")
+
+        let shSuite = "zs.test.tz.sh.\(UUID().uuidString)"
+        let nySuite = "zs.test.tz.ny.\(UUID().uuidString)"
+        let shDefaults = try XCTUnwrap(UserDefaults(suiteName: shSuite))
+        let nyDefaults = try XCTUnwrap(UserDefaults(suiteName: nySuite))
+        defer {
+            shDefaults.removePersistentDomain(forName: shSuite)
+            nyDefaults.removePersistentDomain(forName: nySuite)
+        }
+
+        let shStore = AppGroupStore(defaults: shDefaults)
+        try shStore.saveCities([City.beijingDefault, shanghai])
+        try shStore.saveSelectedCityID(shanghai.id)
+
+        let nyStore = AppGroupStore(defaults: nyDefaults)
+        try nyStore.saveCities([City.beijingDefault, newYork])
+        try nyStore.saveSelectedCityID(newYork.id)
+
+        let vmShanghai = WeatherViewModel(store: shStore)
+        let vmNewYork = WeatherViewModel(store: nyStore)
+
+        XCTAssertEqual(vmShanghai.selectedTimeZone.identifier, "Asia/Shanghai")
+        XCTAssertEqual(vmNewYork.selectedTimeZone.identifier, "America/New_York")
+
+        let sh = WeatherTimeFormatter.string(from: date, format: "HH:mm",
+                                             timeZone: vmShanghai.selectedTimeZone)
+        let ny = WeatherTimeFormatter.string(from: date, format: "HH:mm",
+                                             timeZone: vmNewYork.selectedTimeZone)
+
+        XCTAssertNotEqual(sh, ny,
+                          "同一时刻在两个城市时区下渲染必须不同（D-4 app 侧接线）")
+    }
 }

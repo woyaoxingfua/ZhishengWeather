@@ -18,6 +18,8 @@
 //    先例见 LargeWeatherView 的图标昼夜判断）。
 //    A1 后 mapper 的 daily 输出自今日起截（daily[0] 恒为今天），本判断天然正确。
 //
+//  D-4：时间渲染时区由 ContentView 透传（默认设备时区），本层仅做穿透，不自行裁定。
+//
 
 import SwiftUI
 
@@ -35,6 +37,9 @@ struct DailyForecastSection: View {
     var longitude: Double = 116.4074
     /// 所属快照（A2-9：15 天页构造透传用；nil 时隐藏入口）。
     var snapshot: WeatherSnapshot?
+    /// 时间渲染时区（D-4）。默认设备时区；由 ContentView 透传 VM 的 `selectedTimeZone`，
+    /// 再原样下发给 `DailyForecastRow` / `FifteenDayView`。默认参数保证源码兼容。
+    var timeZone: TimeZone = .current
 
     /// 三档切换状态：默认 3 天（AC-A1-8），会话内记忆，不落盘。
     @State private var visibleDaysChoice: Int = 3
@@ -102,7 +107,8 @@ struct DailyForecastSection: View {
                     if let snapshot {
                         FifteenDayView(snapshot: snapshot,
                                        latitude: latitude,
-                                       longitude: longitude)
+                                       longitude: longitude,
+                                       timeZone: timeZone)
                     }
                 } label: {
                     Text("15 天")
@@ -134,9 +140,11 @@ struct DailyForecastSection: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(visibleDays) { day in
                 // A2-5：逐行独立子视图（@State expanded 各自持有，AC-A2-16 不联动）。
+                // D-4：时区原样透传（不经本层裁定）。
                 DailyForecastRow(day: day,
                                  latitude: latitude,
-                                 longitude: longitude)
+                                 longitude: longitude,
+                                 timeZone: timeZone)
             }
         }
     }
