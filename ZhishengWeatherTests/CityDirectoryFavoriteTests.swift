@@ -164,31 +164,82 @@ final class CityDirectoryFavoriteTests: XCTestCase {
                        "收藏组内拖动按 id 生效（米兰与北京换位）")
     }
 
-    /// 置顶后删除：展示序下标 0 = 米兰（收藏项），必须删掉米兰而非存储序首项北京。
-    func testDeleteResolvedByIDWhenDisplayOrderDiffersFromStored() {
+    // MARK: - 展示序 ≠ 存储序：删除必须经「真实」解析函数（D-1 连带坑 / P0 数据丢失）
+
+    // 纪律（P-18 同源盲区）：旧测试在视图外**手工模拟** offset → id 解析，与视图内
+    // 私有实现共享同一套错误假设（按存储序下标索引），于是缺陷逃逸。下列用例一律调用
+    // 真实的 `CityDirectory.cityIDs(atDisplayOffsets:)`——即视图 `.onDelete` 的实际入口。
+
+    /// (a) 置顶后删除展示序 offset 0：必须解析出**收藏置顶项**（米兰），而非存储序首项（北京）。
+    func testCityIDsPinnedFavoriteAtDisplayOffsetZero() {
         var d = makeDirectory()                 // 存储序 = [北京, 杭州, 米兰]
         d.toggleFavorite(d.cities[2].id)        // 米兰收藏 → 展示序 = [米兰, 北京, 杭州]
+        XCTAssertEqual(d.displayCities.map(\.name), ["米兰", "北京", "杭州"])
 
-        // 模拟列表侧 handleDelete：展示序 offset → id。
-        let display = d.displayCities
-        let targetID = display[0].id
-        XCTAssertEqual(display[0].name, "米兰")
+        let ids = d.cityIDs(atDisplayOffsets: IndexSet(integer: 0))
 
-        XCTAssertTrue(d.remove(targetID))
-        XCTAssertEqual(d.cities.map(\.name), ["北京", "杭州"],
-                       "必须删掉米兰（按 id），而非存储序下标 0 的北京")
-        XCTAssertEqual(d.displayCities.map(\.name), ["北京", "杭州"])
+        XCTAssertEqual(ids.count, 1)
+        XCTAssertEqual(ids.first, d.cities[2].id, "展示序 0 = 米兰（收藏项）")
+        XCTAssertEqual(ids.first, d.displayCities[0].id, "解析结果必须取自展示序")
+        XCTAssertNotEqual(ids.first, d.cities[0].id,
+                          "绝不能解析成存储序下标 0 的北京（真实数据丢失缺陷根因）")
+
+        XCTAssertTrue(d.remove(ids[0]))
+        XCTAssertEqual(d.cities.map(\.name), ["北京", "杭州"], "必须删掉米兰，而非北京")
     }
 
-    /// 置顶后删除非收藏项（展示序下标 2 = 杭州）。
-    func testDeleteNonFavoriteByIDWhenDisplayOrderDiffersFromStored() {
+    /// (a') 非收藏项（展示序 offset 2 = 杭州）同样按展示序解析。
+    func testCityIDsNonFavoriteAtDisplayOffsetTwo() {
         var d = makeDirectory()
         d.toggleFavorite(d.cities[2].id)        // 展示序 = [米兰, 北京, 杭州]
 
-        let targetID = d.displayCities[2].id     // 杭州
-        XCTAssertEqual(d.displayCities[2].name, "杭州")
-        XCTAssertTrue(d.remove(targetID))
+        let ids = d.cityIDs(atDisplayOffsets: IndexSet(integer: 2))
+
+        XCTAssertEqual(ids, [d.cities[1].id])
+        XCTAssertEqual(ids.first, d.displayCities[2].id, "展示序 2 = 杭州")
+        XCTAssertTrue(d.remove(ids[0]))
         XCTAssertEqual(d.cities.map(\.name), ["北京", "米兰"], "删除杭州后仅剩北京与米兰")
+    }
+
+    /// (b) 多下标删除：按展示序升序解析出多个 id（逐一对应展示序元素）。
+    func testCityIDsAtMultipleDisplayOffsets() {
+        var d = makeDirectory()                 // 存储序 = [北京, 杭州, 米兰]
+        d.toggleFavorite(d.cities[2].id)        // 展示序 = [米兰, 北京, 杭州]
+
+        let ids = d.cityIDs(atDisplayOffsets: IndexSet([0, 2]))
+
+        XCTAssertEqual(ids, [d.displayCities[0].id, d.displayCities[2].id],
+                       "offset 0 → 米兰、offset 2 → 杭州（按展示序升序）")
+        XCTAssertEqual(ids, [d.cities[2].id, d.cities[1].id],
+                       "与展示序对应的存储 id 一致（米兰 / 杭州）")
+    }
+
+    /// (c) 越界 offset 忽略、不崩；全部越界 / 空集 → 空数组。
+    func testCityIDsIgnoresOutOfRangeOffsets() {
+        let d = makeDirectory()                 // 无收藏 → 展示序 = 存储序 = [北京, 杭州, 米兰]
+
+        XCTAssertEqual(d.cityIDs(atDisplayOffsets: IndexSet([99, 1, 100])),
+                       [d.displayCities[1].id],
+                       "仅 offset 1 有效，越界项被忽略")
+        XCTAssertTrue(d.cityIDs(atDisplayOffsets: IndexSet(integer: 99)).isEmpty,
+                      "全越界 → 空数组（删除侧随即 no-op，不崩）")
+        XCTAssertTrue(d.cityIDs(atDisplayOffsets: IndexSet()).isEmpty, "空下标集 → 空数组")
+    }
+
+    /// (d) 删除选中项后的自动选中，必须取**展示序第一项**（置顶后即视觉首行）。
+    func testRemoveSelectedFallsBackToDisplayFirstCity() {
+        var d = makeDirectory()                 // 存储序 = [北京, 杭州, 米兰]
+        d.toggleFavorite(d.cities[2].id)        // 米兰收藏 → 展示序 = [米兰, 北京, 杭州]
+        XCTAssertTrue(d.select(d.cities[0].id)) // 选中北京（展示序下标 1）
+
+        XCTAssertTrue(d.remove(d.cities[0].id)) // 删选中项 → 剩余存储序 [杭州, 米兰]
+
+        XCTAssertEqual(d.displayCities.map(\.name), ["米兰", "杭州"])
+        XCTAssertEqual(d.selectedID, d.displayCities.first?.id,
+                       "自动选中剩余展示序第一项（米兰）")
+        XCTAssertEqual(d.selectedCity?.name, "米兰")
+        XCTAssertNotEqual(d.selectedID, d.cities.first?.id,
+                          "存储序首项是杭州——旧实现会错误选中它（✓ 跳到非顶行）")
     }
 
     // MARK: - 纯函数 CityDirectory.moved（复刻 Array.move 语义）

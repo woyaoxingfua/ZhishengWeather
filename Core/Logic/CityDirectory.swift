@@ -121,7 +121,7 @@ struct CityDirectory: Equatable, Sendable {
 
     /// 删除（AC-B10 / AC-B11）。
     /// 仅剩 1 项时 no-op 返回 false（"至少保留一个城市"）；
-    /// 删除的是当前选中项 → 自动选中剩余列表第一项。
+    /// 删除的是当前选中项 → 自动选中剩余**展示序第一项**（= 视觉首行）。
     /// - Parameter id: 要删除的城市 id。
     /// - Returns: 是否发生了删除。
     @discardableResult
@@ -130,7 +130,9 @@ struct CityDirectory: Equatable, Sendable {
         guard let index = cities.firstIndex(where: { $0.id == id }) else { return false }
         let wasSelected = (selectedID == id)
         cities.remove(at: index)
-        if wasSelected, let first = cities.first {
+        // D-1 连带修复：自动选中取**展示序**首项。`displayCities` 是读取时派生，
+        // 此处刚删完已反映最新顺序；用 `cities.first` 会在置顶时把 ✓ 跳到非顶行。
+        if wasSelected, let first = displayCities.first {
             selectedID = first.id
         }
         return true
@@ -207,6 +209,24 @@ struct CityDirectory: Equatable, Sendable {
         let favorites = cities.filter { $0.isFavorite == true }
         let rest = cities.filter { $0.isFavorite != true }
         return favorites + rest
+    }
+
+    /// 展示序下标 → 城市 id（D-1 修复：删除必须按**展示序**解析）。
+    ///
+    /// SwiftUI `.onDelete` 给出的 `IndexSet` 是 **`displayCities` 展示序下标**；
+    /// 置顶后展示序与存储序错位，若直接以该 offset 索引存储序 `cities` 会删错城市
+    /// （真实数据丢失缺陷的根因）。故解析职责**下沉到 Core**，作为纯函数供视图与
+    /// 单测共用——视图不再私藏一份"手工模拟"的解析逻辑，测试也不再与实现共享
+    /// 同一套错误假设（P-18 同源盲区纪律）。
+    /// - Parameter offsets: 展示序下标集（越界项忽略、不崩；空集 → 空数组）。
+    /// - Returns: 按 offsets **升序**命中的城市 id 列表。
+    func cityIDs(atDisplayOffsets offsets: IndexSet) -> [String] {
+        let display = displayCities
+        var ids: [String] = []
+        for offset in offsets.sorted() where display.indices.contains(offset) {
+            ids.append(display[offset].id)
+        }
+        return ids
     }
 
     /// 切换星标（nil/false → true；true → false）。

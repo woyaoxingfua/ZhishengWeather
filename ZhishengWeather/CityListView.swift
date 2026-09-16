@@ -140,15 +140,17 @@ struct CityListView: View {
     // MARK: - 删除
 
     /// 左滑删除：仅剩 1 项时给出提示且不执行（AC-B11）。
+    ///
+    /// `offsets` 是 SwiftUI `.onDelete` 给出的 **`displayCities` 展示序下标**。
+    /// offset → id 的解析已下沉到 `CityDirectory.cityIDs(atDisplayOffsets:)`（Core 纯函数），
+    /// 视图不再自持一份解析逻辑，避免与单测共享同一套错误假设（真实数据丢失缺陷的根因）。
     private func handleDelete(_ offsets: IndexSet) {
-        guard viewModel.directory.cities.count > 1 else {
+        // 数量判据用展示集合（顺序无关，但与下方解析同源，保持一致）。
+        guard viewModel.directory.displayCities.count > 1 else {
             triggerMinimumHint()
             return
         }
-        let ids = offsets.compactMap { index -> String? in
-            guard viewModel.directory.cities.indices.contains(index) else { return nil }
-            return viewModel.directory.cities[index].id
-        }
+        let ids = viewModel.directory.cityIDs(atDisplayOffsets: offsets)
         Task {
             for id in ids {
                 await viewModel.remove(id)
