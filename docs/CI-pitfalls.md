@@ -1,10 +1,10 @@
 //
-// CI 踩坑全记录（run1 → run8 攻坚复盘）
+// CI 踩坑全记录（run1 → run37 攻坚复盘）
 // 目的：下次从零搭 iOS CI 或改 Swift 代码时，先读这份，别再踩一遍。
 // 每条都是 CI 实测踩出来的，不是理论推演。
 //
 
-# ZhishengWeather iOS CI 踩坑全记录（run1 → run8）
+# ZhishengWeather iOS CI 踩坑全记录（run1 → run37）
 
 > 背景：Windows 侧开发纯 Swift + SwiftUI 项目，唯一编译门禁是 GitHub Actions
 > macOS runner（Xcode 15.4 + XcodeGen 现生成工程）。从 run1 到 run8 共修 5 轮。
@@ -136,6 +136,19 @@
 ### P-15 代理与网络
 - 本机直连 GitHub HTTPS 不通（schannel 握手失败）；**代理
   `http://127.0.0.1:7897` 可用**（WorkBuddy 内置代理 5409 不通，502）。
+- **run37 追加实证**：shell 环境里的 `HTTP_PROXY`/`HTTPS_PROXY`
+  =`http://127.0.0.1:2586` 是**坏出口**（`CONNECT tunnel failed, 502`），
+  而它**优先级高于 git 默认**，会让 `git push` 连续 10+ 次全失败。
+  绕行（已验证可推成功）：
+  ```bash
+  git -c http.proxy=http://127.0.0.1:7897 \
+      -c https.proxy=http://127.0.0.1:7897 push origin <branch>
+  ```
+  排查要点：**Python urllib 与 git 走同一代理结果可能不同**，必须分别实测；
+  Windows 系统代理读 `winreg` 的
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+  （`ProxyEnable` / `ProxyServer`）。
+  瞬时 `SSL_ERROR_SYSCALL` 会间歇出现，重试 2-3 次即过，不要直接判死。
 - 走代理的 API 调用**间歇性空响应/SSL 中断**——所有 curl 都要套
   重试循环 + 结果校验（`grep -q total_count` 之类），裸调必踩。
 - GH007：commit 邮箱必须用 GitHub noreply
@@ -158,3 +171,62 @@
 4. **竞态测试先自证时序**，再断言结果。
 5. **规则文档写优先级**，实现与测试不得各自解读。
 6. **网络操作全部套重试**（代理间歇抽风），凭据问题用 token 嵌 URL。
+
+---
+
+## 七、Swift 可选元素数组（run35）
+
+### P-17 `[T?]?` 的元素访问是**双层可选**，链式调用会断
+- **现象**：DTO 字段声明为 `[FlexibleTime?]?`（数组可缺 + 元素可 null）时，
+  `daily.sunrise?.first` 的类型是 **`FlexibleTime??`**，写
+  `daily.sunrise?.first?.isoString` 只能解一层 →
+  `error: value of optional type 'FlexibleTime?' must be unwrapped
+  to refer to member 'isoString'`（同一处错 6 遍，全是测试代码）。
+- **原理**：对 `Array<T?>` 做链式访问时，`first` 的类型是 `Element?`
+  = `(T?)?` = `T??`。
+  **区别在于元素是否可选**：
+  - `[DailyForecast]?` → `?.first` 得到 `DailyForecast?`（单层）→ 正常；
+  - `[FlexibleTime?]?` → `?.first` 得到 `FlexibleTime??`（双层）→ 断。
+  所以 `?.first?.member` 这个写法**有时能编过有时编不过**，不能凭印象判断。
+- **修法**（三选一）：
+  ```swift
+  // ① 显式助手（推荐，语义最清楚）
+  private func sunTime(_ times: [FlexibleTime?]?, at index: Int = 0) -> FlexibleTime? {
+      guard let times, times.indices.contains(index) else { return nil }
+      return times[index]
+  }
+  // ② 先解数组再取元素
+  let rows = try XCTUnwrap(snapshot.daily); let firstRow = try XCTUnwrap(rows.first)
+  // ③ 扁平化：`times.first ?? nil`
+  ```
+- **规约**：遇到 `[T?]?` 一律**显式解包或走助手**，不要链 `?.first?.member`。
+  改动后可用 Python 正则扫全仓（模式：`?` `.` `(first|last)` `?` `.`，
+  中间允许空白）做一次体检；
+  但**命中不等于有问题**——必须回到元素类型判断，避免过度修改
+  （run35 扫描命中 9 处，其中 8 处元素非可选、CI 早已证明能编过，不动）。
+
+---
+
+## 八、最大的那条：同源盲区（run37，代价最高）
+
+### P-18 单测 Stub 与实现共享同一套假设 → 真机缺陷必然逃逸
+- **现象**：请求 `api.open-meteo.com/v1/forecast` 带 `timeformat=unixtime`
+  时，`daily.sunrise`/`daily.sunset` 实测返回 **epoch 整数**
+  （`sunrise:[1789422908]`）。而设计文档 ARCH-A1 §1.4 断言"二者绕过
+  unixtime，仍是 ISO 本地墙钟字符串"——**该论断是错的**。
+- **后果**：DTO 声明 `[String?]?` → 真机 JSON 解码 100% 抛 `typeMismatch`
+  → 主屏恒显示"格式问题"，实况/逐小时/逐日全量不可用。
+  而 **CI 单测一路全绿**：Stub 里 sunrise 写的正是 ISO 字符串，
+  与实现的假设**同源**，所以永远测不到。
+- **修法**：DTO 改 `[FlexibleTime?]?`（`.epoch` / `.iso` 双态容忍），
+  mapper 归一为 `Date`；新增 4 个 epoch/混合形态回归用例。
+- **规约（本项目铁律）**：
+  1. 任何对**第三方 API 行为**的断言（字段类型、是否受某参数影响、
+     键是否总是存在）**必须用真实响应验证过**，不能只信文档、不能只靠 Stub。
+  2. 验证手法固定为：**用 Python 逐字复刻 App 实际发出的完整 URL，
+     打真实 API，逐字段比对 DTO 声明的类型**（整数→Int 是否成立、
+     数字→String 必炸、null→非可选必炸、缺键→非可选必炸）。
+     这比读代码猜快得多，且能一次性扫掉所有字段。
+  3. 修完要**反过来问**："这个缺陷为什么没被现有测试抓到？"
+     若答案是"测试数据和实现同源"，那必须补一个**真机形态**的用例，
+     否则同类缺陷还会再来一次。
