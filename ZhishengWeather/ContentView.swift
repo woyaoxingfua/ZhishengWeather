@@ -197,6 +197,13 @@ struct ContentView: View {
             // A2-3：生活指数（本地估算）。
             LifeIndexSection(items: LifeIndexEngine.indices(for: snapshot))
         case .moon:
+            // 气候档案需要 City 的时区信息；若选中城市缺失，用快照坐标构造 fallback。
+            let profileCity = viewModel.directory.selectedCity ?? City(
+                name: snapshot.location.name,
+                latitude: snapshot.location.latitude,
+                longitude: snapshot.location.longitude,
+                isCurrentLocation: false
+            )
             moonSection(snapshot: snapshot)
             // A3-1：历史天气入口（独立第三链路页）。
             NavigationLink {
@@ -207,6 +214,25 @@ struct ContentView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 14))
                     Text("过去 7 日")
+                        .font(.system(size: Theme.FontSize.caption, weight: .medium))
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .foregroundStyle(Theme.accent)
+                .padding(12)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            // 个人气候档案入口：用户点击才进入，内部 .task 触发唯一一次宽范围 archive 请求。
+            NavigationLink {
+                ClimateProfileView(city: profileCity, currentYearHigh: snapshot.dailyHigh)
+            } label: {
+                HStack {
+                    Image(systemName: "chart.bar")
+                        .font(.system(size: 14))
+                    Text("气候档案")
                         .font(.system(size: Theme.FontSize.caption, weight: .medium))
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")

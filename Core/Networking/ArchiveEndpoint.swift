@@ -44,4 +44,25 @@ enum ArchiveEndpoint {
         ]
         return components?.url
     }
+
+    /// 气候档案专用 URL：仅取日最高温，最小化响应体积与加权成本。
+    /// 保持 `url(latitude:longitude:startDate:endDate:)` 不变，避免影响历史天气页。
+    /// - Parameters:
+    ///   - latitude: 纬度。
+    ///   - longitude: 经度。
+    ///   - startDate: 起始日（含），格式 `yyyy-MM-dd`。
+    ///   - endDate: 结束日（含），格式 `yyyy-MM-dd`。
+    static func climateProfileURL(latitude: Double, longitude: Double,
+                                  startDate: String, endDate: String) -> URL? {
+        var components = URLComponents(string: baseURLString)
+        components?.queryItems = [
+            URLQueryItem(name: "latitude", value: String(latitude)),
+            URLQueryItem(name: "longitude", value: String(longitude)),
+            URLQueryItem(name: "start_date", value: startDate),
+            URLQueryItem(name: "end_date", value: endDate),
+            URLQueryItem(name: "daily", value: "temperature_2m_max"),
+            URLQueryItem(name: "timezone", value: "auto")
+        ]
+        return components?.url
+    }
 }
