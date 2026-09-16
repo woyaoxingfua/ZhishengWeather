@@ -118,7 +118,7 @@ struct ContentView: View {
                         .font(.system(size: Theme.FontSize.caption, weight: .medium))
                         .foregroundStyle(Theme.accentSecondary)
                 }
-                // B1-2：短时降水卡（未来约 2 小时 · 15 分钟粒度 · 插值）。
+                // B1-2：短时降水卡（未来约 2 小时 · 15 分钟粒度 · 由逐小时插值·非实况外推）。
                 // 干窗 / 无数据 → 整卡隐藏（沿用原 Android 行为，AC-B1-8/B1-9）；
                 // 时刻按选中城市时区渲染（D-4 一致）。数据来自既有无新增请求的 forecast。
                 if let minutely = snapshot.minutely15,

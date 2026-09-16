@@ -773,6 +773,35 @@ final class OpenMeteoMapperTests: XCTestCase {
                        "窗口起点须为 <= now 的最后一个 15 分钟窗")
     }
 
+    /// B1-2 回归守卫（事实更正·防长度失控）：即使响应**继承 forecast_days 窗口**
+    /// （长度失控，如 7 天 ×96 = 672 条），mapper 仍须把短时降水窗口**硬截到
+    /// maxMinutelyCount（=8）**——这是"不能假定 forecast_minutely_15 一定生效"的
+    /// 最后一道防线；且起点只由 `now` 决定，**绝不**由数组长度决定
+    /// （数组长度无法区分原生/插值，不可据此推断数据质量）。
+    func testMinutelyWindowCapsEvenWhenResponseInheritsFullWindow() throws {
+        let slot = 900
+        let entryCount = 672                    // = 7 天 × 96 条/天（失控形态）
+        let times = (0..<entryCount).map { t0 + $0 * slot }
+        let now = Date(timeIntervalSince1970: TimeInterval(t0 + 5 * slot))
+        let minutely = OpenMeteoResponse.Minutely15(
+            time: times,
+            precipitation: Array(repeating: 0.2, count: entryCount),
+            precipitation_probability: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [1], minutely: minutely),
+            location: .beijing,
+            now: now
+        )
+
+        let points = try XCTUnwrap(snapshot.minutely15)
+        XCTAssertEqual(points.count, OpenMeteoMapper.maxMinutelyCount,
+                       "响应长度失控时仍须硬截到 8 条（与条目数无关）")
+        XCTAssertEqual(try XCTUnwrap(points.first).time,
+                       Date(timeIntervalSince1970: TimeInterval(t0 + 5 * slot)),
+                       "起点仍是 <= now 的最后一个 15 分钟窗（与长度无关）")
+    }
+
     /// B1-2：无 minutely_15 → snapshot.minutely15 == nil（整卡隐藏，AC-B1-9）。
     func testMinutelyMissingProducesNil() {
         let snapshot = OpenMeteoMapper.map(

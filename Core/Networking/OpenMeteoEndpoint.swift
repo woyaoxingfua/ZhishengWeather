@@ -27,10 +27,14 @@
 //  wind_speed_unit=ms 与 timezone=auto / timeformat=unixtime 逐字不动（v1.2 裁定）。
 //  v1.5 修订（B1-2 短时降水，PRD §4.3 R-Q2「加字段不加剧请求」）：
 //    在**既有单次 forecast 请求**内追加 minutely_15=precipitation,precipitation_probability
-//    （不新增第二个端点/请求）；并显式声明 forecast_minutely_15=8 —— 把返回条目
-//    钉在 8×15min=2h（本项目调研文档 open-meteo-capability-verified.md 第 19 行口径），
-//    避免在既有 forecast_days=16 下把 minutely 序列撑到 ~1600 条、白白膨胀响应体
-//    与共享容器载荷（真机实测：不限制时 杭州 返回 288~1632 条）。
+//    （不新增第二个端点/请求）；并**必须**显式声明 forecast_minutely_15=8 —— 把返回条目
+//    钉在 8×15min=2h（本项目调研文档 open-meteo-capability-verified.md 第 19 行口径）。
+//    ⚠️ 不传该长度控制参数会**继承 forecast_days 窗口**（forecast_days=1→96 条；
+//       本工程 forecast_days=16→约 1600 条），白白膨胀响应体与共享容器载荷。
+//    ⚠️ 事实更正（实测验证）：中国等非原生覆盖区的 minutely_15 为**逐小时插值到
+//       15 分钟网格**，**非实况外推 / nowcast**；且**数组长度无法区分原生与插值**
+//       （柏林与杭州同为 96 条），故**绝不可**据条目数推断数据质量。time 沿用既有
+//       `timeformat=unixtime` 的 epoch 纪律，**不引入第二套时间解码**。
 //
 
 import Foundation

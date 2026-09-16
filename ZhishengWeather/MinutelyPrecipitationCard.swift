@@ -5,8 +5,11 @@
 //  B1-2 短时降水卡：未来约 2 小时的 15 分钟粒度降水柱状序列 + 开始/停止时序 + 峰值。
 //
 //  纪律：
-//  - **粒度诚实**（AC-B1-7）：文案显式标注「15 分钟粒度 · 插值数据」，**禁止**
-//    任何"逐分钟 / 雷达临近 / nowcast"措辞；不夸大精度。
+//  - **粒度诚实**（AC-B1-7，事实更正·已实测验证）：中国等非原生覆盖区的 minutely_15
+//    为**逐小时插值到 15 分钟网格**，**非实况外推**。文案须显式标注
+//    「未来 2 小时 · 15 分钟粒度 · 由逐小时插值，非实况外推」，**禁止**任何
+//    "逐分钟 / 分钟级 / 雷达临近 / nowcast"措辞；不夸大精度。
+//    ⚠️ 数组长度**无法**区分原生与插值（柏林与杭州同为 96 条），绝不可据此推断质量。
 //  - **干窗 / 无数据整卡隐藏**（AC-B1-8/B1-9）：隐藏判定由调用方经
 //    `MinutelyPrecipitationEngine.hasPrecipitation` 完成，本视图假定调用时确有降水，
 //    但仍在 `body` 内做一次防御性校验（干窗 → EmptyView），避免误用。
@@ -63,8 +66,11 @@ struct MinutelyPrecipitationCard: View {
                     .font(.system(size: Theme.FontSize.sectionTitle, weight: .semibold))
                     .foregroundStyle(Theme.primaryText)
             }
-            // AC-B1-7：显式标注粒度与（中国等非原生覆盖区的）插值来源。
-            Text("未来 2 小时 · 15 分钟粒度 · 插值数据")
+            // AC-B1-7（事实更正·已实测验证）：中国等非原生覆盖区的 minutely_15 为
+            // **逐小时插值到 15 分钟网格**，**非实况外推 / nowcast**。
+            // 文案必须明示来源与免责，**禁止**「分钟级」措辞；
+            // ⚠️ 数组长度无法区分原生/插值，绝不可据此推断数据质量。
+            Text("未来 2 小时 · 15 分钟粒度 · 由逐小时插值，非实况外推")
                 .font(.system(size: Theme.FontSize.footnote))
                 .foregroundStyle(Theme.secondaryText)
         }
