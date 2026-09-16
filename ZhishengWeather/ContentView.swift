@@ -121,6 +121,15 @@ struct ContentView: View {
                         .foregroundStyle(Theme.accentSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                // 本轮（可诊断性）：定位 / 共享容器两类「应用级」问题不再静默——
+                // 文案由 VM 从 Core 的 FaultDomain 单一真源投影而来（视图不拼错误句）。
+                // nil = 正常 → 不渲染。
+                if let notice = viewModel.locationNotice {
+                    noticeRow(notice)
+                }
+                if let issue = viewModel.storageIssue {
+                    noticeRow(issue)
+                }
                 heroSection(snapshot: snapshot)
                 // A2-2：一句话摘要（Hero 温度下一行；nil → 整行隐藏，AC-A2-8）。
                 // 摘要与 Hero 同源展示，不参与模块排序（归组 Hero）。
@@ -137,6 +146,10 @@ struct ContentView: View {
                    let evidence = EnsembleProbabilityEngine.evidence(for: forecast) {
                     EnsembleUncertaintyCard(evidence: evidence,
                                             timeZone: viewModel.selectedTimeZone)
+                } else if case .failed(let message) = viewModel.ensembleState {
+                    // 本轮：集合链路**取数失败**时，屏上如实说明「该链路失败」，
+                    // 而不是整块静默消失（其余链路数据不受影响，失败隔离纪律不变）。
+                    noticeRow("集合预报暂不可用：\(message)")
                 }
                 // B1-2：短时降水卡（未来约 2 小时 · 15 分钟粒度 · 由逐小时插值·非实况外推）。
                 // 干窗 / 无数据 → 整卡隐藏（沿用原 Android 行为，AC-B1-8/B1-9）；
@@ -191,6 +204,9 @@ struct ContentView: View {
             // A2-1：空气卡（独立链路，airQuality == nil 整卡不渲染，R5）。
             if let airQuality = viewModel.airQuality {
                 AirQualityCard(airQuality: airQuality)
+            } else if case .failed(let message) = viewModel.airState {
+                // 本轮：空气链路**取数失败**时如实说明「该链路失败」，不再静默消失。
+                noticeRow("空气质量暂不可用：\(message)")
             }
         case .hourly:
             hourlySection(snapshot: snapshot)
@@ -481,6 +497,26 @@ struct ContentView: View {
             .foregroundStyle(highlighted ? Theme.accentSecondary : Theme.secondaryText)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 4)
+    }
+
+    // MARK: - 本轮新增：单行弱提示（链路失败 / 定位 / 共享容器统一外观）
+
+    /// 单行弱提示行（左侧警告图标 + 短句）。
+    ///
+    /// 本轮的定位 / 共享容器 / 副链路失败提示统一走这里，保证外观一致、且**文案
+    /// 仍由 VM 从 Core `FaultDomain` 单一真源投影**（此视图只负责排版，不拼错误句）。
+    /// - Parameter text: 已按故障域裁定好的中文短句。
+    /// - Returns: 一行弱提示视图。
+    private func noticeRow(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12))
+            Text(text)
+                .font(.system(size: Theme.FontSize.footnote))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .foregroundStyle(Theme.accentSecondary)
     }
 
     // MARK: - 占位视图

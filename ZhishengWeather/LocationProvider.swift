@@ -16,6 +16,12 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     /// 最近一次解析到的位置（默认北京）。
     private(set) var current: LocationInfo = .beijing
 
+    /// 最近一次定位请求的**结果分类**（本轮新增）。
+    ///
+    /// 定位层只如实记录事实；「要不要提示用户」由 Core 的
+    /// `FaultDomain.classify(locationOutcome:)` 纯裁定（可单测）。
+    private(set) var lastOutcome: LocationOutcome = .authorized
+
     private let manager = CLLocationManager()
     private var continuation: CheckedContinuation<LocationInfo, Never>?
     private var timeoutTask: Task<Void, Never>?
@@ -46,6 +52,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         switch manager.authorizationStatus {
         case .denied, .restricted:
             current = .beijing
+            lastOutcome = .denied
             return .beijing
 
         case .notDetermined:
@@ -75,15 +82,20 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         timeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.finish(with: .beijing)
+            // 超时 = 用户未作答 / 等不到定位结果 → undetermined（静默回落）。
+            self?.finish(with: .beijing, outcome: .undetermined)
         }
     }
 
-    /// 收敛结果：取消超时、记忆当前值、恢复等待中的 continuation（幂等）。
-    private func finish(with info: LocationInfo) {
+    /// 收敛结果：取消超时、记忆当前值与结果分类、恢复等待中的 continuation（幂等）。
+    /// - Parameters:
+    ///   - info: 解析出的位置。
+    ///   - outcome: 本次定位的结果分类（供上层按故障域决定是否提示）。
+    private func finish(with info: LocationInfo, outcome: LocationOutcome) {
         timeoutTask?.cancel()
         timeoutTask = nil
         current = info
+        lastOutcome = outcome
 
         if let continuation {
             self.continuation = nil
@@ -100,13 +112,13 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
                                 longitude: last.coordinate.longitude,
                                 isFallback: false)
         Task { @MainActor in
-            self.finish(with: info)
+            self.finish(with: info, outcome: .authorized)
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor in
-            self.finish(with: .beijing)
+            self.finish(with: .beijing, outcome: .failed)
         }
     }
 
@@ -123,7 +135,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
                 }
                 manager.requestLocation()
             case .denied, .restricted:
-                self.finish(with: .beijing)
+                self.finish(with: .beijing, outcome: .denied)
             default:
                 break
             }

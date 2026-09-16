@@ -38,6 +38,15 @@ final class WeatherViewModel {
     private(set) var state: State = .loading
     /// 最近一次定位结果（UI 不直接消费；header 用 snapshot.location）。
     private(set) var location: LocationInfo = .beijing
+    /// 定位相关提示（本轮：权限被拒不再静默）。
+    ///
+    /// 由 `FaultDomain.classify(locationOutcome:)` 纯裁定：只有「权限被拒 / 受限」
+    /// 才有文案；未作答 / 单次失败保持既有静默回落（不打扰用户）。nil = 无提示。
+    private(set) var locationNotice: String? = nil
+    /// App Group 共享容器故障提示（本轮：写失败 / 容器不可用不再静默）。
+    ///
+    /// nil = 正常；非 nil = 需要让用户知道的共享容器问题（小组件可能读不到数据）。
+    private(set) var storageIssue: String? = nil
 
     /// 城市目录（F-B）：数组顺序即展示顺序（D-2）。
     private(set) var directory: CityDirectory
@@ -61,9 +70,15 @@ final class WeatherViewModel {
     /// 数据源 = `SharedWeatherPayload.updatedAt`（Widget 读的同一份载荷），
     /// 阈值复用主循环的 `freshnessWindow`，不新增第二个数字。
     /// 无载荷（从未成功落盘）→ false（此时由 .loading / .failed 分支表达，不叠加提示）。
+    ///
+    /// 本轮（可诊断性）：**陈旧判定式**下沉到 Core 纯函数 `StalePolicy.isStale`
+    /// （严格大于阈值才算陈旧，可边界单测），本处只负责取「数据时刻 + 阈值」两个入参，
+    /// 不再各自写一遍算术，避免「一处改了别处没改」的同源漂移。
+    /// 注意：nil（无载荷）在本处仍按既有语义返回 false（不叠加提示），
+    /// 故先做 nil 短路，不直接吃 `StalePolicy` 的「nil → 陈旧」约定。
     var isCachedPayloadStale: Bool {
         guard let updated = store.updatedAt else { return false }
-        return Date().timeIntervalSince(updated) >= freshnessWindow
+        return StalePolicy.isStale(lastUpdated: updated, now: Date(), threshold: freshnessWindow)
     }
 
     private let service: WeatherProviding
@@ -74,12 +89,17 @@ final class WeatherViewModel {
     /// 空气质量（A2-1）：**仅存于 VM，不进 WeatherSnapshot/共享容器**
     /// （ARCH-A2 §1.1①，Widget 载荷契约零改动）。nil = 未加载/取数失败/无关数据。
     private(set) var airQuality: AirQuality? = nil
+    /// 空气链路的**独立状态**（本轮：失败必须在屏上表现为「该链路失败」，
+    /// 而不是整卡静默消失）。失败只写本属性，**绝不触碰 `state`**。
+    private(set) var airState: SourceState = .idle
 
     /// 集合预报第三链路服务（独立域名 `ensemble-api.open-meteo.com`，独立慢节奏）。
     private let ensembleService: EnsembleProviding
     /// 集合预报（本特性）：**仅存于 VM，不进 WeatherSnapshot / 共享容器**。
     /// nil = 未加载 / 取数失败 / 不归属当前选中城市。
     private(set) var ensemble: EnsembleForecast? = nil
+    /// 集合链路的**独立状态**（同 `airState`：失败可见，但不触碰主 `state`）。
+    private(set) var ensembleState: SourceState = .idle
     /// `ensemble` 归属的城市 id（跨城串号守卫，见 `displayedEnsemble`）。
     private var ensembleCityID: String? = nil
     /// 最近一次集合取数**尝试**时刻（配额守卫：本调用等价 4.0 次额度）。
@@ -173,6 +193,10 @@ final class WeatherViewModel {
 
         let resolved = await locationProvider.requestLocation()
         location = resolved
+        // 本轮：定位权限被拒 / 受限不再静默（未作答 / 单次失败仍静默回落默认城市，不打扰用户）。
+        // 裁定与文案都在 Core 纯逻辑里（可单测），这里只做投影。
+        locationNotice = FaultDomain.classify(locationOutcome: locationProvider.lastOutcome)
+            .map { FaultDomain.message(for: $0) }
 
         // ── F-B（AC-B3）：定位真实成功才 upsert"当前位置"；被拒/失败/超时 → no-op ──
         if !resolved.isFallback {
@@ -214,6 +238,8 @@ final class WeatherViewModel {
                                                timeZoneIdentifier: selectedCity.timeZoneIdentifier)
             do {
                 try store.save(payload)
+                // 本轮：写入恢复正常 → 清除既有共享容器故障提示（自愈，避免陈旧告警挂屏）。
+                storageIssue = nil
 
                 // 落盘成功但共享容器不可用 = 小组件永远读不到，且系统不会报任何错，
                 // 是自签名/重签名环节最常见的坑，这里主动提示。
@@ -223,7 +249,9 @@ final class WeatherViewModel {
                           + "且重签名时保留了 com.apple.security.application-groups。")
                 }
             } catch {
-                print("[WeatherViewModel] 写入共享容器失败：\(error)")
+                // 写失败不再静默（本轮）：投影到 `storageIssue`，主屏据此提示「小组件可能读不到数据」。
+                // 失败域裁定与文案仍在 Core 纯逻辑（FaultDomain），这里只做投影。
+                storageIssue = Self.message(for: WeatherError.appGroup(error.localizedDescription))
             }
 
             WidgetCenter.shared.reloadAllTimelines()
@@ -370,12 +398,15 @@ final class WeatherViewModel {
                                                timeZoneIdentifier: city.timeZoneIdentifier)
             do {
                 try store.save(payload)
+                // 本轮：写入恢复正常 → 自愈清除共享容器故障提示（同 refresh 路径）。
+                storageIssue = nil
                 if !AppGroupStore.isSharedContainerAvailable {
                     print("[WeatherViewModel] 警告：App Group 容器不可用（\(AppGroup.identifier)），"
                           + "小组件将读不到数据。")
                 }
             } catch {
-                print("[WeatherViewModel] 写入共享容器失败：\(error)")
+                // 写失败不再静默（本轮）：同 refresh 路径，投影到 `storageIssue`。
+                storageIssue = Self.message(for: WeatherError.appGroup(error.localizedDescription))
             }
 
             WidgetCenter.shared.reloadAllTimelines()
@@ -416,11 +447,14 @@ final class WeatherViewModel {
             await LinkHealthRecorder.shared.recordSuccess(.airQuality, at: Date())
             guard directory.selectedID == city.id else { return }
             airQuality = aq
+            airState = .loaded
         } catch {
-            // 空气失败 = 无空气卡（整卡不渲染），天气 state 不动（AC-A2-4 / R-A2-1）。
+            // 空气失败 = 无空气卡，天气 state 不动（AC-A2-4 / R-A2-1）。
             await LinkHealthRecorder.shared.recordFailure(.airQuality, at: Date(),
                                                           message: error.localizedDescription)
             airQuality = nil
+            // 本轮：失败在屏上**可见**（该链路自己的降级位），文案取自 FaultDomain 单一真源。
+            airState = .failed(Self.message(for: error))
         }
     }
 
@@ -456,11 +490,14 @@ final class WeatherViewModel {
             await LinkHealthRecorder.shared.recordSuccess(.ensemble, at: Date())
             guard directory.selectedID == city.id else { return }
             ensemble = forecast
+            ensembleState = .loaded
         } catch {
-            // 集合失败 = 无集合区块（整块不渲染），天气 state 不动（隔离纪律）。
+            // 集合失败 = 无集合区块，天气 state 不动（隔离纪律）。
             await LinkHealthRecorder.shared.recordFailure(.ensemble, at: Date(),
                                                           message: error.localizedDescription)
             ensemble = nil
+            // 本轮：失败在屏上**可见**（该链路自己的降级位），文案取自 FaultDomain 单一真源。
+            ensembleState = .failed(Self.message(for: error))
         }
     }
 
