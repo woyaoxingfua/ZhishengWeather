@@ -6,7 +6,7 @@
 //  F-B 多城市改造（ARCH-FB §3.2）：
 //    - 持有 CityDirectory（城市目录纯逻辑）+ 双共享 key 持久化（D-1）；
 //    - refresh 定位流：定位成功才 upsert"当前位置"（AC-B3），取数坐标 = 选中城市；
-//    - 新增 select / addAndSelect / remove / moveCities 动作；
+//    - 新增 select / addAndSelect / remove / moveDisplayedCities / toggleFavorite 动作；
 //    - **R-3（本轮最高回归风险）**：snapshot.location 的覆盖源 = 选中城市
 //      （`selectedCity.locationInfo`），而非定位结果 —— 遗漏会导致切换城市后
 //      主屏与小组件 header 仍显示"当前位置/北京"。
@@ -252,15 +252,6 @@ final class WeatherViewModel {
         isRefreshing = true
         defer { isRefreshing = false }
         await fetchAndApply(for: newSelected, fallbackID: nil)
-    }
-
-    /// 拖动排序（AC-B9 / F-B-8）；排序不影响选中项。
-    /// - Parameters:
-    ///   - fromOffsets: 被拖动行原索引集。
-    ///   - toOffset: 目标偏移。
-    func moveCities(fromOffsets: IndexSet, toOffset: Int) {
-        directory.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        saveCitiesQuietly()
     }
 
     /// 展示序拖动（A2-6 星标置顶后的唯一入口，D-1 连带修复）。

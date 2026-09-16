@@ -138,14 +138,6 @@ struct CityDirectory: Equatable, Sendable {
         return true
     }
 
-    /// 拖动排序（AC-B9）；排序不影响选中项。
-    /// - Parameters:
-    ///   - fromOffsets: 被拖动行原索引集。
-    ///   - toOffset: 目标偏移。
-    mutating func move(fromOffsets: IndexSet, toOffset: Int) {
-        cities.move(fromOffsets: fromOffsets, toOffset: toOffset)
-    }
-
     /// 展示序拖动（D-1 连带修复，A2-6 星标置顶后）。
     ///
     /// `offsets` / `toOffset` 均为 **`displayCities` 的展示序下标**（SwiftUI

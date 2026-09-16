@@ -2,9 +2,11 @@
 //  CityDirectoryTests.swift
 //  ZhishengWeatherTests
 //
-//  F-B：CityDirectory 纯值逻辑（AC-B15 ≥7 用例 → 实写 11 条，不联网、无时钟）。
+//  F-B：CityDirectory 纯值逻辑（AC-B15 ≥7 用例 → 实写 10 条，不联网、无时钟）。
 //  覆盖：initial / add 去重（0.01° 容差两侧）/ remove（含仅剩 1 项、删当前项回退）/
-//        move / upsert（首次新增 / 与手动城市重合 / isFallback no-op / 就地更新不变式）。
+//        upsert（首次新增 / 与手动城市重合 / isFallback no-op / 就地更新不变式）。
+//  注：拖动排序的**展示序**语义（UI 实际使用的那套）在 CityDirectoryFavoriteTests；
+//      旧的**存储序** move 及其用例属死路径（UI 不再调用），已随死代码一并删除。
 //
 
 import XCTest
@@ -130,23 +132,7 @@ final class CityDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.cities.count, 1)
     }
 
-    // MARK: - ⑦ move 排序（AC-B9）
-
-    func testMoveReordersWithoutChangingSelection() {
-        var directory = CityDirectory.initial()
-        XCTAssertTrue(directory.add(city("杭州", lat: 30.25, lon: 120.17)))
-        XCTAssertTrue(directory.add(city("米兰", lat: 45.46, lon: 9.19)))
-        XCTAssertTrue(directory.select(City.beijingDefault.id)) // 选中北京（第 0 位）
-
-        directory.move(fromOffsets: IndexSet(integer: 0), toOffset: 3)
-
-        XCTAssertEqual(directory.cities.map(\.name), ["杭州", "米兰", "北京"],
-                       "拖动后数组顺序即展示顺序（D-2）")
-        XCTAssertEqual(directory.selectedID, City.beijingDefault.id,
-                       "排序不影响选中项（AC-B9）")
-    }
-
-    // MARK: - ⑧ upsert：首次定位新增"当前位置"
+    // MARK: - ⑦ upsert：首次定位新增"当前位置"
 
     func testUpsertFirstLocationAppendsCurrentLocation() {
         var directory = CityDirectory.initial()
@@ -161,7 +147,7 @@ final class CityDirectoryTests: XCTestCase {
         XCTAssertEqual(current?.id, City.makeID(latitude: 31.23, longitude: 121.47))
     }
 
-    // MARK: - ⑨ upsert：与手动城市重合 → 不新增（Q5）
+    // MARK: - ⑧ upsert：与手动城市重合 → 不新增（Q5）
 
     func testUpsertOverlappingManualCityDoesNotAdd() {
         var directory = CityDirectory.initial()
@@ -177,7 +163,7 @@ final class CityDirectoryTests: XCTestCase {
                        "手动城市不因 upsert 变为当前位置项")
     }
 
-    // MARK: - ⑩ upsert：isFallback=true → no-op（AC-B3）
+    // MARK: - ⑨ upsert：isFallback=true → no-op（AC-B3）
 
     func testUpsertFallbackLocationIsNoOp() {
         var directory = CityDirectory.initial()
@@ -190,7 +176,7 @@ final class CityDirectoryTests: XCTestCase {
         XCTAssertFalse(directory.cities.contains(where: { $0.isCurrentLocation }))
     }
 
-    // MARK: - ⑪ upsert：已有"当前位置"项 → 就地更新（不变式至多一项）
+    // MARK: - ⑩ upsert：已有"当前位置"项 → 就地更新（不变式至多一项）
 
     func testUpsertUpdatesExistingCurrentLocationInPlace() {
         var directory = CityDirectory.initial()
@@ -210,7 +196,7 @@ final class CityDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.cities.map(\.name), ["北京", "当前位置"])
     }
 
-    /// ⑪ 补充：选中的"当前位置"项被就地更新后，选中 id 应跟随新 id。
+    /// ⑩ 补充：选中的"当前位置"项被就地更新后，选中 id 应跟随新 id。
     func testUpsertFollowsSelectionWhenCurrentLocationIDChanges() {
         var directory = CityDirectory.initial()
         XCTAssertTrue(directory.upsertCurrentLocation(location(lat: 31.23, lon: 121.47)))
