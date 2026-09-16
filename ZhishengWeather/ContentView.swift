@@ -118,6 +118,15 @@ struct ContentView: View {
                         .font(.system(size: Theme.FontSize.caption, weight: .medium))
                         .foregroundStyle(Theme.accentSecondary)
                 }
+                // 集合预报不确定性区（新增第三链路；固定区块，**不**参与 HomeSection 排序，
+                // 以免改动已持久化的区块顺序）。无可用集合 / 不归属当前城市 / 取数失败 →
+                // displayedEnsemble 或 evidence 为 nil → 整块不渲染（失败隔离，绝不触碰主 state）。
+                // 成员数来自数据（evidence.memberCount），绝不硬编码 30。
+                if let forecast = viewModel.displayedEnsemble,
+                   let evidence = EnsembleProbabilityEngine.evidence(for: forecast) {
+                    EnsembleUncertaintyCard(evidence: evidence,
+                                            timeZone: viewModel.selectedTimeZone)
+                }
                 // B1-2：短时降水卡（未来约 2 小时 · 15 分钟粒度 · 由逐小时插值·非实况外推）。
                 // 干窗 / 无数据 → 整卡隐藏（沿用原 Android 行为，AC-B1-8/B1-9）；
                 // 时刻按选中城市时区渲染（D-4 一致）。数据来自既有无新增请求的 forecast。

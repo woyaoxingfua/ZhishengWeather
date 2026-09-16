@@ -61,11 +61,32 @@ final class WeatherViewModel {
     /// （ARCH-A2 §1.1①，Widget 载荷契约零改动）。nil = 未加载/取数失败/无关数据。
     private(set) var airQuality: AirQuality? = nil
 
+    /// 集合预报第三链路服务（独立域名 `ensemble-api.open-meteo.com`，独立慢节奏）。
+    private let ensembleService: EnsembleProviding
+    /// 集合预报（本特性）：**仅存于 VM，不进 WeatherSnapshot / 共享容器**。
+    /// nil = 未加载 / 取数失败 / 不归属当前选中城市。
+    private(set) var ensemble: EnsembleForecast? = nil
+    /// `ensemble` 归属的城市 id（跨城串号守卫，见 `displayedEnsemble`）。
+    private var ensembleCityID: String? = nil
+    /// 最近一次集合取数**尝试**时刻（配额守卫：本调用等价 4.0 次额度）。
+    private var lastEnsembleFetchAt: Date? = nil
+
+    /// 仅当集合结果归属当前选中城市时返回（防切城后旧城集合串号，P1-A 纪律平移）。
+    var displayedEnsemble: EnsembleForecast? {
+        guard let id = directory.selectedID, id == ensembleCityID else { return nil }
+        return ensemble
+    }
+
     /// 防止并发重复刷新。
     private var isRefreshing = false
 
     /// 回到前台时的「新鲜度」阈值：15 分钟内不重复取数。
     private let freshnessWindow: TimeInterval = 15 * 60
+
+    /// 集合取数节奏：3 小时。**独立于 15 分钟主循环**（配额纪律，PRD §4.1）：
+    /// 本调用等价 **4.0 次**额度 → 3h ⇒ ≤8 次/日 ⇒ 32 次等价调用/日 ≈ 日预算
+    /// （10,000）的 0.32%。集合指引变化缓慢，无需更密；更密只会白烧额度。
+    private let ensembleCadence: TimeInterval = 3 * 60 * 60
 
     /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），
     /// `LocationProvider()` 是 @MainActor 隔离 init，直接作 default 会挂编译
@@ -74,11 +95,13 @@ final class WeatherViewModel {
     init(service: WeatherProviding = WeatherService(),
          store: AppGroupStore = AppGroupStore(),
          locationProvider: LocationProvider? = nil,
-         airService: AirQualityProviding = AirQualityService()) {
+         airService: AirQualityProviding = AirQualityService(),
+         ensembleService: EnsembleProviding = EnsembleService()) {
         self.service = service
         self.store = store
         self.locationProvider = locationProvider ?? LocationProvider()
         self.airService = airService
+        self.ensembleService = ensembleService
 
         // ── F-B：载入城市目录（AC-B1 / F-B-1）────────────────────────────
         // 三分支裁定（F-B 核验后补）：
@@ -190,6 +213,9 @@ final class WeatherViewModel {
             // 触发时机在落盘之后（ARCH-A2 §2.3），便于失败隔离测试断言顺序性。
             let airCity = selectedCity
             Task { await loadAir(for: airCity) }
+            // 集合第三链路（独立 Task；内部自带 3h 慢节奏守卫，不随 15min 主循环刷新）。
+            let ensembleCity = selectedCity
+            Task { await loadEnsemble(for: ensembleCity) }
             // 过期丢弃（P1-A）：刷新期间用户若切换城市，当前结果已非选中城市，丢弃不应用，
             // 避免把旧城市的快照覆盖到新选中的界面。
             guard directory.selectedID == selectedCity.id else { return }
@@ -333,6 +359,9 @@ final class WeatherViewModel {
             // A2-1：天气链路成功后触发空气第二链路（独立 Task，失败绝不反噬天气）。
             let airCity = city
             Task { await loadAir(for: airCity) }
+            // 集合第三链路（独立 Task；3h 慢节奏守卫 + 跨城守卫见 loadEnsemble）。
+            let ensembleCity = city
+            Task { await loadEnsemble(for: ensembleCity) }
             // 过期丢弃（P1-A）：取数期间用户若又切换城市，仅当选中项仍是本次目标城市才应用，
             // 否则丢弃，交由对应的 select/addAndSelect/remove 取数流程修正界面。
             guard directory.selectedID == city.id else { return }
@@ -362,6 +391,41 @@ final class WeatherViewModel {
         } catch {
             // 空气失败 = 无空气卡（整卡不渲染），天气 state 不动（AC-A2-4 / R-A2-1）。
             airQuality = nil
+        }
+    }
+
+    // MARK: - 集合预报第三链路（Ensemble，额度 4.0 倍）
+
+    /// 拉取集合预报（独立 Task，R5 隔离 + 配额守卫）：
+    ///  - **慢节奏**：同一城市 3 小时内不重复取数（`ensembleCadence`）——本调用等价
+    ///    4.0 次额度，**绝不随 15 分钟主循环刷新**（PRD §4.1）；
+    ///  - **跨城守卫**：切城时立即清空旧值并改写归属 id，避免旧城集合串号到新城界面；
+    ///  - **失败隔离**：失败只置 `ensemble = nil`，**绝不触碰 `state`**；
+    ///  - **过期丢弃**：成功赋值前以 `selectedID` 守门（P1-A 纪律平移）。
+    /// - Parameter city: 取数目标城市。
+    private func loadEnsemble(for city: City) async {
+        // 慢节奏守卫：同城且未到 3h，直接跳过（不发起 4.0 倍请求）。
+        if ensembleCityID == city.id,
+           let last = lastEnsembleFetchAt,
+           Date().timeIntervalSince(last) < ensembleCadence {
+            return
+        }
+        // 切城：清空旧城集合，避免旧数据在新城界面短暂展示（归属 id 立即改写）。
+        if ensembleCityID != city.id {
+            ensemble = nil
+        }
+        // 成败均先打点，避免失败时在 15min 主循环里高频重试 4.0 倍端点（配额纪律）。
+        ensembleCityID = city.id
+        lastEnsembleFetchAt = Date()
+
+        do {
+            let forecast = try await ensembleService.fetch(latitude: city.latitude,
+                                                           longitude: city.longitude)
+            guard directory.selectedID == city.id else { return }
+            ensemble = forecast
+        } catch {
+            // 集合失败 = 无集合区块（整块不渲染），天气 state 不动（隔离纪律）。
+            ensemble = nil
         }
     }
 
