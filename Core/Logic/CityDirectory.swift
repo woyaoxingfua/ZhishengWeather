@@ -144,6 +144,56 @@ struct CityDirectory: Equatable, Sendable {
         cities.move(fromOffsets: fromOffsets, toOffset: toOffset)
     }
 
+    /// 展示序拖动（D-1 连带修复，A2-6 星标置顶后）。
+    ///
+    /// `offsets` / `toOffset` 均为 **`displayCities` 的展示序下标**（SwiftUI
+    /// `.onMove` 给的正是展示序），故**不能**直接作用到存储序 `cities`
+    /// ——置顶后二者错位，会拖动到错误城市。本方法先把展示序解析成 id 序列，
+    /// 在 id 序列上执行与 `Array.move(fromOffsets:toOffset:)` 相同的移动，
+    /// 再按新展示序重排 `cities`（对象原样复用，仅调整顺序）。
+    ///
+    /// 置顶稳定性由 `displayCities` 的"读取时排序"保证：收藏项恒被重新置顶，
+    /// 故组内拖动生效、跨"收藏/非收藏"边界的拖动会被置顶规则回吸（与 pinned 语义一致）。
+    /// `selectedID` 不受影响（AC-B9）。
+    /// - Parameters:
+    ///   - fromOffsets: 展示序中被拖动行的原索引集。
+    ///   - toOffset: 展示序中的目标偏移。
+    mutating func moveDisplay(fromOffsets: IndexSet, toOffset: Int) {
+        let reorderedIDs = Self.moved(displayCities.map(\.id),
+                                      fromOffsets: fromOffsets,
+                                      toOffset: toOffset)
+        // 按 id 重建：保证"数量守恒"不变式，避免重复 id 导致的静默丢项。
+        var byID: [String: City] = [:]
+        for city in cities { byID[city.id] = city }
+        let reordered = reorderedIDs.compactMap { byID[$0] }
+        guard reordered.count == cities.count else { return }
+        cities = reordered
+    }
+
+    /// 在 id 序列上执行"移动"（复刻 `Array.move(fromOffsets:toOffset:)` 语义）。
+    ///
+    /// 纯函数（无 IO / 无时钟），供 `moveDisplay` 复用与单测：取 `offsets` 处元素，
+    /// 整体移除后插入到 `toOffset`（插入点需扣减"被移除且位于其前者"的个数）。
+    /// - Parameters:
+    ///   - ids: 原 id 序列。
+    ///   - offsets: 被移动元素的下标集（越界项忽略）。
+    ///   - toOffset: 目标偏移。
+    /// - Returns: 移动后的 id 序列；`offsets` 全越界时原样返回。
+    static func moved(_ ids: [String], fromOffsets offsets: IndexSet, toOffset: Int) -> [String] {
+        let validOffsets = offsets.filter { ids.indices.contains($0) }.sorted()
+        guard !validOffsets.isEmpty else { return ids }
+
+        let moving = validOffsets.map { ids[$0] }
+        var remaining = ids
+        for index in validOffsets.reversed() {
+            remaining.remove(at: index)
+        }
+        let removedBeforeDestination = validOffsets.filter { $0 < toOffset }.count
+        let insertIndex = min(max(toOffset - removedBeforeDestination, 0), remaining.count)
+        remaining.insert(contentsOf: moving, at: insertIndex)
+        return remaining
+    }
+
     // MARK: - 收藏星标（A2-6）
 
     /// 展示列表：收藏项置顶、组内保持原相对顺序（读取时稳定排序）。

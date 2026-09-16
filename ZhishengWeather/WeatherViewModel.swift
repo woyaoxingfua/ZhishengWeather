@@ -255,6 +255,17 @@ final class WeatherViewModel {
         saveCitiesQuietly()
     }
 
+    /// 展示序拖动（A2-6 星标置顶后的唯一入口，D-1 连带修复）。
+    /// `.onMove` 给出的 offsets/toOffset 是 **`displayCities` 展示序**，
+    /// 由 `CityDirectory.moveDisplay` 按 id 解析后落到存储序，避免置顶后错位。
+    /// - Parameters:
+    ///   - fromOffsets: 展示序中被拖动行原索引集。
+    ///   - toOffset: 展示序中的目标偏移。
+    func moveDisplayedCities(fromOffsets: IndexSet, toOffset: Int) {
+        directory.moveDisplay(fromOffsets: fromOffsets, toOffset: toOffset)
+        saveCitiesQuietly()
+    }
+
     /// 切换城市收藏星标（A2-6）：显式用户操作 → 立即落盘（PRD §3.4）。
     /// 展示置顶由 `CityDirectory.displayCities` 读取时派生，此处不改写数组顺序。
     /// - Parameter id: 目标城市 id。

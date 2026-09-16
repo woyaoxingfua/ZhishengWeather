@@ -39,11 +39,14 @@ struct CityListView: View {
 
     var body: some View {
         List {
-            ForEach(viewModel.directory.cities) { city in
+            // D-1 修复：改遍历 `displayCities`（收藏置顶的派生展示序），
+            // 使星标置顶真正生效。⚠️ 展示序 ≠ 存储序，故下方 move/delete 一律按 id。
+            ForEach(viewModel.directory.displayCities) { city in
                 row(city)
             }
             .onMove { offsets, toOffset in
-                viewModel.moveCities(fromOffsets: offsets, toOffset: toOffset)
+                // offsets/toOffset 是 `displayCities` 展示序下标 → 走 id 基拖动。
+                viewModel.moveDisplayedCities(fromOffsets: offsets, toOffset: toOffset)
             }
             .onDelete { offsets in
                 handleDelete(offsets)
