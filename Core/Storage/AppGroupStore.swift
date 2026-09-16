@@ -23,6 +23,19 @@ final class AppGroupStore {
         case writeVerificationMismatch(key: String)
     }
 
+    /// 主天气载荷的读取结果（本轮新增：**读失败必须可见**，不再静默成 nil）。
+    ///
+    /// 与 `CitiesLoadResult` 同款三分支语义，但用于**主载荷**：
+    ///   - `missing`：键不存在（从未写入 / 已被清除）；
+    ///   - `corrupt`：键存在但解码失败（坏 JSON / 形状不符 / 半截写入）
+    ///     —— 必须让调用方（尤其 Widget）能区分「没有数据」与「数据坏了」；
+    ///   - `loaded`：解码成功。
+    enum PayloadLoadResult: Equatable, Sendable {
+        case missing
+        case corrupt
+        case loaded(SharedWeatherPayload)
+    }
+
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -45,6 +58,7 @@ final class AppGroupStore {
     /// 写后回读校验（防静默失败）：立即读回刚写入的 Data，不一致则抛错。
     private func verifyWritten(_ expected: Data, forKey key: String) throws {
         guard let read = defaults.data(forKey: key), read == expected else {
+            WeatherLog.storage.error("写后回读校验失败 key=\(key, privacy: .public)")
             throw AppGroupStoreError.writeVerificationMismatch(key: key)
         }
     }
@@ -55,13 +69,32 @@ final class AppGroupStore {
     }
 
     /// 读取完整载荷；不存在或解码失败时返回 nil。
+    ///
+    /// 便利封装（既有调用方零改动）；需要区分「缺失 / 损坏」的调用方请用
+    /// `loadResult()`（Widget 正需要这个区分来如实标注）。
     func load() -> SharedWeatherPayload? {
-        guard let data = defaults.data(forKey: AppGroup.payloadKey) else { return nil }
-        do {
-            return try decoder.decode(SharedWeatherPayload.self, from: data)
-        } catch {
-            print("[AppGroupStore] 解码载荷失败：\(error)")
+        switch loadResult() {
+        case .loaded(let payload):
+            return payload
+        case .missing, .corrupt:
             return nil
+        }
+    }
+
+    /// 读取主载荷并**区分三态**（missing / corrupt / loaded）。
+    ///
+    /// 与 `load()` 的差别只在「可区分」：坏 JSON 不再只打印一句就返回 nil，
+    /// 而是回 `.corrupt` 并以 `os.Logger` 记录，使 Widget 能显示
+    /// 「共享数据不可用」而不是渲染空白（本轮要求 5/6）。
+    /// - Returns: 三态读取结果。
+    func loadResult() -> PayloadLoadResult {
+        guard let data = defaults.data(forKey: AppGroup.payloadKey) else { return .missing }
+        do {
+            return .loaded(try decoder.decode(SharedWeatherPayload.self, from: data))
+        } catch {
+            WeatherLog.storage.error(
+                "读取主载荷失败（键存在但解码失败）：\(String(describing: error), privacy: .public)")
+            return .corrupt
         }
     }
 
