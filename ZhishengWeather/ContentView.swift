@@ -274,16 +274,32 @@ struct ContentView: View {
                     .foregroundStyle(Theme.secondaryText)
             }
             Spacer(minLength: 8)
-            Button {
-                Task { await viewModel.refresh() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(8)
-                    .background(Theme.surface, in: Circle())
+            HStack(spacing: 10) {
+                // D-3：设置页此前**只在**下方 navigationDestination 注册处被实例化，
+                // UI 无可见入口（只能靠深链 / 桌面快捷方式到达）。此处补一个可见入口：
+                // 与刷新按钮并排、同款圆形图标。走与深链/快捷方式**相同**的
+                // `CityRoute.settings` 目的地，两条路径渲染同一页面（注册逻辑零改动）。
+                NavigationLink(value: CityRoute.settings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(8)
+                        .background(Theme.surface, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("设置")
+
+                Button {
+                    Task { await viewModel.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(8)
+                        .background(Theme.surface, in: Circle())
+                }
+                .accessibilityLabel("刷新")
             }
-            .accessibilityLabel("刷新")
         }
     }
 
