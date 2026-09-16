@@ -373,7 +373,7 @@ final class WeatherViewModel {
                 saveSelectedCityIDQuietly()
             }
             let cached = store.loadSnapshot()
-            state = .failed(cached: cached, message: "暂无法获取\(city.name)天气，请稍后重试")
+            state = .failed(cached: cached, message: Self.message(for: error))
         }
     }
 
@@ -448,19 +448,14 @@ final class WeatherViewModel {
         }
     }
 
+    /// 错误 → 面向用户的文案（**唯一入口**）。
+    ///
+    /// 本轮（可诊断性修复）把分类与文案全部下沉到 Core 纯逻辑
+    /// （`FaultDomain.classify` + `FaultDomain.message(for:)`）：视图 / VM 不再
+    /// 各自拼错误句子，避免再次出现「一处改了、别处没改」的同源漂移。
+    /// - Parameter error: 任意取数错误。
+    /// - Returns: 按故障域给出的可操作中文短句。
     private static func message(for error: Error) -> String {
-        guard let weatherError = error as? WeatherError else {
-            return error.localizedDescription
-        }
-        switch weatherError {
-        case .badURL:
-            return "地址无效"
-        case .badStatus(let code):
-            return "服务器返回 \(code)"
-        case .network(let detail):
-            return "网络错误：\(detail)"
-        case .decoding(let detail):
-            return "数据解析失败：\(detail)"
-        }
+        FaultDomain.message(for: FaultDomain.classify(error))
     }
 }

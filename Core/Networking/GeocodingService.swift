@@ -32,6 +32,8 @@ actor GeocodingService: GeocodingProviding {
         let response: URLResponse
         do {
             (data, response) = try await session.data(from: url)
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            throw WeatherError.timeout(urlError.localizedDescription)
         } catch {
             throw WeatherError.network(error.localizedDescription)
         }
@@ -43,12 +45,8 @@ actor GeocodingService: GeocodingProviding {
             throw WeatherError.badStatus(http.statusCode)
         }
 
-        let dto: GeocodingResponse
-        do {
-            dto = try JSONDecoder().decode(GeocodingResponse.self, from: data)
-        } catch {
-            throw WeatherError.decoding(error.localizedDescription)
-        }
+        // 统一解码入口：失败携带 codingPath（可诊断性修复）。
+        let dto = try ResponseDecoding.decode(GeocodingResponse.self, from: data)
 
         return GeocodingMapper.cities(from: dto)
     }

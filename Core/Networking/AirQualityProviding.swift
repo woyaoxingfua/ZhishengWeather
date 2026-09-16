@@ -41,6 +41,8 @@ actor AirQualityService: AirQualityProviding {
         let response: URLResponse
         do {
             (data, response) = try await session.data(from: url)
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            throw WeatherError.timeout(urlError.localizedDescription)
         } catch {
             throw WeatherError.network(error.localizedDescription)
         }
@@ -52,12 +54,8 @@ actor AirQualityService: AirQualityProviding {
             throw WeatherError.badStatus(http.statusCode)
         }
 
-        let dto: AirQualityResponse
-        do {
-            dto = try JSONDecoder().decode(AirQualityResponse.self, from: data)
-        } catch {
-            throw WeatherError.decoding(error.localizedDescription)
-        }
+        // 统一解码入口：失败携带 codingPath（可诊断性修复）。
+        let dto = try ResponseDecoding.decode(AirQualityResponse.self, from: data)
 
         return AirQualityMapper.map(dto)
     }
