@@ -134,6 +134,24 @@ final class OpenMeteoEndpointTests: XCTestCase {
         XCTAssertEqual(query["wind_speed_unit"], "ms", "F-A 扩展不得破坏 wind_speed_unit=ms")
     }
 
+    // MARK: - B1 遥测补全（单请求内 +4 字段）
+
+    /// B1：current 单请求内追加 visibility / dew_point_2m / cloud_cover /
+    /// wind_gusts_10m，且**不新增第二个请求**（current 参数仅出现一次）。
+    func testURLCurrentFieldsContainB1TelemetryFields() throws {
+        let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 0, longitude: 0))
+        let current = try XCTUnwrap(try queryItems(url)["current"])
+        let fields = current.split(separator: ",").map(String.init)
+        for field in ["visibility", "dew_point_2m", "cloud_cover", "wind_gusts_10m"] {
+            XCTAssertTrue(fields.contains(field), "current 缺少 B1 字段 \(field)，实际=\(current)")
+        }
+        // 单请求纪律：current 参数只出现一次（无第二个天气请求）。
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        let items = try XCTUnwrap(components.queryItems)
+        XCTAssertEqual(items.filter { $0.name == "current" }.count, 1,
+                       "B1 字段必须并入既有 current 参数，禁止第二次请求")
+    }
+
     // MARK: - Helpers
 
     private func queryItems(_ url: URL) throws -> [String: String] {

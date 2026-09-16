@@ -84,6 +84,21 @@ struct WeatherSnapshot: Codable, Equatable, Sendable {
     /// `daily` 数组，仅单独存放在此。
     var yesterday: DailyForecast? = nil
 
+    /// B1 遥测补全：能见度（m，Open-Meteo 原值，可选，默认 nil）。
+    ///
+    /// 兼容核心（R3）：可选 + 合成 Codable，旧缓存无此键 → nil、解码不失败；
+    /// nil = 服务端未返回 / 旧缓存 → UI 显示 "--"（AC-A1-3 同款，绝不显示 0 冒充）。
+    var visibility: Double? = nil
+
+    /// B1 遥测补全：2m 露点温度（℃）。语义同 `visibility`。
+    var dewPoint: Double? = nil
+
+    /// B1 遥测补全：总云量（%）。语义同 `visibility`（0% 是合法值，仅 nil 显示 "--"）。
+    var cloudCover: Double? = nil
+
+    /// B1 遥测补全：10m 阵风（m/s）。语义同 `visibility`。
+    var windGusts: Double? = nil
+
     /// 本次取数时间。
     var fetchedAt: Date
 

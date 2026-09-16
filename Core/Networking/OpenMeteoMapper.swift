@@ -137,6 +137,11 @@ enum OpenMeteoMapper {
             sunrise: sunrise,
             sunset: sunset,
             yesterday: yesterday,
+            // B1 遥测补全：实况四字段透传（nil 原样保留 → UI 显示 "--"，不冒充 0）。
+            visibility: current.visibility,
+            dewPoint: current.dew_point_2m,
+            cloudCover: current.cloud_cover,
+            windGusts: current.wind_gusts_10m,
             fetchedAt: now
         )
     }

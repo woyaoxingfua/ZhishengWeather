@@ -561,4 +561,52 @@ final class OpenMeteoDecodingTests: XCTestCase {
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: json.data(using: .utf8)!)
         XCTAssertNil(dto.daily)
     }
+
+    // MARK: - B1 遥测字段（visibility / dew_point_2m / cloud_cover / wind_gusts_10m）
+
+    /// B1：四字段齐全 → 解码 + 映射透传。
+    func testCurrentB1TelemetryFieldsDecodeAndMap() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai", "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0,
+                       "relative_humidity_2m": 50, "apparent_temperature": 19.0,
+                       "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1,
+                       "visibility": 16000.0, "dew_point_2m": 8.5,
+                       "cloud_cover": 42, "wind_gusts_10m": 7.5 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": null
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(snapshot.visibility ?? -1, 16000.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.dewPoint ?? -1, 8.5, accuracy: 0.001)
+        XCTAssertEqual(snapshot.cloudCover ?? -1, 42.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.windGusts ?? -1, 7.5, accuracy: 0.001)
+    }
+
+    /// B1：四键整键缺失 → 解码成功（不炸）且映射为 nil（"绝不显示 0"）。
+    func testMissingB1TelemetryKeysDecodeAndMapToNil() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai", "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0,
+                       "relative_humidity_2m": 50, "apparent_temperature": 19.0,
+                       "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": null
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(snapshot.visibility, "缺键 → nil（UI 显示 --，不冒充 0）")
+        XCTAssertNil(snapshot.dewPoint)
+        XCTAssertNil(snapshot.cloudCover)
+        XCTAssertNil(snapshot.windGusts)
+    }
 }

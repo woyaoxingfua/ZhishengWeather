@@ -273,8 +273,9 @@ struct ContentView: View {
 
     // MARK: - ③ 指标格
 
-    /// 指标格（A1 后 2→3 格：风速 / 湿度 / 气压，ARCH-A1 §1.1）。
-    /// LazyVGrid 2 列布局下第 3 格自动换行，iPhone SE 375pt 无溢出风险。
+    /// 指标格（A1 后 3 格 + B1 遥测补全 4 格 = 7 格：风速 / 湿度 / 气压 /
+    /// 能见度 / 露点 / 云量 / 阵风）。
+    /// LazyVGrid 2 列布局下自动换行，iPhone SE 375pt 无溢出风险。
     private func metricsSection(snapshot: WeatherSnapshot) -> some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                   spacing: 12) {
@@ -288,6 +289,19 @@ struct ContentView: View {
             MetricCell(icon: "barometer",
                        value: Self.pressureText(snapshot.pressureMSL),
                        caption: "气压")
+            // B1 遥测补全四格。nil → "--"（绝不显示 0 冒充；0% 云量等合法 0 值原样显示）。
+            MetricCell(icon: "eye",
+                       value: Self.visibilityText(snapshot.visibility),
+                       caption: "能见度")
+            MetricCell(icon: "thermometer.medium",
+                       value: Self.dewPointText(snapshot.dewPoint),
+                       caption: "露点")
+            MetricCell(icon: "cloud.fill",
+                       value: Self.cloudCoverText(snapshot.cloudCover),
+                       caption: "云量")
+            MetricCell(icon: "wind",
+                       value: Self.windGustText(snapshot.windGusts),
+                       caption: "阵风")
         }
     }
 
@@ -462,5 +476,32 @@ struct ContentView: View {
     private static func pressureText(_ pressure: Double?) -> String {
         guard let pressure else { return "-- hPa" }
         return String(format: "%.1f hPa", pressure)
+    }
+
+    /// 能见度文案（Open-Meteo 单位 m）：≥1 km 用 km（1 位小数），否则 m；
+    /// nil / 非有限值 → "--"（绝不显示 0 冒充）。
+    private static func visibilityText(_ meters: Double?) -> String {
+        guard let meters, meters.isFinite else { return "--" }
+        if meters >= 1000 { return String(format: "%.1f km", meters / 1000) }
+        return String(format: "%.0f m", meters)
+    }
+
+    /// 露点文案：整数摄氏度；nil / 非有限值 → "--"。
+    private static func dewPointText(_ celsius: Double?) -> String {
+        guard let celsius, celsius.isFinite else { return "--" }
+        return "\(Int(celsius.rounded()))°"
+    }
+
+    /// 云量文案：整数百分比；nil / 非有限值 → "--"（0% 为合法值，原样显示）。
+    private static func cloudCoverText(_ percent: Double?) -> String {
+        guard let percent, percent.isFinite else { return "--" }
+        return "\(Int(percent.rounded()))%"
+    }
+
+    /// 阵风文案：随单位偏好换算，1 位小数；nil / 非有限值 → "--"。
+    private static func windGustText(_ ms: Double?) -> String {
+        guard let ms, ms.isFinite else { return "--" }
+        let value = UnitPreference.displayWindSpeed(ms: ms)
+        return "\(String(format: "%.1f", value)) \(UnitPreference.windSpeedSymbol())"
     }
 }

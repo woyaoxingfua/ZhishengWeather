@@ -55,6 +55,11 @@ final class WeatherSnapshotCacheCompatTests: XCTestCase {
         XCTAssertNil(snapshot.sunrise, "旧缓存无 sunrise 键必须解码为 nil（A1-9）")
         XCTAssertNil(snapshot.sunset, "旧缓存无 sunset 键必须解码为 nil（A1-9）")
         XCTAssertNil(snapshot.yesterday, "旧缓存无 yesterday 键必须解码为 nil（A1-9）")
+        // B1 遥测补全（R3）：旧缓存无 4 个新键 → 解码成功且全 nil。
+        XCTAssertNil(snapshot.visibility, "旧缓存无 visibility 键必须解码为 nil（B1）")
+        XCTAssertNil(snapshot.dewPoint, "旧缓存无 dewPoint 键必须解码为 nil（B1）")
+        XCTAssertNil(snapshot.cloudCover, "旧缓存无 cloudCover 键必须解码为 nil（B1）")
+        XCTAssertNil(snapshot.windGusts, "旧缓存无 windGusts 键必须解码为 nil（B1）")
         // 其余字段值不变
         XCTAssertEqual(snapshot.location.name, "北京")
         XCTAssertEqual(snapshot.location.latitude, 39.9042, accuracy: 1e-9)
@@ -182,5 +187,39 @@ final class WeatherSnapshotCacheCompatTests: XCTestCase {
 
         XCTAssertNil(decodedPayload.snapshot.daily)
         XCTAssertEqual(decodedPayload.snapshot, legacy)
+    }
+
+    // MARK: - B1 遥测字段往返
+
+    /// B1 遥测四字段往返编解码等值（可选 + 合成 Codable）。
+    func testSnapshotWithB1TelemetryFieldsRoundTripsThroughJSON() throws {
+        let date = Date(timeIntervalSinceReferenceDate: 1_700_000_000)
+        let snapshot = WeatherSnapshot(
+            location: .beijing,
+            temperature: 23.4,
+            apparentTemperature: 21.0,
+            weatherCode: 2,
+            windSpeed: 3.2,
+            windDirection: 135,
+            humidity: 58,
+            isDay: true,
+            hourly: [HourlyPoint(time: date, temperature: 23.4, weatherCode: 2)],
+            dailyHigh: 26.1,
+            dailyLow: 15.2,
+            visibility: 16000.0,
+            dewPoint: 8.5,
+            cloudCover: 42.0,
+            windGusts: 7.5,
+            fetchedAt: date
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WeatherSnapshot.self, from: data)
+
+        XCTAssertEqual(decoded, snapshot, "含 B1 遥测字段的快照必须往返编解码等值")
+        XCTAssertEqual(decoded.visibility ?? -1, 16000.0, accuracy: 0.001)
+        XCTAssertEqual(decoded.dewPoint ?? -1, 8.5, accuracy: 0.001)
+        XCTAssertEqual(decoded.cloudCover ?? -1, 42.0, accuracy: 0.001)
+        XCTAssertEqual(decoded.windGusts ?? -1, 7.5, accuracy: 0.001)
     }
 }

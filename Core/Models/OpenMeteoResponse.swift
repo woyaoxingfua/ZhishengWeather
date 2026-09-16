@@ -40,6 +40,15 @@ struct OpenMeteoResponse: Codable, Sendable {
         let pressure_msl: Double?
         /// 地面气压（hPa）。A1 新增，整键可选（同上）。
         let surface_pressure: Double?
+        /// B1 遥测补全：能见度（m）。整键可选 + 默认 nil：服务端省略键 / 旧测试
+        /// 零改动，解码不炸（合成 Codable 对缺失 Optional 键返回 nil）。
+        var visibility: Double? = nil
+        /// B1 遥测补全：2m 露点温度（℃）。可选 + 默认 nil。
+        var dew_point_2m: Double? = nil
+        /// B1 遥测补全：总云量（%）。可选 + 默认 nil。
+        var cloud_cover: Double? = nil
+        /// B1 遥测补全：10m 阵风（m/s，随 wind_speed_unit=ms）。可选 + 默认 nil。
+        var wind_gusts_10m: Double? = nil
     }
 
     /// 逐小时序列。

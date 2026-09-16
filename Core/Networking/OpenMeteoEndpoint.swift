@@ -35,7 +35,7 @@ enum OpenMeteoEndpoint {
     /// 基础地址。
     static let baseURLString = "https://api.open-meteo.com/v1/forecast"
 
-    /// 实况字段（A1 后共 9 字段）。
+    /// 实况字段（A1 后 9 字段；B1 遥测补全 +4 = 13 字段）。
     static let currentFields = [
         "temperature_2m",
         "relative_humidity_2m",
@@ -47,7 +47,13 @@ enum OpenMeteoEndpoint {
         // A1-1：气压双键。领域层只在 mapper 做一次 msl→surface 回退，
         // 取回退语义（ARCH-A1 §1.1）。
         "pressure_msl",
-        "surface_pressure"
+        "surface_pressure",
+        // B1 遥测补全：单请求内追加 4 个实况字段（**禁止**第二次请求）——
+        // 能见度 / 2m 露点 / 总云量 / 10m 阵风。
+        "visibility",
+        "dew_point_2m",
+        "cloud_cover",
+        "wind_gusts_10m"
     ].joined(separator: ",")
 
     /// 逐小时字段。
