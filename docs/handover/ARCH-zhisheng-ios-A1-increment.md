@@ -270,3 +270,29 @@ sequenceDiagram
 ---
 
 *本文件只新增，未改动任何 `.swift` / `project.yml` / CI / PRD / 其他 ARCH 文档；未执行 git 写操作。*
+
+
+---
+
+## ⚠️ 修正记录（run37 / 2026-09）
+
+**§1.4 原论断有误**：本文档原写"请求带 `timeformat=unixtime` 后，
+Open-Meteo 的 `daily.sunrise/sunset` **仍是 ISO 本地墙钟字符串**"。
+
+**真机实测（2026-09-15 起）**：该参数下 `daily.sunrise/sunset`
+返回的是 **epoch 整数**，例如 `sunrise: [1789422908]`、`sunset: [1789467833]`。
+原 DTO 声明 `[String?]?` → 真机 JSON 解码 100% 抛 `typeMismatch`
+→ 主屏恒显示"格式问题"，而 CI 单测因 Stub 用 ISO 字符串而全绿（测试盲区）。
+
+**现行实现**：
+- DTO 字段改为 `[FlexibleTime?]?`（`Core/Models/OpenMeteoResponse.swift`），
+  `FlexibleTime` 对 epoch 数字与 ISO 字符串双态容忍；
+- Mapper 归一：`.epoch` → `Date(timeIntervalSince1970:)`；
+  `.iso` → `ISOTimeStringDecoder`（保留为部分部署的兜底路径）；
+- 回归用例：`OpenMeteoDecodingTests.testEpochFormSunriseDecodesAndMaps`、
+  `testMixedFormSunTimesDecodePerElement`，
+  `OpenMeteoMapperTests.testEpochFormSunTimesNormalizeToDate`、
+  `testEpochFormAppliesToDailyRows`。
+
+**教训**：设计文档对第三方 API 行为的断言必须经**真实响应**验证，
+不能只靠单测 Stub（Stub 与实现同源假设 = 同源盲区）。

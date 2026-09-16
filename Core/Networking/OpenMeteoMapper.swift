@@ -14,7 +14,8 @@
 //      **daily 输出自今日起截**（snapshot.daily[0] 恒为今天，§3 关键点 3），
 //      下游（逐日区块 / Widget Large prefix(3) / A2 摘要）对位移无感知；
 //    - pressureMSL = pressure_msl ?? surface_pressure（一次回退定值）；
-//    - sunrise/sunset 经 ISOTimeStringDecoder（offset 时区）解码注入；
+//    - sunrise/sunset 经 FlexibleTime 双态归一（epoch 直译 / ISO 走
+//      ISOTimeStringDecoder）后注入；
 //    - yesterday = todayIndex-1 行（<0 → nil）。
 //  `now` 注入纪律不变（跨层纪律 §7.3 / 团队硬约束 ⑤）。
 //
@@ -109,7 +110,7 @@ enum OpenMeteoMapper {
                                               utcOffsetSeconds: response.utc_offset_seconds,
                                               index: index - 1)
             }
-            // A1-4：今日日出/日落（字符串经独立解码器；坏串 → nil → UI 隐藏该段）。
+            // A1-4：今日日出/日落（run37 起双态容忍；nil → UI 隐藏该段）。
             if let index = todayIndex {
                 sunrise = decodedSunTime(from: dailyBlock.sunrise, at: index,
                                          utcOffsetSeconds: response.utc_offset_seconds)
@@ -213,7 +214,7 @@ enum OpenMeteoMapper {
     /// - `precipitation_probability_max`：整体缺失 → 每行 nil；
     ///   元素 null / 越界 → 该行 nil（AC-A5：绝不把「未知」当 0）；
     /// - `sunrise`/`sunset`：整键缺失 → 全行 nil；元素 null / 坏串 → 该行 nil
-    ///   （经 ISOTimeStringDecoder，与 epoch 解码路径隔离）。
+    ///   （FlexibleTime 双态：epoch 直译，ISO 走 ISOTimeStringDecoder）。
     ///
     /// **A1 位移裁定（§3 关键点 3，必守）**：输出**从 `startIndex`（今日）起截**，
     /// 保证「snapshot.daily[0] 恒为今天」的全仓既有语义不变——否则逐日区块、
@@ -299,18 +300,26 @@ enum OpenMeteoMapper {
         )
     }
 
-    /// 从 DTO 的 sunrise/sunset 字符串数组中解码指定行的绝对时刻。
-    /// 唯一调用 `ISOTimeStringDecoder` 的位置（字符串不出 Networking 层，铁律 4）。
+    /// 从 DTO 的 sunrise/sunset 数组中解出指定行的绝对时刻（run37 双态）。
+    /// epoch 形态直译 `Date(timeIntervalSince1970:)`；
+    /// ISO 形态走 `ISOTimeStringDecoder`（字符串不出 Networking 层）。
     ///
     /// - Parameters:
     ///   - times: DTO 字符串数组（整键缺失为 nil）。
     ///   - index: 行下标；越界 / 元素 null / 坏串 → nil。
     ///   - utcOffsetSeconds: 同响应根级时区偏移（秒）。
     /// - Returns: 解析结果；任何缺失路径均 nil（UI 隐藏对应段，不冒充）。
-    private static func decodedSunTime(from times: [String?]?,
+    private static func decodedSunTime(from times: [FlexibleTime?]?,
                                        at index: Int,
                                        utcOffsetSeconds: Int) -> Date? {
-        guard let times, index < times.count, let string = times[index] else { return nil }
-        return ISOTimeStringDecoder.date(from: string, utcOffsetSeconds: utcOffsetSeconds)
+        guard let times, index < times.count, let flex = times[index] else { return nil }
+        switch flex {
+        case .epoch(let seconds):
+            // run37 修正：timeformat=unixtime 下实测 API 返回 epoch 数字。
+            return Date(timeIntervalSince1970: seconds)
+        case .iso(let string):
+            // 兼容 ISO 字符串形态（部分部署）。
+            return ISOTimeStringDecoder.date(from: string, utcOffsetSeconds: utcOffsetSeconds)
+        }
     }
 }

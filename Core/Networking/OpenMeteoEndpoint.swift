@@ -17,9 +17,10 @@
 //    （ARCH-zhisheng-ios-FA-increment §2.4 / A-G3 前提）。
 //  v1.4 修订（A1 数据拉满，ARCH-zhisheng-ios-A1-increment §1.0 参数对照表）：
 //    - current 追加 pressure_msl、surface_pressure（7→9 字段，A1-1）；
-//    - daily 追加 sunrise、sunset（4→6 字段，A1-4）——⚠️ 二者绕过
-//      timeformat=unixtime 全局参数，仍以 ISO 本地墙钟字符串返回，
-//      解码走 ISOTimeStringDecoder 独立路径（禁止混入 epoch 解析）；
+//    - daily 追加 sunrise、sunset（4→6 字段，A1-4）——⚠️ **run37 真机修正**：
+//      二者**同样**受 timeformat=unixtime 影响，实测返回 epoch 整数
+//      （原"绕过 unixtime 仍是 ISO"的论断有误 → 真机解码全失败）。
+//      现由 FlexibleTime 双态容忍，mapper 归一为 DateTime；
 //    - forecast_days 显式 7→16（A1-3）；
 //    - 新增 past_days=1（A1-5）——⚠️ 触发 daily[0] 由「今天」变「昨天」，
 //      mapper 侧 todayIndex 定位配套（OpenMeteoMapper，最高静默回归风险点）。
@@ -54,13 +55,14 @@ enum OpenMeteoEndpoint {
     static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability"].joined(separator: ",")
 
     /// 逐日字段（v1.1 新增高低温；F-A 追加天气码与最大降水概率；
-    /// A1 追加 sunrise/sunset——ISO 墙钟字符串，与 unixtime 解码路径隔离）。
+    /// A1 追加 sunrise/sunset——run37 实测在 unixtime 下返回 epoch 整数，
+    /// 由 FlexibleTime 双态容忍解码）。
     static let dailyFields = [
         "temperature_2m_max",
         "temperature_2m_min",
         "weather_code",
         "precipitation_probability_max",
-        // A1-4：日出日落（ISO 本地墙钟字符串，如 "2026-09-11T05:53"）。
+        // A1-4：日出日落（unixtime 下为 epoch 秒；部分部署为 ISO 字符串）。
         "sunrise",
         "sunset",
         // A2-2：UV 指数峰值（摘要引擎 UV 规则 + A2-5 逐日展开预埋）。

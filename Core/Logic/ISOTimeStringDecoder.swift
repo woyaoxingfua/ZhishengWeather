@@ -4,14 +4,15 @@
 //
 //  ISO 本地墙钟字符串 → Date 的**独立解码器**（A1-4，ARCH-A1 §1.4 四铁律）。
 //
-//  背景：Open-Meteo 带 `timeformat=unixtime` 请求时，daily.sunrise/sunset
-//  **仍以 ISO 本地墙钟字符串返回**（如 "2026-09-11T05:53"，无时区后缀），
-//  绕过了全局 unixtime 参数 —— 现有"一律 epoch 解码"纪律在此失效。
+//  背景（⚠️ run37 真机修正）：ARCH-A1 §1.4 原论断为"Open-Meteo 带
+//  `timeformat=unixtime` 时 daily.sunrise/sunset 仍以 ISO 本地墙钟字符串
+//  返回"。**真机实测该论断有误**——同一参数下二者返回 **epoch 整数**
+//  （曾致真机 100% 解码失败）。现 DTO 用 FlexibleTime 双态容忍，
+//  本解码器保留为 **ISO 形态（部分部署）的兜底路径**，不再承担主路径。
 //
-//  四铁律（缺一不可）：
-//  1. **独立解码器**：与 epoch 解码（`Date(timeIntervalSince1970:)`）完全隔离，
-//     禁止混用（PRD R3）。epoch 路径不触碰 sunrise/sunset，本路径不触碰
-//     其他时间字段。
+//  设计约束（缺一不可）：
+//  1. **与 epoch 路径隔离**：与 `Date(timeIntervalSince1970:)` 完全分离，
+//     仅由 FlexibleTime 的 `.iso` 分支调用（PRD R3 的"不混用"精神保留）。
 //  2. **时区来源 = 同响应的 `utc_offset_seconds`**：不引入 TimeZone.current、
 //     不依赖设备时区，字符串按"该偏移下的墙钟"解释。
 //  3. **手工分量解析**：按 `T`/`:`/`-` 切分出年月日时分分量，

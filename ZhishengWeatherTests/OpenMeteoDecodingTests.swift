@@ -305,7 +305,8 @@ final class OpenMeteoDecodingTests: XCTestCase {
                        "msl 为 null 时必须回退 surface_pressure")
     }
 
-    /// daily.sunrise/sunset 正常解码为 String 数组（DTO 只存 String，A1-4 铁律 4）。
+    /// daily.sunrise/sunset 支持 **ISO 字符串形态**（run37 起 DTO 为 FlexibleTime，
+    /// 部分部署仍可能返回 ISO 墙钟字符串；真机主流形态见 epoch 用例）。
     func testDailySunriseSunsetDecodeAsStrings() throws {
         let json = """
         {
@@ -327,7 +328,8 @@ final class OpenMeteoDecodingTests: XCTestCase {
         """
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
         let daily = try XCTUnwrap(dto.daily)
-        XCTAssertEqual(daily.sunrise?.first, "2026-09-11T05:53")
+        XCTAssertEqual(daily.sunrise?.first?.isoString, "2026-09-11T05:53")
+        XCTAssertEqual(daily.sunset?.first?.isoString, "2026-09-11T18:22")
         XCTAssertNil(daily.sunset?[1], "sunset null 元素必须解码为 nil（极地日期形态）")
 
         // mapper 注入：今日行的字符串经 ISOTimeStringDecoder 解码为 Date。
@@ -335,6 +337,66 @@ final class OpenMeteoDecodingTests: XCTestCase {
                                            now: Date(timeIntervalSince1970: TimeInterval(1_700_000_000)))
         XCTAssertNotNil(snapshot.sunrise, "今日行 sunrise 字符串合法 → 解码出 Date")
         XCTAssertNotNil(snapshot.sunset)
+    }
+
+    /// ★ 真机回归（run37）：`timeformat=unixtime` 下 API 返回 epoch 数字，
+    /// DTO 双态容忍解码必须通过，并归一为正确 Date。
+    /// 修复前该 JSON 直接抛 typeMismatch → 真机 100% 报"格式问题"。
+    func testEpochFormSunriseDecodesAndMaps() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": {
+            "time": [1700000000],
+            "temperature_2m_max": [26.1],
+            "temperature_2m_min": [15.2],
+            "weather_code": [0],
+            "sunrise": [1789422908],
+            "sunset": [1789472520]
+          }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let daily = try XCTUnwrap(dto.daily)
+        XCTAssertEqual(daily.sunrise?.first?.epochSeconds, 1_789_422_908,
+                       "epoch 数字必须解为 .epoch，而非解码失败")
+        XCTAssertEqual(daily.sunset?.first?.epochSeconds, 1_789_472_520)
+
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(snapshot.sunrise, Date(timeIntervalSince1970: 1_789_422_908),
+                       "epoch 直译，不做 +8h 位移")
+        XCTAssertEqual(snapshot.sunset, Date(timeIntervalSince1970: 1_789_472_520))
+    }
+
+    /// 混合形态：数组内首元素 epoch、次元素 ISO 字符串——逐元素独立判定。
+    func testMixedFormSunTimesDecodePerElement() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 19.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": {
+            "time": [1700000000],
+            "temperature_2m_max": [26.1],
+            "temperature_2m_min": [15.2],
+            "sunrise": [1789422908],
+            "sunset": ["2026-09-11T18:22"]
+          }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let daily = try XCTUnwrap(dto.daily)
+        XCTAssertEqual(daily.sunrise?.first?.epochSeconds, 1_789_422_908)
+        XCTAssertEqual(daily.sunset?.first?.isoString, "2026-09-11T18:22")
     }
 
     /// daily.sunrise 整键缺失 → 解码成功（不炸）且 snapshot.sunrise == nil。

@@ -533,8 +533,8 @@ final class OpenMeteoMapperTests: XCTestCase {
             temperature_2m_min: [17.0],
             weather_code: [2],
             precipitation_probability_max: nil,
-            sunrise: ["2026-09-11T05:53"],
-            sunset: ["garbage"],
+            sunrise: [.iso("2026-09-11T05:53")],
+            sunset: [.iso("garbage")],
             uv_index_max: nil)
 
         let snapshot = OpenMeteoMapper.map(
@@ -546,6 +546,58 @@ final class OpenMeteoMapperTests: XCTestCase {
         // 合法串经独立解码器（+8h 偏移）→ 当地 05:53；坏串 → nil。
         XCTAssertNotNil(snapshot.sunrise, "合法 sunrise 字符串应解码出 Date")
         XCTAssertNil(snapshot.sunset, "坏串必须映射为 nil，绝不冒充")
+    }
+
+    /// ★ 真机回归（run37 根因）：`timeformat=unixtime` 下 Open-Meteo 的
+    /// daily.sunrise/sunset 实测返回 **epoch 数字**而非 ISO 字符串。
+    /// 修复前 DTO 声明 `[String?]?` → 真机全量解码失败 → UI 永远"格式问题"。
+    /// 本用例锁死 epoch 形态必须归一为正确 Date（UTC 时刻，不做 +8h 位移）。
+    func testEpochFormSunTimesNormalizeToDate() throws {
+        // 1789422908 = 2026-09-15T21:55:08Z（真机采样值量级）。
+        let sunriseEpoch: Double = 1_789_422_908
+        let sunsetEpoch: Double = 1_789_472_520
+        let daily = OpenMeteoResponse.Daily(
+            time: [t0],
+            temperature_2m_max: [27.0],
+            temperature_2m_min: [17.0],
+            weather_code: [2],
+            precipitation_probability_max: nil,
+            sunrise: [.epoch(sunriseEpoch)],
+            sunset: [.epoch(sunsetEpoch)],
+            uv_index_max: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [2], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        XCTAssertEqual(snapshot.sunrise, Date(timeIntervalSince1970: sunriseEpoch),
+                       "epoch 形态必须直译，不得再走 ISO 解析或做时区位移")
+        XCTAssertEqual(snapshot.sunset, Date(timeIntervalSince1970: sunsetEpoch))
+    }
+
+    /// 逐日行的 sunrise 亦支持 epoch（A2-5 逐日展开复用面）。
+    func testEpochFormAppliesToDailyRows() throws {
+        let day1 = Double(t0)
+        let day2 = day1 + 86_400
+        let daily = makeDaily(times: [t0, t0 + 86_400],
+                              maxTemps: [26.0, 25.0],
+                              minTemps: [15.0, 14.0],
+                              codes: [1, 2],
+                              precip: nil,
+                              sunrise: [.epoch(day1), .epoch(day2)],
+                              sunset: [.epoch(day1 + 43_200), .epoch(day2 + 43_200)])
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [1], daily: daily),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+        XCTAssertEqual(snapshot.sunrise, Date(timeIntervalSince1970: day1))
+        // 逐日行各自取值，非复制今日
+        let firstDaily = try XCTUnwrap(snapshot.daily?.first)
+        XCTAssertEqual(firstDaily.sunrise, Date(timeIntervalSince1970: day1))
+        XCTAssertNotEqual(snapshot.daily?.last?.sunrise, firstDaily.sunrise)
     }
 
     /// hourly 24 条截窗（A1-2：12→24，截窗逻辑零改动）。
@@ -568,8 +620,8 @@ final class OpenMeteoMapperTests: XCTestCase {
             temperature_2m_min: [21.0, 17.0],
             weather_code: [1, 2],
             precipitation_probability_max: nil,
-            sunrise: ["2026-09-10T05:54", "2026-09-11T05:53"],
-            sunset: ["2026-09-10T18:23", "2026-09-11T18:22"],
+            sunrise: [.iso("2026-09-10T05:54"), .iso("2026-09-11T05:53")],
+            sunset: [.iso("2026-09-10T18:23"), .iso("2026-09-11T18:22")],
             uv_index_max: nil)
 
         let snapshot = OpenMeteoMapper.map(
@@ -653,14 +705,15 @@ final class OpenMeteoMapperTests: XCTestCase {
     }
 
     /// F-A/A1：构造 DTO 逐日块（codes / precip / sunrise / sunset 可传 nil 模拟键缺失；
-    /// sunrise/sunset 为 ISO 墙钟字符串数组，与 time 逐行对应，CI run11 修复）。
+    /// sunrise/sunset 为 **FlexibleTime** 数组（run37：真机实测 API 在
+    /// timeformat=unixtime 下返回 epoch 数字，测试须显式用 .epoch/.iso 指定形态）。
     private func makeDaily(times: [Int],
                            maxTemps: [Double],
                            minTemps: [Double],
                            codes: [Int]? = nil,
                            precip: [Int?]? = nil,
-                           sunrise: [String?]? = nil,
-                           sunset: [String?]? = nil,
+                           sunrise: [FlexibleTime?]? = nil,
+                           sunset: [FlexibleTime?]? = nil,
                            uv: [Double?]? = nil) -> OpenMeteoResponse.Daily {
         OpenMeteoResponse.Daily(
             time: times,

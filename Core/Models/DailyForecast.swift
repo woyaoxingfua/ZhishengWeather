@@ -29,8 +29,9 @@ struct DailyForecast: Codable, Equatable, Identifiable, Sendable {
     /// nil = 服务端未返回 / null → UI 显示 "--"，**绝不显示 0%**（AC-A5）。
     var precipitationProbability: Int?
     /// 当日日出（A1 新增，可选）。
-    /// 经 `ISOTimeStringDecoder` 从 ISO 墙钟字符串解码；
-    /// nil = 字符串缺失 / 解析失败 / 旧缓存无此键（UI 隐藏该段）。
+    /// 由 mapper 归一：epoch 形态直译 `Date(timeIntervalSince1970:)`，
+    /// ISO 形态经 `ISOTimeStringDecoder`；
+    /// nil = 值缺失 / 解析失败 / 旧缓存无此键（UI 隐藏该段）。
     var sunrise: Date? = nil
     /// 当日日落（A1 新增，可选）。语义同 `sunrise`。
     var sunset: Date? = nil
