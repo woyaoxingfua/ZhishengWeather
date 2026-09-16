@@ -31,9 +31,14 @@ enum WeatherTimeFormatter {
     // MARK: - 纯裁定（无共享状态，可纯单测）
 
     /// IANA 标识 → `TimeZone`；nil / 非法标识 → 设备当前时区。
+    ///
+    /// **`nonisolated`**：本函数是**无共享状态的纯裁定**，显式脱离类型级 `@MainActor`，
+    /// 供 **Widget target 的非隔离格式化路径**复用（Widget 视图计算属性在 Xcode 15.4 下
+    /// 非隔离，不能调用主 actor 成员，见 CI-pitfalls P-06 / WidgetShared.swift 决策说明）。
+    /// 格式化（触碰缓存）仍留在本类型的 `@MainActor` 侧。
     /// - Parameter identifier: 例如 "Asia/Shanghai"、"America/New_York"。
     /// - Returns: 解析出的时区；无法解析时返回 `.current`（绝不崩、绝不硬编码 +8）。
-    static func resolveTimeZone(identifier: String?) -> TimeZone {
+    nonisolated static func resolveTimeZone(identifier: String?) -> TimeZone {
         guard let identifier, let timeZone = TimeZone(identifier: identifier) else {
             return .current
         }

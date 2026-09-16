@@ -196,7 +196,7 @@ struct LargeWeatherView: View {
     /// 单列：时刻 / 温度。
     private func hourlyColumn(_ point: HourlyPoint) -> some View {
         VStack(spacing: 3) {
-            Text(Self.hourFormatter.string(from: point.time))
+            Text(WidgetTimeFormatter.hourLabel(point.time, in: timeZone))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.secondaryText)
             Text("\(Int(point.temperature.rounded()))°")
@@ -287,8 +287,11 @@ struct LargeWeatherView: View {
 
     private var updateText: String {
         guard let payload = entry.payload else { return "" }
-        return "更新于 \(WidgetTimeFormatter.hourMinute.string(from: payload.updatedAt))"
+        return "更新于 \(WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone))"
     }
+
+    /// D-4：时刻渲染时区 = 共享载荷携带的城市时区；缺省 → 设备时区。
+    private var timeZone: TimeZone { WidgetTimeFormatter.timeZone(for: entry.payload) }
 
     private var weatherCode: Int {
         snapshot?.weatherCode ?? -1
@@ -303,18 +306,11 @@ struct LargeWeatherView: View {
     /// 先例见原 HourlyStrip 的昼夜启发式），不构造当前时刻 Date。
     private func dayLabel(for day: DailyForecast) -> String {
         Calendar.current.isDateInToday(day.date) ? "今天"
-            : WidgetTimeFormatter.weekdayShort.string(from: day.date)
+            : WidgetTimeFormatter.weekdayShort(day.date, in: timeZone)
     }
 
     /// 「↑25° ↓15°」。
     private func temperatureRangeText(for day: DailyForecast) -> String {
         "↑\(Int(UnitPreference.displayTemperature(celsius: day.tempMax).rounded()))° ↓\(Int(UnitPreference.displayTemperature(celsius: day.tempMin).rounded()))°"
     }
-
-    /// 逐时时刻格式（_widget 本地时区由系统环境提供）。
-    static let hourFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH时"
-        return formatter
-    }()
 }

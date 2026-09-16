@@ -167,7 +167,10 @@ final class WeatherViewModel {
             // AC-B16：会话内记忆该城市最近一次已知温度。
             snapshotsByCity[selectedCity.id] = snapshot
 
-            let payload = SharedWeatherPayload(snapshot: snapshot, updatedAt: Date())
+            // D-4（Widget 时区补齐）：把选中城市的 IANA 时区随快照写入共享载荷，
+            // Widget 才能在异地城市按当地时区渲染时刻（缺省 → Widget 回退设备时区）。
+            let payload = SharedWeatherPayload(snapshot: snapshot, updatedAt: Date(),
+                                               timeZoneIdentifier: selectedCity.timeZoneIdentifier)
             do {
                 try store.save(payload)
 
@@ -313,7 +316,9 @@ final class WeatherViewModel {
 
             snapshotsByCity[city.id] = snapshot
 
-            let payload = SharedWeatherPayload(snapshot: snapshot, updatedAt: Date())
+            // D-4（Widget 时区补齐）：写入目标城市的 IANA 时区（同 refresh 路径）。
+            let payload = SharedWeatherPayload(snapshot: snapshot, updatedAt: Date(),
+                                               timeZoneIdentifier: city.timeZoneIdentifier)
             do {
                 try store.save(payload)
                 if !AppGroupStore.isSharedContainerAvailable {

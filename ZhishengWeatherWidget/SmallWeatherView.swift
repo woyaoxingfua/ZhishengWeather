@@ -77,8 +77,11 @@ struct SmallWeatherView: View {
 
     private var timeText: String {
         guard let payload = entry.payload else { return "" }
-        return WidgetTimeFormatter.hourMinute.string(from: payload.updatedAt)
+        return WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
     }
+
+    /// D-4：时刻渲染时区 = 共享载荷携带的城市时区；缺省 → 设备时区。
+    private var timeZone: TimeZone { WidgetTimeFormatter.timeZone(for: entry.payload) }
 
     private var weatherCode: Int {
         snapshot?.weatherCode ?? -1
