@@ -584,10 +584,14 @@ struct ContentView: View {
         return directions[index]
     }
 
-    /// 气压文案：hPa 保留 1 位小数；nil → "--"（AC-A1-3，绝不显示 0 冒充）。
+    /// 气压文案：随单位偏好换算并输出符号；小数位 hPa=1 / mmHg=0 / inHg=2。
+    /// nil → "-- <符号>"（AC-A1-3，绝不显示 0 冒充）。分支逻辑全在 UnitPreference 纯函数内。
     private static func pressureText(_ pressure: Double?) -> String {
-        guard let pressure else { return "-- hPa" }
-        return String(format: "%.1f hPa", pressure)
+        let symbol = UnitPreference.pressureSymbol()
+        guard let pressure else { return "-- \(symbol)" }
+        let digits = UnitPreference.pressureFractionDigits(for: UnitPreference.pressureUnit())
+        let value = UnitPreference.displayPressure(hPa: pressure)
+        return String(format: "%.\(digits)f \(symbol)", value)
     }
 
     /// 能见度文案（Open-Meteo 单位 m）：≥1 km 用 km（1 位小数），否则 m；

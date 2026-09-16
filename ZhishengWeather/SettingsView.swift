@@ -31,6 +31,7 @@ struct SettingsView: View {
 
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
     @State private var windSpeedUnit = UnitPreference.windSpeedUnit()
+    @State private var pressureUnit = UnitPreference.pressureUnit()
     /// 数据链路健康快照（诊断用；进入页面时从记录器读取一次，进程内内存）。
     @State private var linkHealth: [LinkHealth] = []
 
@@ -51,6 +52,16 @@ struct SettingsView: View {
                 }
                 .onChange(of: windSpeedUnit) { _, newValue in
                     UnitPreference.setWindSpeedUnit(newValue)
+                }
+
+                // D-2：气压单位独立设置（原版「温度/风速/气压」三档独立；走共享容器，Widget 同步）。
+                Picker("气压", selection: $pressureUnit) {
+                    Text("hPa").tag("hpa")
+                    Text("mmHg").tag("mmhg")
+                    Text("inHg").tag("inhg")
+                }
+                .onChange(of: pressureUnit) { _, newValue in
+                    UnitPreference.setPressureUnit(newValue)
                 }
             }
 
