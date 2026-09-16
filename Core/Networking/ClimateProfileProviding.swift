@@ -85,7 +85,9 @@ actor ClimateProfileService: ClimateProfileProviding {
 
     private static func calendar(for city: City) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = city.timeZoneIdentifier.flatMap(TimeZone(identifier:)) ?? .current
+        // 用闭包而非 `flatMap(TimeZone(identifier:))`：把初始化器当函数引用传给 flatMap
+        // 在 Swift 5.9 下编译失败（CI run51 实测 "cannot find 'TimeZone(identifier:)'"）。
+        calendar.timeZone = city.timeZoneIdentifier.flatMap { TimeZone(identifier: $0) } ?? .current
         return calendar
     }
 
