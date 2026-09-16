@@ -279,7 +279,7 @@ struct ContentView: View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                   spacing: 12) {
             MetricCell(icon: "wind",
-                       value: "\(String(format: "%.1f", snapshot.windSpeed)) m/s \(Self.windDirectionText(snapshot.windDirection))",
+                       value: "\(String(format: "%.1f", UnitPreference.displayWindSpeed(ms: snapshot.windSpeed))) \(UnitPreference.windSpeedSymbol()) \(Self.windDirectionText(snapshot.windDirection))",
                        caption: "风速")
             MetricCell(icon: "humidity.fill",
                        value: "\(snapshot.humidity)%",

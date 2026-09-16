@@ -12,28 +12,6 @@
 
 import SwiftUI
 
-/// 单位偏好（持久化键集中管理）。
-enum UnitPreference {
-    static let temperatureKey = "zs.weather.unit.temperature"  // "celsius" | "fahrenheit"
-    static let windSpeedKey = "zs.weather.unit.wind"           // "ms" | "kmh"
-
-    static func temperatureUnit() -> String {
-        UserDefaults.standard.string(forKey: temperatureKey) ?? "celsius"
-    }
-
-    static func windSpeedUnit() -> String {
-        UserDefaults.standard.string(forKey: windSpeedKey) ?? "ms"
-    }
-
-    static func setTemperatureUnit(_ unit: String) {
-        UserDefaults.standard.set(unit, forKey: temperatureKey)
-    }
-
-    static func setWindSpeedUnit(_ unit: String) {
-        UserDefaults.standard.set(unit, forKey: windSpeedKey)
-    }
-}
-
 /// 设置页。
 @MainActor
 struct SettingsView: View {
@@ -119,4 +97,3 @@ struct SettingsView: View {
         formatter.dateFormat = "MM-dd HH:mm"
         return formatter
     }()
-}

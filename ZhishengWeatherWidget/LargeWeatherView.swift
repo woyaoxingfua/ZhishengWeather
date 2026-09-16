@@ -267,7 +267,7 @@ struct LargeWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(snapshot.temperature.rounded()))°"
+        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
     private var conditionText: String {
@@ -308,7 +308,7 @@ struct LargeWeatherView: View {
 
     /// 「↑25° ↓15°」。
     private func temperatureRangeText(for day: DailyForecast) -> String {
-        "↑\(Int(day.tempMax.rounded()))° ↓\(Int(day.tempMin.rounded()))°"
+        "↑\(Int(UnitPreference.displayTemperature(celsius: day.tempMax).rounded()))° ↓\(Int(UnitPreference.displayTemperature(celsius: day.tempMin).rounded()))°"
     }
 
     /// 逐时时刻格式（_widget 本地时区由系统环境提供）。

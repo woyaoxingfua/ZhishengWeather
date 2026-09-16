@@ -23,4 +23,6 @@ enum AppGroup {
     /// 强刷待办标志 key（Widget 刷新按钮 intent 写入，主 App 在 scenePhase
     /// 回到前台时消费；独立 key，不污染 payload / cities 既有数据）。
     static let pendingForceRefreshKey = "zs.weather.pendingForceRefresh"
+    /// 单位偏好 key（A3-4：主 App 设置页写入，Widget 渲染时读取同 key 同步切换单位）。
+    static let unitPreferenceKey = "zs.weather.unitPreference"
 }

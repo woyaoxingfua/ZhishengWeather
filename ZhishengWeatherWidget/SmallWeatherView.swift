@@ -67,7 +67,7 @@ struct SmallWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(snapshot.temperature.rounded()))°"
+        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
     private var conditionText: String {

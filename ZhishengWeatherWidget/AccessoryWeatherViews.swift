@@ -43,7 +43,7 @@ struct AccessoryCircularWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(snapshot.temperature.rounded()))°"
+        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
     private var weatherCode: Int {
@@ -92,7 +92,7 @@ struct AccessoryRectangularWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(snapshot.temperature.rounded()))°"
+        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
     private var conditionText: String {
@@ -128,7 +128,7 @@ struct AccessoryInlineWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(snapshot.temperature.rounded()))°"
+        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
     private var conditionText: String {
