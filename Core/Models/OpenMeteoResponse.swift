@@ -16,6 +16,11 @@
 //    键缺失不炸，偏差备案 D-A1）；Daily +sunrise/sunset（D-1 风格）。
 //  v1.3 修订（run37）：Daily.sunrise/sunset 由 [String?]? 改 [FlexibleTime?]?
 //    —— epoch / ISO 双态容忍（真机实测为 epoch，见上）。
+//  v1.4 修订（B1-2 短时降水）：新增整块可选的 `minutely_15`（time/precipitation/
+//    precipitation_probability），真机实测（杭州 30.27,120.16）：HTTP 200，
+//    块键名确为 `time`/`precipitation`/`precipitation_probability`，time 为 epoch 秒
+//    （900s 间隔），precipitation 单位 mm、precipitation_probability 单位 %。
+//    整块/元素均可选：服务端未返回或旧部署不炸、不连累主链路解码。
 //
 
 import Foundation
@@ -85,12 +90,32 @@ struct OpenMeteoResponse: Codable, Sendable {
         var uv_index_max: [Double?]? = nil
     }
 
+    /// 短时降水序列（B1-2，15 分钟粒度）。
+    ///
+    /// 请求带 `timeformat=unixtime`，故 `time` 为 epoch 秒（真机实测 900s 间隔）。
+    /// 字段/元素全部可选：服务端未返回块时整块缺失（`OpenMeteoResponse.minutely_15 == nil`）、
+    /// 元素可能为 null —— 均不连累主链路解码（沿用 DTO 整键可选纪律）。
+    struct Minutely15: Codable, Sendable {
+        /// 15 分钟窗起始时刻（epoch 秒）。
+        let time: [Int]
+        /// 15 分钟累计降水量（mm）。整键/元素可选。
+        var precipitation: [Double?]? = nil
+        /// 15 分钟降水概率（%）。整键/元素可选。
+        var precipitation_probability: [Double?]? = nil
+    }
+
     let timezone: String
     let utc_offset_seconds: Int
     let current: Current
     let hourly: Hourly
     /// 可选：当服务端未返回 daily（或旧缓存）时为 nil，映射层负责回退。
     let daily: Daily?
+    /// B1-2 短时降水块，可选（默认 nil）。
+    ///
+    /// `var ... = nil` 而非 `let`：保持合成的逐成员初始化器把本参数**放到末位且带默认值**，
+    /// 既有 `OpenMeteoResponse(...)` 调用点（测试构造）零改动即可编译；
+    /// 同时 JSON 缺 `minutely_15` 键 → 合成解码器返回 nil、不抛错。
+    var minutely_15: Minutely15? = nil
 }
 
 /// A1-4（run37 修正）：日出/日落的双态容忍解码——

@@ -609,4 +609,61 @@ final class OpenMeteoDecodingTests: XCTestCase {
         XCTAssertNil(snapshot.cloudCover)
         XCTAssertNil(snapshot.windGusts)
     }
+
+    // MARK: - B1-2 短时降水 DTO 解码 + 映射
+
+    /// minutely_15 块齐全 → 解码成功 + 映射为窗口点（自当前窗起）。
+    /// 真机实测形态：键名 time / precipitation / precipitation_probability；
+    /// time 为 epoch 秒（900s 间隔）；概率元素可为 null。
+    func testMinutely15BlockDecodesAndMaps() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai", "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0,
+                       "relative_humidity_2m": 50, "apparent_temperature": 19.0,
+                       "weather_code": 61, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [61] },
+          "daily": null,
+          "minutely_15": {
+            "time": [1700000000, 1700000900, 1700001800, 1700002700],
+            "precipitation": [0.0, 1.2, 0.4, 0.0],
+            "precipitation_probability": [0, 80, 60, null]
+          }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let block = try XCTUnwrap(dto.minutely_15)
+        XCTAssertEqual(block.time.count, 4)
+        XCTAssertEqual(block.precipitation?[1], 1.2)
+        XCTAssertNil(block.precipitation_probability?[3], "null 元素必须解码为 nil")
+
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        let points = try XCTUnwrap(snapshot.minutely15)
+        XCTAssertEqual(points.count, 4)
+        XCTAssertEqual(points.first?.precipitation ?? -1, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(points[1].precipitation, 1.2, accuracy: 1e-9)
+        XCTAssertNil(points.last?.probability, "概率 null → nil（不冒充 0）")
+    }
+
+    /// minutely_15 整块缺失 → dto.minutely_15 与 snapshot.minutely15 均为 nil（不连累主链路解码）。
+    func testMinutely15KeyMissingDecodesToNilSnapshot() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai", "utc_offset_seconds": 28800,
+          "current": { "time": 1700000000, "temperature_2m": 20.0,
+                       "relative_humidity_2m": 50, "apparent_temperature": 19.0,
+                       "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [1700000000], "temperature_2m": [20.0], "weather_code": [1] },
+          "daily": null
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        XCTAssertNil(dto.minutely_15)
+        let snapshot = OpenMeteoMapper.map(dto, location: .beijing,
+                                           now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(snapshot.minutely15, "块缺失 → nil（短时降水卡整卡隐藏，AC-B1-9）")
+    }
 }

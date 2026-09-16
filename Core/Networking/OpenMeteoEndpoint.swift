@@ -25,6 +25,12 @@
 //    - 新增 past_days=1（A1-5）——⚠️ 触发 daily[0] 由「今天」变「昨天」，
 //      mapper 侧 todayIndex 定位配套（OpenMeteoMapper，最高静默回归风险点）。
 //  wind_speed_unit=ms 与 timezone=auto / timeformat=unixtime 逐字不动（v1.2 裁定）。
+//  v1.5 修订（B1-2 短时降水，PRD §4.3 R-Q2「加字段不加剧请求」）：
+//    在**既有单次 forecast 请求**内追加 minutely_15=precipitation,precipitation_probability
+//    （不新增第二个端点/请求）；并显式声明 forecast_minutely_15=8 —— 把返回条目
+//    钉在 8×15min=2h（本项目调研文档 open-meteo-capability-verified.md 第 19 行口径），
+//    避免在既有 forecast_days=16 下把 minutely 序列撑到 ~1600 条、白白膨胀响应体
+//    与共享容器载荷（真机实测：不限制时 杭州 返回 288~1632 条）。
 //
 
 import Foundation
@@ -75,6 +81,15 @@ enum OpenMeteoEndpoint {
         "uv_index_max"
     ].joined(separator: ",")
 
+    /// 短时降水字段（B1-2，15 分钟粒度）。
+    ///
+    /// 15 分钟累计降水量（mm）+ 降水概率（%）。与 current/hourly/daily **并列同一请求**
+    /// （R-Q2：加字段不加剧请求，绝不新增第二个端点）。
+    static let minutelyFields = ["precipitation", "precipitation_probability"].joined(separator: ",")
+
+    /// 短时降水返回条数上限（B1-2：8×15min=2h，与本项目调研文档口径一致）。
+    static let minutelyForecastCount = 8
+
     /// 依据坐标拼装请求 URL；失败返回 nil（由调用方收敛为 `WeatherError.badURL`）。
     static func url(latitude: Double, longitude: Double) -> URL? {
         var components = URLComponents(string: baseURLString)
@@ -84,6 +99,10 @@ enum OpenMeteoEndpoint {
             URLQueryItem(name: "current", value: currentFields),
             URLQueryItem(name: "hourly", value: hourlyFields),
             URLQueryItem(name: "daily", value: dailyFields),
+            // B1-2：短时降水（15 分钟粒度），**并入同一请求**（R-Q2）。
+            URLQueryItem(name: "minutely_15", value: minutelyFields),
+            // B1-2：显式钉住 8×15min=2h（防服务端默认把序列撑到 forecast_days 全域）。
+            URLQueryItem(name: "forecast_minutely_15", value: String(minutelyForecastCount)),
             // 必须显式声明 m/s：Open-Meteo 的 wind_speed_unit 默认是 kmh，
             // 不声明则 wind_speed_10m 会以 km/h 返回，而领域模型与主屏 UI
             // 均按 m/s 标注 → 风速被放大 3.6 倍且单位错误。

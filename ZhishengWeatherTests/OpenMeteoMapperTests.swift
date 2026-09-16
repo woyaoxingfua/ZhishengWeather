@@ -679,7 +679,8 @@ final class OpenMeteoMapperTests: XCTestCase {
                               currentTemp: Double = 20.0,
                               isDay: Int = 1,
                               currentPressureMSL: Double? = nil,
-                              currentSurfacePressure: Double? = nil) -> OpenMeteoResponse {
+                              currentSurfacePressure: Double? = nil,
+                              minutely: OpenMeteoResponse.Minutely15? = nil) -> OpenMeteoResponse {
         OpenMeteoResponse(
             timezone: "Asia/Shanghai",
             utc_offset_seconds: 28_800,
@@ -701,7 +702,8 @@ final class OpenMeteoMapperTests: XCTestCase {
                 weather_code: codes,
                 precipitation_probability: nil
             ),
-            daily: daily
+            daily: daily,
+            minutely_15: minutely
         )
     }
 
@@ -744,5 +746,63 @@ final class OpenMeteoMapperTests: XCTestCase {
         let list = snapshot.daily ?? []
         XCTAssertEqual(list[0].uvIndexMax, 7.5)
         XCTAssertNil(list[1].uvIndexMax)
+    }
+
+    // MARK: - B1-2 短时降水窗口
+
+    /// B1-2：短时降水窗口自「当前 15 分钟窗」起，且上限 maxMinutelyCount（=8）。
+    func testMinutelyWindowStartsAtCurrentSlotAndCapsAtEight() throws {
+        let slot = 900
+        let times = (0..<12).map { t0 + $0 * slot }
+        let now = Date(timeIntervalSince1970: TimeInterval(t0 + 3 * slot))
+        let minutely = OpenMeteoResponse.Minutely15(
+            time: times,
+            precipitation: (0..<12).map { Double($0) * 0.1 },
+            precipitation_probability: nil)
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [1], minutely: minutely),
+            location: .beijing,
+            now: now
+        )
+
+        let points = try XCTUnwrap(snapshot.minutely15)
+        XCTAssertEqual(points.count, OpenMeteoMapper.maxMinutelyCount)
+        let first = try XCTUnwrap(points.first)
+        XCTAssertEqual(first.time, Date(timeIntervalSince1970: TimeInterval(t0 + 3 * slot)),
+                       "窗口起点须为 <= now 的最后一个 15 分钟窗")
+    }
+
+    /// B1-2：无 minutely_15 → snapshot.minutely15 == nil（整卡隐藏，AC-B1-9）。
+    func testMinutelyMissingProducesNil() {
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [1]),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+        XCTAssertNil(snapshot.minutely15)
+    }
+
+    /// B1-2：降水缺值 / 元素 null → 记 0；概率缺值 → nil（不冒充）。
+    func testMinutelyMissingValuesDefaultToZeroAndNilProbability() throws {
+        let slot = 900
+        let minutely = OpenMeteoResponse.Minutely15(
+            time: [t0, t0 + slot, t0 + 2 * slot],
+            precipitation: [nil, 0.5],
+            precipitation_probability: [10])
+
+        let snapshot = OpenMeteoMapper.map(
+            makeResponse(times: [t0], temps: [18.0], codes: [1], minutely: minutely),
+            location: .beijing,
+            now: Date(timeIntervalSince1970: TimeInterval(t0))
+        )
+
+        let points = try XCTUnwrap(snapshot.minutely15)
+        XCTAssertEqual(points.count, 3)
+        XCTAssertEqual(points[0].precipitation, 0.0, accuracy: 1e-9, "null 降水记 0")
+        XCTAssertEqual(points[1].precipitation, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(points[2].precipitation, 0.0, accuracy: 1e-9, "越界降水记 0")
+        XCTAssertEqual(points[0].probability ?? -1, 10.0, accuracy: 1e-9)
+        XCTAssertNil(points[1].probability, "概率越界 → nil（不冒充 0）")
     }
 }

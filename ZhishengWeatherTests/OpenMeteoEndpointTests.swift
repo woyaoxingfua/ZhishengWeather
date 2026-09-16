@@ -152,6 +152,40 @@ final class OpenMeteoEndpointTests: XCTestCase {
                        "B1 字段必须并入既有 current 参数，禁止第二次请求")
     }
 
+    // MARK: - B1-2 短时降水（单请求内追加 minutely_15）
+
+    /// B1-2：请求含 `minutely_15=precipitation,precipitation_probability`，
+    /// 且**不新增第二个请求**（`minutely_15` 参数仅出现一次）；
+    /// 同时显式声明 `forecast_minutely_15=8`（钉住 8×15min=2h，避免响应体膨胀）。
+    func testURLDeclaresMinutely15FieldsAndCapsCount() throws {
+        let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 30.27, longitude: 120.16))
+        let query = try queryItems(url)
+        let minutely = try XCTUnwrap(query["minutely_15"])
+        let fields = minutely.split(separator: ",").map(String.init)
+        XCTAssertTrue(fields.contains("precipitation"), "minutely_15 缺少 precipitation")
+        XCTAssertTrue(fields.contains("precipitation_probability"),
+                      "minutely_15 缺少 precipitation_probability")
+        XCTAssertEqual(query["forecast_minutely_15"], "8",
+                       "必须显式钉住 8×15min=2h（B1-2）")
+
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        let items = try XCTUnwrap(components.queryItems)
+        XCTAssertEqual(items.filter { $0.name == "minutely_15" }.count, 1,
+                       "B1-2 必须并入既有请求，禁止第二次请求（R-Q2）")
+    }
+
+    /// B1-2 后既有参数不回归：current / hourly / daily / wind_speed_unit / timezone / timeformat 均在。
+    func testURLStillDeclaresCoreParamsAfterMinutely() throws {
+        let url = try XCTUnwrap(OpenMeteoEndpoint.url(latitude: 0, longitude: 0))
+        let query = try queryItems(url)
+        XCTAssertNotNil(query["current"])
+        XCTAssertNotNil(query["hourly"])
+        XCTAssertNotNil(query["daily"])
+        XCTAssertEqual(query["wind_speed_unit"], "ms")
+        XCTAssertEqual(query["timezone"], "auto")
+        XCTAssertEqual(query["timeformat"], "unixtime")
+    }
+
     // MARK: - Helpers
 
     private func queryItems(_ url: URL) throws -> [String: String] {

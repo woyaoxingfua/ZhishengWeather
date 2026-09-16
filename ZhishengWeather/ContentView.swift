@@ -118,6 +118,14 @@ struct ContentView: View {
                         .font(.system(size: Theme.FontSize.caption, weight: .medium))
                         .foregroundStyle(Theme.accentSecondary)
                 }
+                // B1-2：短时降水卡（未来约 2 小时 · 15 分钟粒度 · 插值）。
+                // 干窗 / 无数据 → 整卡隐藏（沿用原 Android 行为，AC-B1-8/B1-9）；
+                // 时刻按选中城市时区渲染（D-4 一致）。数据来自既有无新增请求的 forecast。
+                if let minutely = snapshot.minutely15,
+                   MinutelyPrecipitationEngine.hasPrecipitation(minutely) {
+                    MinutelyPrecipitationCard(points: minutely,
+                                              timeZone: viewModel.selectedTimeZone)
+                }
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in

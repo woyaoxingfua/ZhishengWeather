@@ -19,6 +19,9 @@
 //    - yesterday = todayIndex-1 行（<0 → nil）。
 //  `now` 注入纪律不变（跨层纪律 §7.3 / 团队硬约束 ⑤）。
 //
+//  v1.4 修订（B1-2 短时降水）：新增 `minutelyWindow`（自当前 15 分钟窗起截 ≤ 8 条），
+//  无有效点 → snapshot.minutely15 = nil（整卡隐藏）。实况/逐时/逐日映射逻辑零改动。
+//
 //  约束（跨层纪律 §7.3 / 团队硬约束 ⑤）：
 //  - 禁止内部调用 `Date()`；`now` 必须由参数传入，保证可测。
 //    （注：ARCH §3.1 的签名未含 `now`，与 §7.3「now 注入」冲突；
@@ -36,6 +39,9 @@ enum OpenMeteoMapper {
 
     /// 逐日条数上限（A1-3：7 → 16，对齐 forecast_days=16；UI 侧再自行裁剪 3/7/15）。
     static let maxDailyCount = 16
+
+    /// 短时降水条数上限（B1-2：8×15min=2h）。
+    static let maxMinutelyCount = 8
 
     /// 将原始响应映射为领域快照。
     /// - Parameters:
@@ -65,6 +71,11 @@ enum OpenMeteoMapper {
 
         // ── 2. 按 now 截窗：从"当前小时"起取 ≤ maxHourlyCount 条 ──────────
         let windowPoints = window(from: points, now: now)
+
+        // ── 2b. B1-2 短时降水：自"当前 15 分钟窗"起取 ≤ maxMinutelyCount 条 ──
+        //  空结果 → nil（短时降水卡整卡隐藏，AC-B1-9）。
+        let minutelyRaw = minutelyWindow(from: response.minutely_15, now: now)
+        let minutely: [MinutelyPrecipitationPoint]? = minutelyRaw.isEmpty ? nil : minutelyRaw
 
         // ── 3. 今日高/低温：取 daily 今日索引行，否则回退 hourly 窗口 ─────
         //（回退链逐字保留 —— F-A 装配规则 §2.5 明确要求；
@@ -142,7 +153,8 @@ enum OpenMeteoMapper {
             dewPoint: current.dew_point_2m,
             cloudCover: current.cloud_cover,
             windGusts: current.wind_gusts_10m,
-            fetchedAt: now
+            fetchedAt: now,
+            minutely15: minutely
         )
     }
 
@@ -162,6 +174,52 @@ enum OpenMeteoMapper {
 
         let slice = points[startIndex...]
         return Array(slice.prefix(maxHourlyCount))
+    }
+
+    /// B1-2：自"当前 15 分钟窗"起截取 ≤ maxMinutelyCount 条短时降水点。
+    ///
+    /// 与逐小时窗口同款规则：取最后一个 `time <= now` 的点作为起点（即当前窗）；
+    /// 若不存在则从头开始。真机实测（杭州）：请求 `forecast_minutely_15=8` 时返回
+    /// 恰好 8 条、自当前 15 分钟窗起，本窗口即全量；仍显式截窗以对服务端默认行为免疫。
+    ///
+    /// 缺失处理：块缺失 / time 为空 → 空数组（上游转 nil → 整卡隐藏）；
+    /// 某下标降水缺值 / 元素 null → 记 0（该 15 分钟无降水记录）；概率缺值 → nil（不冒充 0）。
+    ///
+    /// - Parameters:
+    ///   - block: DTO 短时降水块；nil → 空数组。
+    ///   - now: 当前时刻（注入，纪律同 map）。
+    /// - Returns: 自当前窗起的短时降水点数组（长度 ≤ maxMinutelyCount）。
+    private static func minutelyWindow(from block: OpenMeteoResponse.Minutely15?,
+                                       now: Date) -> [MinutelyPrecipitationPoint] {
+        guard let block, !block.time.isEmpty else { return [] }
+
+        let times = block.time
+        let startIndex: Int
+        if let lastNotAfterNow = times.lastIndex(where: {
+            Date(timeIntervalSince1970: TimeInterval($0)) <= now
+        }) {
+            startIndex = lastNotAfterNow
+        } else {
+            startIndex = 0
+        }
+
+        let precipitations = block.precipitation ?? []
+        let probabilities = block.precipitation_probability ?? []
+
+        var result: [MinutelyPrecipitationPoint] = []
+        result.reserveCapacity(maxMinutelyCount)
+        var index = startIndex
+        while index < times.count, result.count < maxMinutelyCount {
+            let precipitation = index < precipitations.count ? (precipitations[index] ?? 0) : 0
+            let probability: Double? = index < probabilities.count ? probabilities[index] : nil
+            result.append(MinutelyPrecipitationPoint(
+                time: Date(timeIntervalSince1970: TimeInterval(times[index])),
+                precipitation: precipitation,
+                probability: probability
+            ))
+            index += 1
+        }
+        return result
     }
 
     /// ★ 定位 daily 数组中的"今日"索引（A1 最高风险点，ARCH-A1 §1.5）。

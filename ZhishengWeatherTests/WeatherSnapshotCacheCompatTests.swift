@@ -60,6 +60,8 @@ final class WeatherSnapshotCacheCompatTests: XCTestCase {
         XCTAssertNil(snapshot.dewPoint, "旧缓存无 dewPoint 键必须解码为 nil（B1）")
         XCTAssertNil(snapshot.cloudCover, "旧缓存无 cloudCover 键必须解码为 nil（B1）")
         XCTAssertNil(snapshot.windGusts, "旧缓存无 windGusts 键必须解码为 nil（B1）")
+        // B1-2 短时降水：旧缓存无 minutely15 键 → 解码为 nil。
+        XCTAssertNil(snapshot.minutely15, "旧缓存无 minutely15 键必须解码为 nil（B1-2）")
         // 其余字段值不变
         XCTAssertEqual(snapshot.location.name, "北京")
         XCTAssertEqual(snapshot.location.latitude, 39.9042, accuracy: 1e-9)
@@ -221,5 +223,80 @@ final class WeatherSnapshotCacheCompatTests: XCTestCase {
         XCTAssertEqual(decoded.dewPoint ?? -1, 8.5, accuracy: 0.001)
         XCTAssertEqual(decoded.cloudCover ?? -1, 42.0, accuracy: 0.001)
         XCTAssertEqual(decoded.windGusts ?? -1, 7.5, accuracy: 0.001)
+    }
+
+    // MARK: - B1-2 短时降水缓存兼容（P-18 同源盲区防线）
+
+    /// **手写** JSON —— 含 B1-2 之前版本的字段（含 A1 气压/日出日落位 + B1 遥测四字段），
+    /// **唯独没有 `minutely15` 键**。必须解码成功且 `minutely15 == nil`，其余字段值不变。
+    ///
+    /// ⚠️ 刻意**不**用「把新编码的 JSON 再解回来」来测兼容：那与实现共享同一套假设
+    /// （同源盲区，P-18 代价最高的一条）。手写旧形态 JSON 才测得到真机旧缓存路径。
+    private static let preMinutelyJSON = """
+    {
+      "location": { "name": "杭州", "latitude": 30.27, "longitude": 120.16, "isFallback": false },
+      "temperature": 23.4,
+      "apparentTemperature": 21.0,
+      "weatherCode": 61,
+      "windSpeed": 3.2,
+      "windDirection": 135.0,
+      "humidity": 58,
+      "isDay": true,
+      "hourly": [ { "time": 1700000000.0, "temperature": 23.4, "weatherCode": 61 } ],
+      "dailyHigh": 26.1,
+      "dailyLow": 15.2,
+      "pressureMSL": 1013.2,
+      "visibility": 16000.0,
+      "dewPoint": 8.5,
+      "cloudCover": 42.0,
+      "windGusts": 7.5,
+      "fetchedAt": 1700000010.0
+    }
+    """
+
+    func testPreMinutelyJSONWithoutNewKeyDecodesWithNilMinutely() throws {
+        let snapshot = try JSONDecoder().decode(WeatherSnapshot.self,
+                                                from: Data(Self.preMinutelyJSON.utf8))
+
+        XCTAssertNil(snapshot.minutely15, "旧缓存无 minutely15 键必须解码为 nil（R3/B1-2）")
+        // 其余字段不受影响（新字段不得连累既有字段解码）。
+        XCTAssertEqual(snapshot.location.name, "杭州")
+        XCTAssertEqual(snapshot.temperature, 23.4, accuracy: 0.001)
+        XCTAssertEqual(snapshot.weatherCode, 61)
+        XCTAssertEqual(snapshot.hourly.count, 1)
+        XCTAssertEqual(try XCTUnwrap(snapshot.pressureMSL), 1013.2, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.visibility), 16000.0, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.windGusts), 7.5, accuracy: 0.001)
+    }
+
+    /// B1-2：含 minutely15 的快照往返编解码等值（概率 nil 不得变 0）。
+    func testSnapshotWithMinutelyRoundTripsThroughJSON() throws {
+        let date = Date(timeIntervalSinceReferenceDate: 1_700_000_000)
+        let snapshot = WeatherSnapshot(
+            location: .beijing,
+            temperature: 23.4,
+            apparentTemperature: 21.0,
+            weatherCode: 61,
+            windSpeed: 3.2,
+            windDirection: 135,
+            humidity: 58,
+            isDay: true,
+            hourly: [],
+            dailyHigh: 26.1,
+            dailyLow: 15.2,
+            fetchedAt: date,
+            minutely15: [
+                MinutelyPrecipitationPoint(time: date, precipitation: 0.0, probability: 10),
+                MinutelyPrecipitationPoint(time: date.addingTimeInterval(900),
+                                           precipitation: 1.2, probability: nil)
+            ]
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WeatherSnapshot.self, from: data)
+
+        XCTAssertEqual(decoded, snapshot, "含 minutely15 的快照必须往返编解码等值")
+        XCTAssertEqual(decoded.minutely15?.count, 2)
+        XCTAssertNil(decoded.minutely15?.last?.probability, "概率 nil 往返后必须仍为 nil")
     }
 }

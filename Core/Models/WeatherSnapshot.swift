@@ -20,6 +20,10 @@
 //  语义注记：A1 后 `daily` 数组**自今日起截**（daily[0] 恒为今天，
 //  `yesterday` 单独存放），全仓既有「daily.first = 今天」语义不变。
 //
+//  v1.4 修订（B1-2 短时降水）：新增可选字段 `minutely15: [MinutelyPrecipitationPoint]?`
+//  （默认 nil，置于 `fetchedAt` 之后），承载未来约 2 小时的 15 分钟粒度降水序列。
+//  可选 + 合成 Codable，旧缓存缺键 → nil、解码不失败（R3；禁手写 init(from:)/payloadVersion）。
+//
 
 import Foundation
 
@@ -101,6 +105,20 @@ struct WeatherSnapshot: Codable, Equatable, Sendable {
 
     /// 本次取数时间。
     var fetchedAt: Date
+
+    /// B1-2 短时降水（15 分钟粒度，可选）。
+    ///
+    /// 兼容核心（R3）：**可选 + 合成 Codable + 默认 nil**（沿用 `daily` 的既有范式，见上方
+    /// `daily` 注释）——旧版共享容器 JSON 无此键时合成解码器返回 nil、不抛错。
+    /// **禁止**手写 `init(from:)`、**禁止**引入 payloadVersion。
+    ///
+    /// 声明在 `fetchedAt` **之后**：合成的逐成员初始化器把本参数放到末位且带默认值，
+    /// 全仓既有 `WeatherSnapshot(...)` 调用点零改动即可编译。
+    ///
+    /// 取值约定：mapper 自"当前 15 分钟窗"起截 ≤ 8 条（2 小时）；服务端未返回 /
+    /// 无有效点 / 旧缓存 → nil。主屏短时降水卡在**干窗或 nil** 时整卡隐藏
+    /// （AC-B1-8/B1-9，不显示空槽）。
+    var minutely15: [MinutelyPrecipitationPoint]? = nil
 
     // MARK: - 派生属性（不参与 Codable 存储）
 
