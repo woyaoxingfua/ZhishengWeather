@@ -72,6 +72,38 @@ final class AppIconChoiceTests: XCTestCase {
         XCTAssertEqual(IconChoicePreference.normalized("PHOSPHOR"), .phosphor) // 大小写敏感，未知即回退
     }
 
+    // MARK: - 持久化 store 绑定（注入缝完整性）
+
+    /// 读与写必须落在**同一个** store：注入独立 suite 后，写进去的能由同一
+    /// 实例读回来，且绝不改写 `UserDefaults.standard`。
+    ///
+    /// 这条锁的是「注入缝只用了半条」缺陷：曾出现读注入 suite、写硬编码
+    /// standard，于是单测隔离假成立，而幂等判定下次读到陈旧值
+    /// （CI run 35206149080，AppIconSwitcherTests 三例四断言红）。
+    func testPreferenceReadWriteSharesInjectedStore() throws {
+        let suiteName = "zs.test.iconPreference.\(UUID().uuidString)"
+        let store = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { store.removePersistentDomain(forName: suiteName) }
+
+        let preference = IconChoicePreference(defaults: store)
+        // 空 store → 默认档（读路径确实读的是注入 store）。
+        XCTAssertEqual(preference.choice(), .phosphor)
+
+        let standardBefore = UserDefaults.standard.string(forKey: IconChoicePreference.key)
+        preference.setChoice(.rain)
+
+        // 写入落在注入 store，同一实例读得回来。
+        XCTAssertEqual(store.string(forKey: IconChoicePreference.key), "rain")
+        XCTAssertEqual(preference.choice(), .rain)
+        // 且不得溢出到 standard：两边同为 standard 时生产看不出问题，
+        // 单测必须把「写的是哪个 store」钉死。
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: IconChoicePreference.key),
+            standardBefore,
+            "写注入 store 不得同时改写 UserDefaults.standard"
+        )
+    }
+
     // MARK: - 文案单一真源（设置页显示名锁定）
 
     /// 显示名与资源名对照表锁定（改动即测试红，防止两处漂移）。

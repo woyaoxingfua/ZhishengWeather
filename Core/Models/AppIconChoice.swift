@@ -97,14 +97,30 @@ extension IconChoice {
 
 // MARK: - 持久化（App 本地标准 UserDefaults，不入 App Group）
 
-/// 图标档位持久化（**App 本地标准 UserDefaults**；小组件与图标无关，不读它）。
+/// 图标档位持久化（**App 本地 UserDefaults**；小组件与图标无关，不读它）。
 ///
 /// 存储的是档位 `rawValue`（"phosphor" / "jade" / "rain"），**不是**
 /// 资源名——档位是语义，资源名是映射结果，两层分离避免改名污染存储。
-enum IconChoicePreference {
+///
+/// **store 是实例依赖，读与写必须绑同一个实例**（默认 `.standard`，
+/// 单测传独立 suite）。此前的 static `choice()` / `setChoice(_:)` 硬编码
+/// `.standard`，而调用方 `AppIconSwitcher` 的注入 `defaults` 只覆盖读路径，
+/// 于是「读注入 suite、写 standard」——注入缝只用了半条，单测的隔离是假的
+/// （CI run 35206149080 三例四断言红）。改成实例方法后，注入什么 store
+/// 就读写什么 store，缝才是真的。
+struct IconChoicePreference {
 
     /// 持久化键（App 本地；不放 App Group 共享容器）。
     static let key = "zs.weather.iconChoice"
+
+    /// 读写共用的存储实例（构造时一次性选定，任何分支都不得绕开）。
+    private let defaults: UserDefaults
+
+    /// - Parameter defaults: 读写共用的存储（App 用 `.standard`；
+    ///   单测注入 `UserDefaults(suiteName:)` 以隔离）。
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     /// 归一化：缺失 / 未知存储串 → 默认档（纯函数，单测锁定）。
     ///
@@ -117,17 +133,17 @@ enum IconChoicePreference {
         return choice
     }
 
-    /// 当前档位（读 App 本地标准 UserDefaults；缺失或非法 → 默认档）。
+    /// 当前档位（读**本实例绑定的** store；缺失或非法 → 默认档）。
     ///
     /// - Returns: 当前档位。
-    static func choice() -> IconChoice {
-        normalized(UserDefaults.standard.string(forKey: key))
+    func choice() -> IconChoice {
+        Self.normalized(defaults.string(forKey: Self.key))
     }
 
-    /// 写入档位（App 本地标准 UserDefaults）。
+    /// 写入档位（写**本实例绑定的** store）。
     ///
     /// - Parameter choice: 目标档位。
-    static func setChoice(_ choice: IconChoice) {
-        UserDefaults.standard.set(choice.rawValue, forKey: key)
+    func setChoice(_ choice: IconChoice) {
+        defaults.set(choice.rawValue, forKey: Self.key)
     }
 }

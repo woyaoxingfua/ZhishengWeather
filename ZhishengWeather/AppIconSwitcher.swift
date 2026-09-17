@@ -17,6 +17,10 @@
 //    而偏好已写，重启后 UI 显示的档位与实际图标将不一致。默认档无系统调用
 //    （alternateIconName 已是 nil 时 setAlternateIconName(nil) 也会触发系统
 //    弹窗），同值幂等短路。
+//  - **store 单一**：注入的 `defaults` 同时构造出读写共用的
+//    `IconChoicePreference`，`currentChoice()` 与 `apply(_:)` 走同一个 store。
+//    读注入、写 standard 会让单测隔离变假（且生产因两边都是 standard 而
+//    看不出来），属「注入缝只用了半条」，见 CI run 35206149080。
 //
 
 import UIKit
@@ -49,18 +53,22 @@ final class AppIconSwitcher {
     /// 系统调用实现（生产 = SystemAlternateIconSetter；单测 = Spy）。
     private let setter: AlternateIconSetting
 
-    /// App 本地偏好（可注入，默认 standard；单测用独立 suite 隔离）。
-    private let defaults: UserDefaults
+    /// 档位持久化（**绑定注入的 store**，读与写同一实例）。
+    ///
+    /// 纪律：绝不在这里直接 `UserDefaults.standard`——那会让注入的
+    /// `defaults` 只影响读、写仍落 standard，注入缝只剩半条。
+    private let preference: IconChoicePreference
 
     // MARK: - 初始化
 
     /// - Parameters:
     ///   - setter: 系统调用实现。
-    ///   - defaults: App 本地偏好存储（**非** App Group 共享容器）。
+    ///   - defaults: 档位存储（**非** App Group 共享容器）；同一个实例
+    ///     同时用于读与写。
     init(setter: AlternateIconSetting = SystemAlternateIconSetter(),
          defaults: UserDefaults = .standard) {
         self.setter = setter
-        self.defaults = defaults
+        self.preference = IconChoicePreference(defaults: defaults)
     }
 
     // MARK: - 读取（设置页初值）
@@ -72,11 +80,10 @@ final class AppIconSwitcher {
     /// - Returns: 当前生效档位。
     func currentChoice() -> IconChoice {
         let systemName = UIApplication.shared.alternateIconName
-        if systemName != nil {
+        if let systemName {
             return IconChoice.resolve(alternateName: systemName)
         }
-        let raw = defaults.string(forKey: IconChoicePreference.key)
-        return IconChoicePreference.normalized(raw)
+        return preference.choice()
     }
 
     // MARK: - 切换（设置页写入）
@@ -109,7 +116,9 @@ final class AppIconSwitcher {
             return "换图标失败（\(error.localizedDescription)），请稍后重试"
         }
         // 系统成功后才落偏好，保证「UI 显示档位 == 设备实际图标」。
-        IconChoicePreference.setChoice(choice)
+        // 走注入实例（与 currentChoice 同一个 store），否则幂等判定下次会
+        // 读到陈旧值，判成「当前档 ≠ 目标档」而重复触发系统切换弹窗。
+        preference.setChoice(choice)
         return nil
     }
 }
