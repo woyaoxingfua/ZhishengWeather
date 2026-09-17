@@ -46,18 +46,23 @@ struct SettingsView: View {
     /// 数据链路健康快照（诊断用；进入页面时从记录器读取一次，进程内内存）。
     @State private var linkHealth: [LinkHealth] = []
 
+    /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），而
+    /// UmbrellaReminderScheduler 是 @MainActor 隔离 init（CI 实测挂编译，
+    /// 与 LocationProvider 同款陷阱）。故 default 用 nil，真正创建移到本
+    /// init 体内——SettingsView 整体 @MainActor，体内已隔离，合法。
     init(lastUpdated: Date?,
          timeZone: TimeZone = .current,
          freshnessWindow: TimeInterval,
          appearance: AppearanceStore,
-         reminderScheduler: UmbrellaReminderScheduler = UmbrellaReminderScheduler()) {
+         reminderScheduler: UmbrellaReminderScheduler? = nil) {
         self.lastUpdated = lastUpdated
         self.timeZone = timeZone
         self.freshnessWindow = freshnessWindow
         self.appearance = appearance
-        self.reminderScheduler = reminderScheduler
+        let scheduler = reminderScheduler ?? UmbrellaReminderScheduler()
+        self.reminderScheduler = scheduler
         // @State 初值必须在 init 内赋（不能在属性默认值处触碰非隔离参数）。
-        _umbrellaReminderEnabled = State(initialValue: reminderScheduler.isEnabled)
+        _umbrellaReminderEnabled = State(initialValue: scheduler.isEnabled)
     }
 
     var body: some View {
