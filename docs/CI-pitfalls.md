@@ -230,3 +230,36 @@
   3. 修完要**反过来问**："这个缺陷为什么没被现有测试抓到？"
      若答案是"测试数据和实现同源"，那必须补一个**真机形态**的用例，
      否则同类缺陷还会再来一次。
+
+---
+
+## 九、CI 绿 ≠ 真机对：未签名产物的能力真空（真机复盘）
+
+### P-19 未签名 IPA 的 App Group 失效（真机反馈：小组件永远「暂无数据」）
+- **现象**：CI 产物（unsigned IPA）侧载到真机后，**主 App 一切正常，
+  小组件永远显示「暂无数据」**——不是「共享数据不可用」也不是「已过期」，
+  而是共享容器里从头到尾没有主载荷（渲染器三态文案本身是正确行为，
+  不是 bug）。
+- **根因**：`.github/workflows/ios.yml` 以 `CODE_SIGNING_ALLOWED=NO` 出
+  **完全未签名**的 IPA。没有签名 → 没有 provisioning → 两个 target 的
+  entitlements 文件（App Group `group.com.zhisheng.weather`）**从不生效**
+  → 主 App 与 Widget 扩展各拿一个**互相隔离的沙盒容器**，共享容器写入
+  与读取落在两个不同的"group.com.zhisheng.weather"里 → Widget 读到的
+  永远是空。
+- **为什么 CI 测不出来**：单测的共享容器是**注入的独立 UserDefaults
+  suite**（AppGroupStoreTests 同款纪律），读写发生在**同一进程同一容器**，
+  根本不经过 entitlements 校验；CI 的 xcodebuild test 也不含签名环节。
+  所以这条链路（写共享容器 → 跨进程读）在 CI 上**结构性不可见**。
+- **修复路径（需用户证书资产，CI 侧未实施）**：
+  1. 付费开发者账号；在开发者中心为 `com.zhisheng.weather` 与
+     `com.zhisheng.weather.widget` 两个 App ID **都**开启 App Group
+     capability（挂同一个 group）；
+  2. 出一张覆盖两个 bundle id 的 provisioning profile（或各一张）；
+  3. CI 改签名构建：`CODE_SIGNING_ALLOWED` 恢复默认 + 配置
+     `DEVELOPMENT_TEAM` / 证书（或用 `ldid` 伪签名**保留 entitlements**）；
+  4. 侧载分发走 SideStore / AltStore 等会**保留 entitlements** 的签名
+     工具——直接重签但丢 entitlements 的工具会让 App Group 再次失效。
+- **规约**：凡用到 entitlements 才能生效的能力（App Group / 推送 /
+  associated domains），CI 全绿**不能**作为真机可用的证据；真机验收
+  必须在签名产物上做，且验收清单要含「跨进程共享读写」用例。
+
