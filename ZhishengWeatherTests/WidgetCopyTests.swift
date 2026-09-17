@@ -8,6 +8,13 @@
 //  本轮把它们收进 `WidgetCopy`，本文件就是那份**唯一真源**的锁定网
 //  （视图侧再也拼不出第二套句子）。
 //
+//  ⚠️ 除「与 §13 表逐字一致」外，本文件还锁一条**硬规则**（见 `WidgetCopy` 文件头）：
+//     提示行不得要求用户做一个**在当前分发渠道上无法改变该状态**的动作。
+//     本产品的渠道是**未签名侧载** → App Group 容器永不可用 → 所有「去开主 App」类的
+//     建议都不可能生效。故本文件有一条**回归防线**：断言所有提示行都不含「App」字样
+//     （`testNoWidgetCopyRowEverAsksUserToOpenTheMainApp`）—— 任何人把「去开 App」写回来，
+//     CI 立刻红。
+//
 
 import XCTest
 @testable import ZhishengWeather
@@ -71,31 +78,41 @@ final class WidgetCopyTests: XCTestCase {
 
     // MARK: - 七态表逐行
 
-    func testNoCityRowGuidesUserToConfigureCity() {
+    func testNoCityRowGuidesUserToEditTheWidgetAndPickCity() {
         let resolution = empty(.noCity, status: .missing)
 
         XCTAssertEqual(WidgetCopy.conditionText(resolution: resolution), "暂无数据")
         XCTAssertEqual(WidgetCopy.updateText(resolution: resolution, timeText: nil), "暂无数据")
-        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "点按小部件，选择要显示的城市",
-                       "无城市必须给出**可操作**提示（幽灵北京的诚实替代）")
+        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "长按小组件 → 编辑，选择城市",
+                       "无城市必须给出**真正能改变该状态**的动作：侧载上「编辑→选城市」"
+                       + "是唯一绕开容器的路径（硬规则；「点按」只开主 App，改不了本态）")
         XCTAssertNil(WidgetCopy.cityText(resolution: resolution), "无城市名可显示")
     }
 
-    func testNoCachedDataRowPointsToMainApp() {
+    /// 快照路径无缓存：城市已知、只是这一路不联网 → 该态**会自愈**，不得索取用户动作。
+    ///
+    /// 回归防线：原文案「打开主 App 取数后自动显示」在未签名侧载上**不可能生效**
+    /// （主 App 与小组件是两个容器），故已按硬规则改掉。
+    func testNoCachedDataRowRequiresNoUserAction() {
         let resolution = empty(.noCachedData, status: .missing, city: Self.beijing)
 
         XCTAssertEqual(WidgetCopy.conditionText(resolution: resolution), "暂无数据")
         XCTAssertEqual(WidgetCopy.updateText(resolution: resolution, timeText: nil), "暂无数据")
-        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "打开主 App 取数后自动显示")
+        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "稍候将自动获取",
+                       "该态只出现在 snapshot（allowNetwork=false），随后 timeline 的 L1 自会取回"
+                       + "→ 提示只能是「会自愈」，不能要求用户去开主 App")
         XCTAssertEqual(WidgetCopy.cityText(resolution: resolution), "北京", "城市名仍显示（不丢标题）")
     }
 
-    func testSharedContainerDownRowIsHonestAndActionable() {
+    /// 容器不可用（快照）：**前置条件是城市已解析**（无城市走 `.noCity`）→ 让用户「再选城市」
+    /// 是他刚做过的事，属错的建议；该态同样会自愈。
+    func testSharedContainerDownRowIsHonestAndRequiresNoUserAction() {
         let resolution = empty(.sharedContainerDown, status: .unavailable, city: Self.beijing)
 
         XCTAssertEqual(WidgetCopy.conditionText(resolution: resolution), "共享数据不可用")
         XCTAssertEqual(WidgetCopy.updateText(resolution: resolution, timeText: nil), "共享数据不可用")
-        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "请在主 App 中打开一次天气")
+        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "稍候将自动获取",
+                       "容器不可用不影响 timeline 的 L1 自力取数；且城市已解析 → 不应再要求选城市")
     }
 
     func testFetchFailedRowAsksUserToCheckNetwork() {
@@ -133,6 +150,38 @@ final class WidgetCopyTests: XCTestCase {
                            "\(reason) 的现象位不得为空串")
             XCTAssertNotNil(WidgetCopy.hintText(resolution: resolution),
                             "\(reason) 必须给出可操作提示")
+        }
+    }
+
+    // MARK: - 硬规则：提示行不得要求用户做「侧载上无法改变该状态」的动作
+
+    /// 把硬规则锁进 CI 的最强一条防线：未签名侧载上 App Group 容器永不可用，故**任何**
+    /// 要求用户「去开主 App / 等主 App 写数据」的措辞都不可能生效
+    /// （主 App 写的是它自己的隔离容器，小组件永远读不到）。
+    /// 故提示行 / 现象位 / 时间位一律**不得**出现「App」字样（大小写都拦）。
+    func testNoWidgetCopyRowEverAsksUserToOpenTheMainApp() {
+        let rows: [(WidgetEmptyReason, WidgetPayloadStatus)] = [
+            (.noCity, .missing),
+            (.noCachedData, .missing),
+            (.sharedContainerDown, .unavailable),
+            (.fetchFailed, .unavailable),
+            (.cityHasNoData, .missing),
+        ]
+
+        for (reason, status) in rows {
+            let resolution = empty(reason, status: status, city: Self.beijing)
+            let cells: [(String, String)] = [
+                ("hintText", WidgetCopy.hintText(resolution: resolution) ?? ""),
+                ("conditionText", WidgetCopy.conditionText(resolution: resolution)),
+                ("updateText", WidgetCopy.updateText(resolution: resolution, timeText: nil)),
+            ]
+            for (label, text) in cells {
+                XCTAssertFalse(text.contains("App"),
+                               "\(reason) 的 \(label) 出现「App」：侧载上「去开主 App」"
+                               + "不可能改变小组件状态（硬规则见 WidgetCopy 文件头）")
+                XCTAssertFalse(text.contains("app"),
+                               "\(reason) 的 \(label) 出现「app」：同上（大小写都拦）")
+            }
         }
     }
 

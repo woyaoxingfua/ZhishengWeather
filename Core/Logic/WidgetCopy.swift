@@ -13,6 +13,29 @@
 //  文案口径（ARCH §13 七态表）沿用项目现有口吻：「暂无数据」「共享数据不可用」
 //  「可能已过期」，每条空态都给**下一步做什么**，绝不出现「出错了」。
 //
+//  ⚠️ **提示行的硬规则**（判据只有一条，动任何提示行前必须逐条过）：
+//
+//      凡是提示用户去做一个「在当前分发渠道上**无法**改变该状态」的动作，
+//      就是错的文案 —— 自问「**照做，这个状态会不会变好？**」，答「不会」的必须改。
+//
+//  为什么本项目的这条规则格外要紧：本产品的分发渠道是**未签名侧载**，entitlements
+//  不生效 → App Group 容器**永不可用** → 一切「去开主 App / 等主 App 写数据」类的
+//  提示**都不可能生效**（主 App 写的是它自己的隔离容器，小组件永远读不到）。
+//  已被这条规则判掉、**禁止写回**的历史文案：
+//    - `.noCachedData`：原「打开主 App 取数后自动显示」
+//    - `.sharedContainerDown`：原「请在主 App 中打开一次天气」
+//
+//  逐条判定（改文案时逐行复核；结论写在此处，避免每次重新推理）：
+//    - `.noCity`：**能**改善——长按→编辑→选一个具体城市是侧载上**唯一**能绕开容器的
+//      路径（内置 34 城目录直接命中，见 `WidgetCityCatalog`）。
+//      ⚠️「点按小部件」**不能**改善：点按只会打开主 App（未签名时容器仍读不到）。
+//    - `.noCachedData`：**能自愈**——该态只出现在 `snapshot`（`allowNetwork == false`）
+//      的瞬时 / 预览渲染，随后 timeline 的 L1 会自行取回 → 用户**无需动作**。
+//    - `.sharedContainerDown`：**能自愈**，同上一行。且该态的前置条件是「城市**已**解析」
+//      （无城市时走的是 `.noCity`），再让用户「选城市」等于让他重做刚做过的事，是错的建议。
+//    - `.fetchFailed`：**能**改善——确为断网时检查网络有效；自动重试由 timeline 承担。
+//    - `.cityHasNoData`：**能**改善——与 `.noCity` 同为选城路径。
+//
 //  实现纪律：`switch` 一律作用在**解包后**的 `WidgetEmptyReason` 上（避免对
 //  `Optional` 枚举做裸 case 匹配 —— 那在类型推断上不必要地依赖编译器行为），
 //  且**穷尽**该枚举、不留 `default`（新增空因时编译器会直接指出漏改处）。
@@ -95,17 +118,23 @@ enum WidgetCopy {
     /// 纪律：**只**在空态出现（有载荷 → nil，见 `WidgetEntryResolution` 不变式），
     /// 故渲染提示行不会改变数据路径的布局。
     /// Accessory 族（锁屏）空间小，可不渲染本行（§13 注）。
+    ///
+    /// ⚠️ 每一行都必须满足文件头的**提示行硬规则**（「照做，状态会不会变好」）；
+    /// 尤其**禁止**任何「去开主 App」类的措辞 —— 未签名侧载上它不可能生效。
     /// - Parameter resolution: 收敛值。
     /// - Returns: 中文提示句；有载荷 → nil（无需提示）。
     static func hintText(resolution: WidgetEntryResolution) -> String? {
         guard let reason = resolution.emptyReason else { return nil }
         switch reason {
         case .noCity:
-            return "点按小部件，选择要显示的城市"
-        case .noCachedData:
-            return "打开主 App 取数后自动显示"
-        case .sharedContainerDown:
-            return "请在主 App 中打开一次天气"
+            // 侧载上**唯一**能真正改变该状态的动作：编辑实例、选一个具体城市。
+            // 「点按小部件」不算 —— 点按只打开主 App，容器仍不可用（见文件头硬规则）。
+            return "长按小组件 → 编辑，选择城市"
+        case .noCachedData, .sharedContainerDown:
+            // 二者都只出现在快照路径（`allowNetwork == false`）的瞬时 / 预览渲染：
+            // 城市已解析、只是这一路不联网 → **会自愈**，故如实说明并**不**索取任何
+            // 用户动作（用户在侧载渠道上也做不到）。
+            return "稍候将自动获取"
         case .fetchFailed:
             return "请检查网络后重试"
         case .cityHasNoData:

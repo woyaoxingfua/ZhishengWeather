@@ -856,15 +856,33 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 |------|----------|--------------|---------------|------------------------|---------------------|-----------------------|
 | 正常 | `.available` | 任意 | `nil` | WMO 现象描述 | `更新于 HH:mm` | —（无） |
 | 过旧 | `.stale` | `.sharedContainer` | `nil` | WMO 现象描述 | `更新于 HH:mm · 已过期` | — |
-| 无城市 | `.missing` | `.none` | `.noCity` | `暂无数据` | `暂无数据` | `点按小部件，选择要显示的城市` |
-| 快照无缓存 | `.missing` | `.none` | `.noCachedData` | `暂无数据` | `暂无数据` | `打开主 App 取数后自动显示` |
-| 容器不可用（快照） | `.unavailable` | `.none` | `.sharedContainerDown` | `共享数据不可用` | `共享数据不可用` | `请在主 App 中打开一次天气` |
+| 无城市 | `.missing` | `.none` | `.noCity` | `暂无数据` | `暂无数据` | `长按小组件 → 编辑，选择城市` |
+| 快照无缓存 | `.missing` | `.none` | `.noCachedData` | `暂无数据` | `暂无数据` | `稍候将自动获取` |
+| 容器不可用（快照） | `.unavailable` | `.none` | `.sharedContainerDown` | `共享数据不可用` | `共享数据不可用` | `稍候将自动获取` |
 | 取数失败 | `.unavailable` | `.none` | `.fetchFailed` | `未能获取天气` | `未能获取天气` | `请检查网络后重试` |
 | 城市无数据 | `.missing` | `.none` | `.cityHasNoData` | `该城市暂无天气数据` | — | `换一个城市试试` |
 
 - 文案**只**从 `WidgetCopy` 出；视图**禁止**再各自拼句（消除第二处真源）。
 - `conditionText` 有数据时复用既有 `WMOCodeMapper.description(for:)`（不新增映射）。
 - Accessory 族（锁屏）空间小：`hintText` 可省略，仅显示 `conditionText`；`updateText` 不渲染。
+- ⚠️ **`hintText` 硬规则**（本表的判据，改动提示行前逐条过）：
+  **凡是提示用户去做一个「在当前分发渠道上无法改变该状态」的动作，就是错的文案**
+  —— 自问「照做，这个状态会不会变好？」。本产品的渠道是**未签名侧载** → App Group
+  容器**永不可用** → 一切「去开主 App / 等主 App 写数据」类的建议**都不可能生效**。
+  据此的三处结论（均为文案层，行为零改动）：
+  - `.noCity` → 「长按小组件 → 编辑，选择城市」：侧载上「编辑实例选具体城市」是**唯一**
+    绕开容器的路径（内置 34 城目录直接命中）。**不**用「点按小部件」—— 点按只打开主 App，
+    容器仍读不到，改不了本态。
+  - `.noCachedData` / `.sharedContainerDown` → 「稍候将自动获取」，**不索取任何用户动作**：
+    二者只出现在 `snapshot`（`allowNetwork == false`）的瞬时 / 预览渲染，城市已解析、
+    只是这一路不联网 → 随后 timeline 的 L1 自会取回（**自愈**）。尤其
+    `.sharedContainerDown` 的前置条件就是「城市**已**解析」（无城市走 `.noCity`），
+    再让用户去选城市等于让他重做刚做过的事。
+  - `.fetchFailed`（检查网络）/ `.cityHasNoData`（换城市）保留：两条都是用户照做**能**改善的动作。
+- **禁止写回**的历史文案：「打开主 App 取数后自动显示」「请在主 App 中打开一次天气」
+  （原文案在侧载渠道上不可能生效，属错建议）。
+- CI 已锁：`WidgetCopyTests.testNoWidgetCopyRowEverAsksUserToOpenTheMainApp` 断言
+  提示行 / 现象位 / 时间位**一律不含「App」字样**（大小写都拦）。
 
 ---
 
