@@ -9,6 +9,13 @@
 //  纪律：`[City]` 数组顺序 = 展示顺序（D-2）；不变式：列表中至多一个
 //  `isCurrentLocation == true` 的项；列表至少保留一个城市（AC-B11）。
 //
+//  ⚠️ 不变式「至少保留一个城市」是本类型（**主 App** 语义）的不变式，
+//  **不适用于小组件**：小组件的容器可能永久为空（未签名侧载构建下 App Group
+//  不可用），且小组件**不得**替用户默认城市。故小组件侧**禁止**用
+//  `initial()`（北京）兜底，改读**原始**容器城市
+//  （`WidgetCityCatalog.rawCities(from:)`，missing / corrupt → 空数组）；
+//  详见 docs/handover/ARCH-zhisheng-ios-widget-selfsufficiency.md §7.2。
+//
 
 import Foundation
 
@@ -233,29 +240,5 @@ struct CityDirectory: Equatable, Sendable {
     var selectedCity: City? {
         guard let selectedID else { return nil }
         return cities.first { $0.id == selectedID }
-    }
-}
-
-// MARK: - widget 侧只读载入（F-C）
-
-extension CityDirectory {
-
-    /// widget 进程只读载入（F-C 专用；主 App 的落盘语义不适用）。
-    ///
-    /// 三态响应（与 App 侧 E-1 同源，差异仅在"不落盘"——widget 只读、
-    /// 避免与主 App 写竞态；missing 的落盘职责在主 App，AC-B1 已保证）：
-    ///   - `.loaded`  → `CityDirectory(cities:selectedID:)`（坏 selectedID 由既有规则回退第一项）；
-    ///   - `.missing` → 内存 `initial()`，**不落盘**；
-    ///   - `.corrupt` → 内存 `initial()`，**不落盘**（字节保全纪律在 widget 侧同样禁止覆盖写）。
-    ///
-    /// - Parameter store: 共享容器读取器（widget 进程内只使用其读路径）。
-    /// - Returns: 可用于解析的目录（永不为空列表，见 `CityDirectory` 不变式）。
-    static func loadReadOnly(from store: AppGroupStore) -> CityDirectory {
-        switch store.loadCities() {
-        case .loaded(let cities):
-            return CityDirectory(cities: cities, selectedID: store.selectedCityID)
-        case .missing, .corrupt:
-            return CityDirectory.initial()
-        }
     }
 }

@@ -3,7 +3,11 @@
 //  ZhishengWeatherWidget（Widget target）
 //
 //  Small（约 155×155）：城市 / 图标 / 大字温度 / 现象 / 更新时间。
-//  空态：温度显示 `--°`，图标用问号兜底，文案「暂无数据」。
+//  空态：温度显示 `--°`，图标用问号兜底，现象位与提示行由 `WidgetCopy` 给出
+//  （单一真源；「没取过数」「取不到」「没配城市」文案各不相同，且给出下一步）。
+//
+//  提示行只在**空态**出现（`WidgetCopy.hintText` 有载荷时恒为 nil）
+//  → 数据路径布局与提示行引入前完全一致（无溢出风险）。
 //
 //  背景经 `widgetBackground(_:)` 双写：iOS 17 走
 //  `containerBackground(for: .widget)`，iOS 16.x 退回 padding + background。
@@ -49,18 +53,27 @@ struct SmallWeatherView: View {
                     .foregroundStyle(Theme.secondaryText)
                     .lineLimit(1)
             }
+
+            // 空态可操作提示（§13）：仅空态出现，绝不改变有数据时的布局。
+            if let hintText {
+                Text(hintText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetBackground { entry.backgroundStyle.backgroundView }
     }
 
-    // MARK: - 取值（空态安全兜底）
+    // MARK: - 取值（空态安全兜底；状态文案一律走 WidgetCopy 单一真源）
 
     private var snapshot: WeatherSnapshot? { entry.payload?.snapshot }
 
     private var cityName: String {
-        // F-C：实例目标城市优先（固定城市无匹配快照时也显示所配城市名），
+        // 实例目标城市优先（固定城市无匹配快照时也显示所配城市名），
         // 回退快照 location（placeholder 预览路径）。
         entry.displayCityName ?? "—"
     }
@@ -70,24 +83,31 @@ struct SmallWeatherView: View {
         return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
-    /// 现象文案（空态安全兜底）。
-    ///
-    /// 本轮：共享容器不可用 / 载荷损坏时**如实说明**「共享数据不可用」，
-    /// 而不是混进「暂无数据」（二者对用户含义不同：一个是没取过数，一个是取不到）。
+    /// 现象位（有数据 → WMO 描述；空态 → `WidgetCopy` 的如实状态句）。
     private var conditionText: String {
-        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
-        guard let snapshot else { return "暂无数据" }
-        return WMOCodeMapper.description(for: snapshot.weatherCode)
+        WidgetCopy.conditionText(resolution: entry.resolution)
     }
 
-    /// 更新时间；数据过旧 → 追加「已过期」标注（仍展示原数据）。
+    /// 时间位；空态返回空串：状态句已由现象位与提示行承担，
+    /// 同一行内不重复渲染同一句话（Small 的底行两个文案并排）。
     private var timeText: String {
-        guard let payload = entry.payload else { return "" }
-        let time = WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
-        return entry.payloadStatus == .stale ? "\(time) · 已过期" : time
+        guard let formattedTime else { return "" }
+        return WidgetCopy.updateText(resolution: entry.resolution, timeText: formattedTime)
     }
 
-    /// D-4：时刻渲染时区 = 共享载荷携带的城市时区；缺省 → 设备时区。
+    /// 已格式化的「HH:mm」；无载荷 → nil（Core 的 `WidgetCopy` 不碰格式化，
+    /// 见该文件「时刻格式化的边界」说明）。
+    private var formattedTime: String? {
+        guard let payload = entry.payload else { return nil }
+        return WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
+    }
+
+    /// 空态可操作提示；有载荷 → nil。
+    private var hintText: String? {
+        WidgetCopy.hintText(resolution: entry.resolution)
+    }
+
+    /// D-4：时刻渲染时区 = 载荷携带的城市时区；缺省 → 设备时区。
     private var timeZone: TimeZone { WidgetTimeFormatter.timeZone(for: entry.payload) }
 
     private var weatherCode: Int {

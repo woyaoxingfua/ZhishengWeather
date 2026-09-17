@@ -4,9 +4,21 @@
 //
 //  Widget 载荷状态与解析 —— **纯函数**，可纯单测。
 //
-//  背景（本轮要求 6）：Widget **没有网络**。共享载荷缺失 / 损坏 / 过旧时，
-//  它必须**如实说明**（"共享数据不可用" / "数据已过期"），而不是渲染空白
-//  或编一个假值。
+//  ⚠️ 前提已修订（原陈述「Widget **没有网络**」**作废**）：被
+//  `docs/handover/ARCH-zhisheng-ios-widget-selfsufficiency.md` **取代**。
+//  原因：CI 出的是完全未签名 IPA，entitlements 不生效 → App Group 容器在
+//  侧载产物上永久不可用 → 「小组件只读共享容器」结构性死亡。故小组件**允许自力取数**
+//  （L1，复用 `WeatherService`，一轮至多 1 次请求，8s 有界）。
+//
+//  本文件仍承担**阶梯 L0** 的判定（`WidgetPayloadResolver`）：容器是否可用、
+//  载荷归属是否匹配、是否过旧。L1/L2 的编排见 `WidgetDataResolver`。
+//  共享载荷确实缺失 / 损坏 / 过旧时，仍必须**如实说明**
+//  （"共享数据不可用" / "数据已过期"），而不是渲染空白或编一个假值。
+//
+//  状态模型的**裁定**（ARCH §8.2）：`WidgetPayloadStatus` 的 case 集合**不变**。
+//  来源（`WidgetDataSource`）与空因（`WidgetEmptyReason`）作为**正交**字段另立
+//  于 `WidgetEntryResolution`。理由：全仓对 `WidgetPayloadStatus` 的消费是
+//  `==` 比较而非穷尽 switch，加 case 能过 CI 但视图会**静默落到 else** 渲染错文案。
 //
 //  为什么放 Core：Widget target 不被测试 bundle 引入（测试宿主是主 App），
 //  逻辑若写在 Widget target 里就**无法单测**（CI-pitfalls P-18 同源盲区）。

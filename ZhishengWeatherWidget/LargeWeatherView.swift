@@ -136,6 +136,15 @@ struct LargeWeatherView: View {
             .foregroundStyle(Theme.secondaryText)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
+
+            // 空态可操作提示（§13）：仅空态出现，绝不改变有数据时的布局。
+            if let hintText {
+                Text(hintText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -270,11 +279,14 @@ struct LargeWeatherView: View {
         return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
     }
 
+    /// 现象位（有数据 → WMO 描述；空态 → `WidgetCopy` 的如实状态句）。
     private var conditionText: String {
-        // 本轮：共享容器不可用 → 如实说明（与「暂无数据」区分）。
-        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
-        guard let snapshot else { return "暂无数据" }
-        return WMOCodeMapper.description(for: snapshot.weatherCode)
+        WidgetCopy.conditionText(resolution: entry.resolution)
+    }
+
+    /// 空态可操作提示；有载荷 → nil。
+    private var hintText: String? {
+        WidgetCopy.hintText(resolution: entry.resolution)
     }
 
     private var highLowText: String {
@@ -287,14 +299,18 @@ struct LargeWeatherView: View {
         return "体感 \(snapshot.apparentTemperatureText)"
     }
 
+    /// 头部时间位（有数据 → 「更新于 HH:mm」；空态 → `WidgetCopy` 的状态句）。
     private var updateText: String {
-        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
-        guard let payload = entry.payload else { return "" }
-        let time = WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
-        return entry.payloadStatus == .stale ? "更新于 \(time) · 已过期" : "更新于 \(time)"
+        WidgetCopy.updateText(resolution: entry.resolution, timeText: formattedUpdatedAt)
     }
 
-    /// D-4：时刻渲染时区 = 共享载荷携带的城市时区；缺省 → 设备时区。
+    /// 已格式化的「HH:mm」；无载荷 → nil（Core 的 `WidgetCopy` 不碰格式化）。
+    private var formattedUpdatedAt: String? {
+        guard let payload = entry.payload else { return nil }
+        return WidgetTimeFormatter.hourMinute(payload.updatedAt, in: timeZone)
+    }
+
+    /// D-4：时刻渲染时区 = 载荷携带的城市时区；缺省 → 设备时区。
     private var timeZone: TimeZone { WidgetTimeFormatter.timeZone(for: entry.payload) }
 
     private var weatherCode: Int {

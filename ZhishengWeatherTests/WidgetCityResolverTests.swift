@@ -2,17 +2,26 @@
 //  WidgetCityResolverTests.swift
 //  ZhishengWeatherTests
 //
-//  F-C 桌面小组件城市选择：Core 解析器 + 只读载入 + 快照归属判定（AC-C9 主体）。
+//  F-C 桌面小组件城市选择：**新解析入口**（`resolveOutcome`，城市阶梯 C0/C1/C2）
+//  + 原始容器读取 + 快照归属判定（AC-C9 主体）。
+//
 //  覆盖：
-//    ① resolve(.followApp) → selectedCity（AC-C2 数据侧）；
-//    ② resolve(.fixed) 命中 → 该城市（AC-C3 数据侧）；
-//    ③ resolve(.fixed 已删 id) → 回退 followApp 结果（AC-C5 解析层）；
-//    ④ 空目录 → nil（空表兜底，AC-C9）；
-//    ⑤ mode(forEntityID:)：哨兵 id → .followApp，城市 id → .fixed；
-//    ⑥ loadReadOnly 三态：loaded 原样采用 + 坏 selectedID 回退第一项；
-//       missing / corrupt → 内存 initial 且**不落盘**（E-1 纪律在 widget 侧延续）；
-//    ⑦ 快照归属判定：makeID(北京坐标) == 北京.id（true）≠ 杭州.id（false）
-//       （AC-C6 数据侧"不冒充"的判定单元）。
+//    ① `.followApp` + 容器有选中 → 选中城市（AC-C2 数据侧）；
+//    ② `.followApp` + 容器空 → `.needsConfiguration`（**幽灵北京回归防线**：
+//       旧实现经 CityDirectory.loadReadOnly → initial() 静默解析出北京）；
+//    ③ `.followApp` + 容器空但内置目录非空 → 仍 `.needsConfiguration`
+//       （C1 只经「用户主动选择」生效，绝不替用户默认）；
+//    ④ `.fixed` 命中容器 → 该城市（AC-C3 数据侧）；
+//    ⑤ `.fixed` 命中内置目录（容器空）→ 内置城市（C1 新增能力）；
+//    ⑥ `.fixed` 合法坐标但不在任何目录 → 坐标回填（ARCH §10-3 旧实例兼容）；
+//    ⑦ `.fixed` 怪值 → `.needsConfiguration`（不冒充、不静默改城市）；
+//    ⑧ 同 id 同时存在于容器与内置 → **容器优先**（全量元数据）；
+//    ⑨ 容器的 selectedID 已失效 → `.needsConfiguration`；
+//    ⑩ `mode(forEntityID:)`：哨兵 id → `.followApp`，城市 id → `.fixed`；
+//    ⑪ 哨兵 id 与 City.makeID 产物格式互斥（R-C5）；
+//    ⑫ `WidgetCityCatalog.rawCities`：loaded 原样 / missing → [] / corrupt → []
+//       且**不覆盖写**（字节保全）；
+//    ⑬ 快照归属判定：makeID(北京坐标) == 北京.id（true）≠ 杭州.id（false）。
 //
 //  全部 guard case + XCTFail，无 try! / 强解包（SC-31 纪律）。
 //
@@ -53,60 +62,145 @@ final class WidgetCityResolverTests: XCTestCase {
     private static let hangzhou = City(name: "杭州", latitude: 30.25, longitude: 120.17,
                                        isCurrentLocation: false)
 
-    /// 双城市目录：[北京, 杭州]，选中杭州。
-    private static var twoCityDirectory: CityDirectory {
-        CityDirectory(cities: [City.beijingDefault, hangzhou], selectedID: hangzhou.id)
+    /// 苏州（**不在**内置 34 城目录里，用于坐标回填用例）。
+    private static let suzhou = City(name: "苏州", latitude: 31.30, longitude: 120.58,
+                                     isCurrentLocation: false)
+
+    /// 容器快照字面量（容器可用 → 城市阶梯一律纯本地）。
+    private func container(cities: [City],
+                           selectedID: String?,
+                           available: Bool = true) -> WidgetContainerSnapshot {
+        WidgetContainerSnapshot(cities: cities, selectedID: selectedID,
+                                containerAvailable: available)
     }
 
-    // MARK: - ① followApp → selectedCity（AC-C2 数据侧）
-
-    func testResolveFollowAppReturnsSelectedCity() {
-        let directory = Self.twoCityDirectory
-
-        XCTAssertEqual(WidgetCityResolver.resolve(.followApp, directory: directory)?.id,
-                       Self.hangzhou.id,
-                       "followApp 必须解析为主 App 当前选中城市（AC-C2）")
+    /// 实例配置值。
+    private func selection(_ id: String, name: String = "配置城市") -> WidgetCitySelection {
+        WidgetCitySelection(id: id, name: name, subtitle: nil)
     }
 
-    // MARK: - ② fixed 命中（AC-C3 数据侧）
+    // MARK: - ① followApp + 容器有选中（AC-C2 数据侧）
 
-    func testResolveFixedHitReturnsThatCity() {
-        let directory = Self.twoCityDirectory
+    func testFollowAppResolvesSelectedCityFromRawContainer() {
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(WidgetCityResolver.followAppID),
+            container: container(cities: [City.beijingDefault, Self.hangzhou],
+                                 selectedID: Self.hangzhou.id),
+            builtIn: WidgetBuiltInCities.cities)
 
-        XCTAssertEqual(WidgetCityResolver.resolve(.fixed(cityID: City.beijingDefault.id),
-                                                 directory: directory)?.id,
-                       City.beijingDefault.id,
-                       "fixed 命中目录项必须返回该城市，而非选中城市（AC-C3）")
-        XCTAssertEqual(WidgetCityResolver.resolve(.fixed(cityID: Self.hangzhou.id),
-                                                 directory: directory)?.id,
-                       Self.hangzhou.id)
+        XCTAssertEqual(outcome.city?.id, Self.hangzhou.id,
+                       "followApp 必须解析为容器中**用户主动选中**的城市（AC-C2）")
     }
 
-    // MARK: - ③ fixed 未命中 → 回退 followApp（AC-C5 解析层）
+    // MARK: - ② followApp + 容器空 → 无城市（幽灵北京回归防线）
 
-    func testResolveFixedMissFallsBackToFollowAppResult() {
-        let directory = Self.twoCityDirectory
+    func testFollowAppWithEmptyContainerYieldsNoCityInsteadOfGhostBeijing() {
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(WidgetCityResolver.followAppID),
+            container: container(cities: [], selectedID: nil),
+            builtIn: WidgetBuiltInCities.cities)
 
-        XCTAssertEqual(WidgetCityResolver.resolve(.fixed(cityID: "no,such,id"),
-                                                 directory: directory)?.id,
-                       Self.hangzhou.id,
-                       "fixed 已删/坏值必须回退为 followApp 的解析结果（AC-C5）")
+        XCTAssertEqual(outcome, .needsConfiguration,
+                       "容器真空必须解析为无城市（诚实空态）——"
+                       + "旧实现经 initial() 静默给出北京，即幽灵北京缺陷")
+        XCTAssertNil(outcome.city, "绝不注入 CityDirectory.initial() 的北京")
     }
 
-    // MARK: - ④ 空目录 → nil（AC-C9 空表兜底）
+    // MARK: - ③ followApp + 容器空但内置目录非空 → 仍无城市
 
-    func testResolveEmptyDirectoryReturnsNil() {
-        // 理论不可达（CityDirectory 不变式 ≥1），仅 corrupt/missing 防御路径。
-        let directory = CityDirectory(cities: [], selectedID: "39.90,116.41")
+    func testFollowAppIgnoresBuiltInCatalogWithoutUserSelection() {
+        XCTAssertFalse(WidgetBuiltInCities.cities.isEmpty, "前置：内置目录非空")
 
-        XCTAssertNil(WidgetCityResolver.resolve(.followApp, directory: directory),
-                     "空目录 followApp → nil（UI 走暂无数据空态）")
-        XCTAssertNil(WidgetCityResolver.resolve(.fixed(cityID: "39.90,116.41"),
-                                                directory: directory),
-                     "空目录 fixed 未命中 → nil")
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(WidgetCityResolver.followAppID),
+            container: container(cities: [], selectedID: nil),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome, .needsConfiguration,
+                       "C1 只经『用户主动选择』生效，绝不替用户默认城市（决策 #4）")
     }
 
-    // MARK: - ⑤ mode(forEntityID:)：哨兵判定集中
+    // MARK: - ④ fixed 命中容器（AC-C3 数据侧）
+
+    func testFixedHitResolvesContainerCity() {
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(Self.hangzhou.id),
+            container: container(cities: [City.beijingDefault, Self.hangzhou],
+                                 selectedID: City.beijingDefault.id),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome.city?.id, Self.hangzhou.id,
+                       "fixed 命中容器项必须返回该城市，而非容器选中城市（AC-C3）")
+    }
+
+    // MARK: - ⑤ fixed 命中内置目录（容器空，C1 新增能力）
+
+    func testFixedHitResolvesBuiltInCityWhenContainerIsEmpty() {
+        let builtInBeijing = City.beijingDefault
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(builtInBeijing.id),
+            container: container(cities: [], selectedID: nil),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome.city?.id, builtInBeijing.id,
+                       "容器空时命中内置目录 → 解析成功（这就是 C1 让用户主动选到城市的路径）")
+    }
+
+    // MARK: - ⑥ fixed 合法坐标但不在任何目录 → 坐标回填
+
+    func testFixedCanonicalCoordinateOutsideCatalogsIsBackfilled() {
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(Self.suzhou.id, name: "苏州"),
+            container: container(cities: [], selectedID: nil),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome.city?.id, Self.suzhou.id,
+                       "合法规范坐标 id 必须回填解析（旧实例 / C2 搜索选中的城市）")
+        XCTAssertEqual(outcome.city?.name, "苏州",
+                       "坐标回填用**配置携带的展示名**重建城市，不伪造名称")
+    }
+
+    // MARK: - ⑦ fixed 怪值 → 无城市
+
+    func testFixedWeirdValueYieldsNoCity() {
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection("no,such,id", name: "怪值"),
+            container: container(cities: [], selectedID: nil),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome, .needsConfiguration,
+                       "既非目录项、又非合法坐标 → 如实空态，**不**静默改城市")
+    }
+
+    // MARK: - ⑧ 同 id 双目录 → 容器优先
+
+    func testContainerCityWinsOverBuiltInForSameID() {
+        // 同坐标同 id，但容器项带用户自己的元数据（名称不同）。
+        let containerHangzhou = City(name: "杭州市区", latitude: 30.25, longitude: 120.17,
+                                     isCurrentLocation: false)
+
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(containerHangzhou.id),
+            container: container(cities: [containerHangzhou], selectedID: nil),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome.city?.name, "杭州市区",
+                       "同 id 时必须返回容器项（全量元数据），内置项只作兜底")
+    }
+
+    // MARK: - ⑨ 容器 selectedID 失效 → 无城市
+
+    func testFollowAppWithDanglingSelectedIDYieldsNoCity() {
+        let outcome = WidgetCityResolver.resolveOutcome(
+            selection: selection(WidgetCityResolver.followAppID),
+            container: container(cities: [City.beijingDefault], selectedID: "no,such,id"),
+            builtIn: WidgetBuiltInCities.cities)
+
+        XCTAssertEqual(outcome, .needsConfiguration,
+                       "容器有城市但选中 id 失效 → 无城市（绝不回退到第一个城市冒充用户选择）")
+    }
+
+    // MARK: - ⑩ mode(forEntityID:)：哨兵判定集中
 
     func testModeForEntityIDMapsSentinelAndCityID() {
         XCTAssertEqual(WidgetCityResolver.mode(forEntityID: WidgetCityResolver.followAppID),
@@ -125,51 +219,45 @@ final class WidgetCityResolverTests: XCTestCase {
         XCTAssertFalse(WidgetCityResolver.followAppID.contains(","))
     }
 
-    // MARK: - ⑥ loadReadOnly 三态（widget 侧 E-1，仅"不落盘"差异）
+    // MARK: - ⑫ 原始容器读取三态（替代旧 loadReadOnly：不再注入 initial()）
 
-    func testLoadReadOnlyLoadedAdoptsCitiesAndFallsBackSelection() throws {
+    func testRawCitiesLoadedAdoptsCitiesVerbatim() throws {
         let store = try XCTUnwrap(store)
         let cities = [City.beijingDefault, Self.hangzhou]
         try store.saveCities(cities)
-        // 坏 selectedID：不指向任何项 → loadReadOnly 需按既有规则回退第一项。
-        try store.saveSelectedCityID("no,such,id")
 
-        let directory = CityDirectory.loadReadOnly(from: store)
+        let raw = WidgetCityCatalog.rawCities(from: store.loadCities())
 
-        XCTAssertEqual(directory.cities, cities, ".loaded 必须原样采用城市列表")
-        XCTAssertEqual(directory.selectedCity?.id, City.beijingDefault.id,
-                       "坏 selectedID 必须回退第一项")
+        XCTAssertEqual(raw, cities, ".loaded 必须原样采用城市列表（含顺序）")
     }
 
-    func testLoadReadOnlyMissingDoesNotPersist() throws {
+    func testRawCitiesMissingYieldsEmptyWithoutPersisting() throws {
         let store = try XCTUnwrap(store)
-        // 键缺失 → 内存 initial，绝不落盘（首启落盘是主 App 的职责，AC-B1）。
+        // 键缺失 → 空数组（**不是** initial() 的北京）。
 
-        let directory = CityDirectory.loadReadOnly(from: store)
+        let raw = WidgetCityCatalog.rawCities(from: store.loadCities())
 
-        XCTAssertEqual(directory, CityDirectory.initial(),
-                       "missing → 内存 initial（[北京] + 选中北京）")
+        XCTAssertTrue(raw.isEmpty, "missing → []（绝非 [北京]：容器真空 ≠ 用户选了北京）")
         XCTAssertEqual(store.loadCities(), .missing,
                        "widget 只读：missing 态读取后必须仍是 missing（无任何写入）")
     }
 
-    func testLoadReadOnlyCorruptDoesNotPersist() throws {
+    func testRawCitiesCorruptYieldsEmptyWithoutPersisting() throws {
         let store = try XCTUnwrap(store)
         let defaults = try XCTUnwrap(defaults)
         let corruptBytes = Data("[{ not valid json".utf8)
         defaults.set(corruptBytes, forKey: AppGroup.citiesKey)
 
-        let directory = CityDirectory.loadReadOnly(from: store)
+        let raw = WidgetCityCatalog.rawCities(from: store.loadCities())
 
-        XCTAssertEqual(directory, CityDirectory.initial(),
-                       "corrupt → 内存 initial（不依赖坏数据）")
+        XCTAssertTrue(raw.isEmpty, "corrupt → []（绝不依赖坏数据、也绝不用北京兜底）")
         XCTAssertEqual(defaults.data(forKey: AppGroup.citiesKey), corruptBytes,
                        "widget 只读：corrupt 态绝不覆盖写（字节保全）")
         XCTAssertEqual(store.loadCities(), .corrupt,
                        "读取后仍必须可判为 corrupt（未被改写）")
     }
 
-    // MARK: - ⑦ 快照归属判定（AC-C6 数据侧"不冒充"的判定单元）
+    // MARK: - ⑬ 快照归属判定（AC-C6 数据侧"不冒充"的判定单元）
 
     func testSnapshotOwnershipJudgment() {
         // 判定单元：City.makeID(snapshot.location) == 目标城市 id（R-C2）。

@@ -5,9 +5,17 @@
 //  F-C 桌面小组件城市选择：Intent 三件套
 //  （WidgetCityEntity + WidgetCityQuery + WidgetCitySelectionIntent）。
 //
-//  ⚠️ 禁联网（F-C-8 / AC-C8）：本文件所有方法只允许经 AppGroupStore 读本地
-//  共享容器（UserDefaults 读为可接受本地 IO）；不含任何网络类型引用 ——
-//  T06 静态自查项（grep 网络符号零命中）。
+//  ⚠️ 「禁联网」纪律**收窄**（原陈述「本文件所有方法只允许经 AppGroupStore 读本地
+//  共享容器；不含任何网络类型引用」**作废**，被
+//  docs/handover/ARCH-zhisheng-ios-widget-selfsufficiency.md §0 / §7.4 取代）：
+//    - `suggestedEntities()` / `entities(for:)` / `defaultResult()` → **纯本地**读
+//      （经 `AppGroupStore` 读共享容器；容器不可用 → 只剩哨兵 + 内置目录），
+//      且仍**不出现任何网络符号**（`qa-static-check.sh` SC-40 保持零命中）；
+//    - **仅** `entities(matching:)`（C2：用户在小部件配置界面输入城市名）
+//      允许联网，且复用**已存在**的 Core `GeocodingService`（免密钥、中文安全），
+//      **不新增端点、不新增凭据、不新增第二套映射**。
+//  旧纪律之所以作废：App Group 在未签名侧载产物上永久不可用 → 容器里可能一个
+//  真实城市都没有 → 用户**无法主动选择**任何城市 → C2 是唯一能看到任意城市的通道。
 //
 //  关键裁定：
 //  - R-C1：Intent 参数为**非可选** `WidgetCityEntity` + 哨兵实体默认值，
@@ -15,9 +23,13 @@
 //    "清除"交互不一致，属不可控面；哨兵让"跟随 App"成为候选列表第一项）。
 //  - 零自管持久化（AC-C4 / F-C-11）：参数值由系统 per-instance 存取，
 //    本文件既不写共享 key 也不按 family 分桶。
+//  - `WidgetCityEntity` 的**存储形状不变**（id / name / subtitle 三个字段，
+//    不加不减）：旧实例由系统按 per-instance 持久化，形状不变即天然兼容；
+//    解析所需的坐标就在 `id` 字符串里（规范坐标回填，ARCH §10）。
 //
 
 import AppIntents
+import Foundation
 import WidgetKit
 
 /// 配置界面里的一个城市选项。
@@ -69,33 +81,70 @@ struct WidgetCityEntity: AppEntity, Identifiable, Codable, Sendable {
     }
 }
 
-/// 候选查询：全部本地读（经 `AppGroupStore`，只读双 key）。
-struct WidgetCityQuery: EntityQuery {
+/// 候选查询。
+///
+/// 本地三条（`suggestedEntities` / `entities(for:)` / `defaultResult`）**纯本地读**；
+/// 仅字符串搜索 `entities(matching:)`（C2）联网。判定逻辑全部在 Core 纯函数
+/// （`WidgetCityCatalog` / `WidgetBuiltInCities`），本类型只做 1 行 `map`。
+struct WidgetCityQuery: EntityQuery, EntityStringQuery {
 
-    /// 配置 picker 候选 = [哨兵] + 已保存城市（保持共享容器数组顺序 = App 内顺序，AC-C1）。
+    /// 配置 picker 候选 = **[哨兵] + 可见城市**（口径见下）；哨兵**恒为第一项**。
     ///
-    /// 三态语义（与 E-1 同源）：`.missing` / `.corrupt` → 仅 [哨兵]
-    /// （空表兜底，AC-C9）。此处**不走** `loadReadOnly` 的 `initial()` 兜底，
-    /// 避免把"防御性北京"冒充为用户已保存的城市进入候选列表。
+    /// 可见城市 = 容器城市（保持共享容器数组顺序 = App 内顺序，AC-C1）
+    ///          + 内置城市中**未在容器出现**的（C1 顺序）。
+    /// 为什么要拼 C1：App Group 容器在未签名侧载产物上永久为空 → 只列容器城市时
+    /// 候选只剩哨兵（一个真实城市都没有），用户**无法主动选择**任何城市。
+    /// 注意 C1 **不是**替用户默认城市：只有用户**主动选中**才生效
+    /// （决策 #4：绝不静默替换成别的城市）。
     func suggestedEntities() async throws -> [WidgetCityEntity] {
-        let store = AppGroupStore()
-        guard case .loaded(let cities) = store.loadCities() else {
-            return [WidgetCityEntity.followApp]
-        }
-        return [WidgetCityEntity.followApp] + cities.map { WidgetCityEntity.make($0) }
+        let container = WidgetCityCatalog.rawCities(from: AppGroupStore().loadCities())
+        let visible = WidgetCityCatalog.visibleCities(container: container,
+                                                     builtIn: WidgetBuiltInCities.cities)
+        return [WidgetCityEntity.followApp] + visible.map(WidgetCityEntity.make)
     }
 
-    /// 系统恢复既有配置值时调用；对不在列表中的 id（已删除 / 坏值）→ 返回哨兵
-    /// （编辑界面回显"跟随 App"，与解析层回退语义一致，AC-C5 的 UI 层）。
+    /// 系统恢复既有配置值时调用（配置界面的**唯一**回显路径）。
+    ///
+    /// 必须与解析层同源接 C0/C1/C2，否则「用内置城市 / 坐标配置的实例」在编辑界面
+    /// 会被**错误回显成哨兵**（系统只按 id 查回实体）。
+    /// 回显优先级：哨兵 → 容器城市 → 内置城市 → 规范坐标回填（名称为 id 串）
+    /// → 哨兵（怪值兜底，与 `WidgetCityResolver.resolveOutcome` 的 `.needsConfiguration`
+    /// 语义对齐：都表示"这个值没法解析成城市"）。
+    ///
+    /// ⚠️ 已知限制（ARCH §10-3 / A10）：坐标回填路径拿不到展示名（系统只给 id，
+    /// 旧实体不携带 city 记录），故用**坐标串本身**作确定性名称；该路径只出现在
+    /// 「用户搜到过、但既不在容器也不在内置目录」的城市上。时区同样缺失 →
+    /// 时刻渲染回退设备时区（既有安全行为，绝不硬编码偏移）。
     func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
-        let directory = CityDirectory.loadReadOnly(from: AppGroupStore())
+        let container = WidgetCityCatalog.rawCities(from: AppGroupStore().loadCities())
         return identifiers.map { id in
-            guard id != WidgetCityEntity.followAppID,
-                  let city = directory.cities.first(where: { $0.id == id }) else {
-                return .followApp
+            guard id != WidgetCityEntity.followAppID else { return .followApp }
+            if let city = WidgetCityCatalog.city(forID: id,
+                                                container: container,
+                                                builtIn: WidgetBuiltInCities.cities) {
+                return WidgetCityEntity.make(city)
             }
-            return WidgetCityEntity.make(city)
+            if let city = WidgetCityCatalog.city(fromCanonicalID: id, name: id) {
+                return WidgetCityEntity.make(city)
+            }
+            return .followApp
         }
+    }
+
+    /// C2：按城市名搜索候选（配置界面输入时触发；**不进 timeline 路径**）。
+    ///
+    /// 复用 Core 既有 `GeocodingService`（Open-Meteo geocoding，免密钥、
+    /// `language=zh`）—— 零新增端点、零新增凭据、零新增映射。
+    /// 空白串直接短路为 `[]`：`GeocodingEndpoint.url` 对空白返回 nil → `badURL`，
+    /// 先判空可省一次无意义失败（且让搜索结果为空 ≠ 失败，AC-B19）。
+    /// - Parameter string: 用户输入的城市名片段。
+    /// - Returns: 候选城市实体；无命中 → 空数组。
+    /// - Throws: `WeatherError`（badStatus / network / timeout / decodingDetail）。
+    func entities(matching string: String) async throws -> [WidgetCityEntity] {
+        let keyword = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return [] }
+        let cities = try await GeocodingService().search(name: keyword)
+        return cities.map(WidgetCityEntity.make)
     }
 
     /// 默认值 = 哨兵（AC-C2：不是硬编码北京）。

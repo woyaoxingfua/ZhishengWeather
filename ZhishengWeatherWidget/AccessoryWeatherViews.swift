@@ -14,7 +14,10 @@
 //    `.primary` / 默认前景色层级（不依赖 Theme 深底浅字对比度，R-A7），
 //    图标用 WeatherSymbol 的 hierarchical 渲染；
 //  - 取值与现有三视图**同源**：`entry.payload?.snapshot` + `displayCityName`，
-//    空态 `--°` /「暂无数据」兜底；归属校验（R-C2）经 WeatherProvider 天然继承。
+//    空态 `--°` 兜底；状态文案一律走 Core 的 `WidgetCopy`（单一真源）。
+//    Accessory 族空间小，**不**渲染 `hintText` 提示行（ARCH §13 注），
+//    但现象位仍如实表达状态（「暂无数据」/「共享数据不可用」/「未能获取天气」）。
+//    归属校验（R-C2）经 WeatherProvider 天然继承。
 //
 
 import SwiftUI
@@ -96,10 +99,8 @@ struct AccessoryRectangularWeatherView: View {
     }
 
     private var conditionText: String {
-        // 本轮：共享容器不可用 → 如实说明（锁屏同样的诚实降级纪律）。
-        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
-        guard let snapshot else { return "暂无数据" }
-        return WMOCodeMapper.description(for: snapshot.weatherCode)
+        // 诚实降级文案的唯一真源在 Core 的 WidgetCopy（锁屏与桌面同源）。
+        WidgetCopy.conditionText(resolution: entry.resolution)
     }
 
     private var weatherCode: Int {
@@ -134,9 +135,7 @@ struct AccessoryInlineWeatherView: View {
     }
 
     private var conditionText: String {
-        // 本轮：共享容器不可用 → 如实说明（锁屏同样的诚实降级纪律）。
-        if entry.payloadStatus == .unavailable { return "共享数据不可用" }
-        guard let snapshot else { return "暂无数据" }
-        return WMOCodeMapper.description(for: snapshot.weatherCode)
+        // 诚实降级文案的唯一真源在 Core 的 WidgetCopy（锁屏与桌面同源）。
+        WidgetCopy.conditionText(resolution: entry.resolution)
     }
 }
