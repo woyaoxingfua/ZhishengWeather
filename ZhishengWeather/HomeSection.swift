@@ -10,6 +10,10 @@
 //  存储设计：`[String]`（原始顺序的子集排列）。崩溃/半写防护：读取时对
 //  未知标识与缺失区块做**补齐回默认位**（新加区块天然出现在默认位置）。
 //
+//  store 纪律（对齐 IconChoicePreference）：**store 是实例依赖，读与写必须绑
+//  同一个实例**（默认 `.standard`，单测注入独立 suite `zs.test.homeSection.<UUID>`）。
+//  ContentView 保留的 static 调用点只是**默认实例的薄壳转发**，不另存 store。
+//
 
 import Foundation
 
@@ -33,14 +37,22 @@ enum HomeSection: String, CaseIterable, Identifiable, Sendable {
     static var defaultOrder: [HomeSection] { allCases }
 }
 
-/// 主屏区块顺序管理（读 UserDefaults，进程内缓存）。
+/// 主屏区块顺序管理（读写绑注入的 store）。
 @MainActor
-enum HomeSectionOrder {
+struct HomeSectionOrder {
+
+    /// 读写共用的存储实例（构造时一次性选定，任何分支都不得绕开）。
+    private let defaults: UserDefaults
+
+    /// - Parameter defaults: 读写共用的存储（App 用 `.standard`，AC-A2-23：
+    ///   非共享容器）；单测注入独立 suite 以隔离。
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     /// 读取当前顺序（含用户隐藏的区块——返回全量排序；隐藏与否由调用方过滤）。
     /// 读取失败 / 存了未知标识 / 缺失新区块 → 补齐回默认位（防旧数据裁剪新功能）。
-    static func current() -> [HomeSection] {
-        let defaults = UserDefaults.standard
+    func current() -> [HomeSection] {
         guard let raw = defaults.stringArray(forKey: HomeSection.storageKey) else {
             return HomeSection.defaultOrder
         }
@@ -55,14 +67,13 @@ enum HomeSectionOrder {
         return result
     }
 
-    /// 保存顺序（全量，含已隐藏项——隐藏状态另由隐藏集合管理，见 `hidden`）。
-    static func save(_ order: [HomeSection]) {
-        UserDefaults.standard.set(order.map(\.rawValue), forKey: HomeSection.storageKey)
+    /// 保存顺序（全量，含已隐藏项——隐藏状态另由隐藏集合管理，见 `hidden()`）。
+    func save(_ order: [HomeSection]) {
+        defaults.set(order.map(\.rawValue), forKey: HomeSection.storageKey)
     }
 
     /// 读取隐藏集合。
-    static func hidden() -> Set<HomeSection> {
-        let defaults = UserDefaults.standard
+    func hidden() -> Set<HomeSection> {
         guard let raw = defaults.stringArray(forKey: HomeSection.storageKey + ".hidden") else {
             return []
         }
@@ -70,14 +81,28 @@ enum HomeSectionOrder {
     }
 
     /// 保存隐藏集合。
-    static func saveHidden(_ hidden: Set<HomeSection>) {
-        UserDefaults.standard.set(hidden.map(\.rawValue).sorted(),
-                                  forKey: HomeSection.storageKey + ".hidden")
+    func saveHidden(_ hidden: Set<HomeSection>) {
+        defaults.set(hidden.map(\.rawValue).sorted(),
+                     forKey: HomeSection.storageKey + ".hidden")
     }
 
     /// 恢复默认（清两个键，AC-A2-22）。
-    static func reset() {
-        UserDefaults.standard.removeObject(forKey: HomeSection.storageKey)
-        UserDefaults.standard.removeObject(forKey: HomeSection.storageKey + ".hidden")
+    func reset() {
+        defaults.removeObject(forKey: HomeSection.storageKey)
+        defaults.removeObject(forKey: HomeSection.storageKey + ".hidden")
     }
+
+    // MARK: - 生产默认实例（static 便捷 API 的薄壳）
+    //
+    // ContentView 的调用点保持 `HomeSectionOrder.current()` 形态不变，但全部转发
+    // 到**同一个默认实例**（App 本地 `.standard`）。这里不另存 store。
+
+    /// 生产默认实例（App 本地标准 UserDefaults）。
+    private static let shared = HomeSectionOrder()
+
+    static func current() -> [HomeSection] { shared.current() }
+    static func save(_ order: [HomeSection]) { shared.save(order) }
+    static func hidden() -> Set<HomeSection> { shared.hidden() }
+    static func saveHidden(_ hidden: Set<HomeSection>) { shared.saveHidden(hidden) }
+    static func reset() { shared.reset() }
 }

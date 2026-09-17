@@ -43,7 +43,10 @@ struct SettingsView: View {
     /// 真正创建移到 init 体内。
     private let iconSwitcher: AppIconSwitcher
 
-    @State private var appearanceSetting = AppearancePreference.appearance()
+    /// ⚠️ 初值经**注入的 AppearanceStore** 读取（`appearance.setting`），
+    /// 不得直接调 `AppearancePreference.appearance()`——那会绕过注入的 store，
+    /// 变成「读硬编码 standard、写注入 store」的镜像缝。
+    @State private var appearanceSetting: AppearanceSetting
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
     @State private var windSpeedUnit = UnitPreference.windSpeedUnit()
     @State private var pressureUnit = UnitPreference.pressureUnit()
@@ -76,6 +79,8 @@ struct SettingsView: View {
         let switcher = iconSwitcher ?? AppIconSwitcher()
         self.iconSwitcher = switcher
         // @State 初值必须在 init 内赋（不能在属性默认值处触碰非隔离参数）。
+        // 外观初值走注入的 AppearanceStore（与 .onChange 的写路径同一个 store）。
+        _appearanceSetting = State(initialValue: appearance.setting)
         _umbrellaReminderEnabled = State(initialValue: scheduler.isEnabled)
         _iconChoice = State(initialValue: switcher.currentChoice())
     }

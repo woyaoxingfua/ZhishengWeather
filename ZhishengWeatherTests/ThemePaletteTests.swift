@@ -6,8 +6,11 @@
 //
 //  · resolve(appearance:systemScheme:)：穷举「外观档位 × 系统深浅」全组合。
 //  · AppearancePreference：缺失键 / 未知值（"neon"）一律回退 "system"；
-//    且只写 App 本地标准 UserDefaults，**不得**写入 App Group 共享容器。
+//    且只写 **App 本地 UserDefaults**，**不得**写入 App Group 共享容器。
 //  · legacyDark 分量 == 重构前 Theme 的既有颜色（证明 Commit 1 零视觉变化）。
+//
+//  隔离纪律（对齐 AppIconSwitcherTests）：外观偏好相关用例只读写自己的独立
+//  suite（`zs.test.theme.<UUID>`），tearDown 清空；**不写** `UserDefaults.standard`。
 //
 
 import XCTest
@@ -16,17 +19,30 @@ import SwiftUI
 import UIKit
 @testable import ZhishengWeather
 
+@MainActor
 final class ThemePaletteTests: XCTestCase {
 
-    override func setUp() {
-        super.setUp()
-        // 每个用例从「缺失键」出发，避免跨用例污染。
-        UserDefaults.standard.removeObject(forKey: AppearancePreference.key)
+    private var defaults: UserDefaults!
+    private var suiteName: String!
+    /// 被测对象：读与写绑**同一个**注入 store。
+    private var appearance: AppearancePreference!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        // 每个用例从「缺失键」的独立 suite 出发，避免跨用例污染。
+        suiteName = "zs.test.theme.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        appearance = AppearancePreference(defaults: defaults)
         Theme.activePalette = .dark
     }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: AppearancePreference.key)
+        if let defaults, let suiteName {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        defaults = nil
+        suiteName = nil
+        appearance = nil
         Theme.activePalette = .dark
         super.tearDown()
     }
@@ -67,16 +83,16 @@ final class ThemePaletteTests: XCTestCase {
 
     /// 缺失键 → "system"（默认跟随系统）。
     func testAbsentAppearanceKeyYieldsSystem() {
-        UserDefaults.standard.removeObject(forKey: AppearancePreference.key)
-        XCTAssertEqual(AppearancePreference.appearance(), .system)
-        XCTAssertEqual(AppearancePreference.appearance().rawValue, "system")
+        defaults.removeObject(forKey: AppearancePreference.key)
+        XCTAssertEqual(appearance.appearance(), .system)
+        XCTAssertEqual(appearance.appearance().rawValue, "system")
     }
 
     /// 未知存储值（如 "neon"）→ 回退 "system"。
     func testUnknownAppearanceValueFallsBackToSystem() {
         XCTAssertEqual(AppearancePreference.normalized("neon"), .system)
-        UserDefaults.standard.set("neon", forKey: AppearancePreference.key)
-        XCTAssertEqual(AppearancePreference.appearance(), .system)
+        defaults.set("neon", forKey: AppearancePreference.key)
+        XCTAssertEqual(appearance.appearance(), .system)
     }
 
     /// 大小写不敏感归一化：存储 "LIGHT" 仍解析为 .light。
@@ -88,21 +104,51 @@ final class ThemePaletteTests: XCTestCase {
     /// 合法值往返（三档全覆盖）。
     func testAppearanceRoundTrip() {
         for setting in AppearanceSetting.allCases {
-            AppearancePreference.setAppearance(setting)
-            XCTAssertEqual(AppearancePreference.appearance(), setting)
+            appearance.setAppearance(setting)
+            XCTAssertEqual(appearance.appearance(), setting)
         }
     }
 
-    /// 持久化键名稳定，且**只**写 App 本地标准 UserDefaults（不入共享容器）。
+    /// 持久化键名稳定，且**只**写注入的 App 本地 store，不入共享容器。
     func testAppearanceKeyIsAppLocalNotSharedContainer() {
         XCTAssertEqual(AppearancePreference.key, "zs.weather.appearance")
 
-        AppearancePreference.setAppearance(.light)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: AppearancePreference.key), "light")
+        let standardBefore = UserDefaults.standard.string(forKey: AppearancePreference.key)
 
-        // 小组件只跟随系统，App 的「外观」设置不得写进 App Group 共享容器。
+        appearance.setAppearance(.light)
+        XCTAssertEqual(defaults.string(forKey: AppearancePreference.key), "light")
+        // 注入缝完整：写只进注入 suite，standard 一位都没动。
+        XCTAssertEqual(UserDefaults.standard.string(forKey: AppearancePreference.key),
+                       standardBefore,
+                       "写入不得落到 UserDefaults.standard")
+
+        // 小组件只跟随系统，App 的「外观」设置不得写进 App Group 共享容器
+        // （只读检查，不写共享容器）。
         let shared = UserDefaults(suiteName: AppGroup.identifier)
         XCTAssertNil(shared?.string(forKey: AppearancePreference.key))
+    }
+
+    // MARK: - AppearanceStore：注入缝（SettingsView 初值的唯一来源）
+
+    /// 初值必须来自**注入的** store（SettingsView 的 @State 走 `appearance.setting`）。
+    func testAppearanceStoreRestoresFromInjectedStore() {
+        appearance.setAppearance(.light)
+        let store = AppearanceStore(defaults: defaults)
+        XCTAssertEqual(store.setting, .light)
+    }
+
+    /// 写入只落注入的 store：读与写同一条缝，不污染 `.standard`。
+    func testAppearanceStoreWritesToInjectedStoreOnly() {
+        let standardBefore = UserDefaults.standard.string(forKey: AppearancePreference.key)
+        let store = AppearanceStore(defaults: defaults)
+
+        store.set(.dark)
+
+        XCTAssertEqual(store.setting, .dark)
+        XCTAssertEqual(defaults.string(forKey: AppearancePreference.key), "dark")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: AppearancePreference.key),
+                       standardBefore,
+                       "AppearanceStore 写入不得落到 UserDefaults.standard")
     }
 
     // MARK: - Commit 1 回归守卫：深色抽层「零视觉变化」
