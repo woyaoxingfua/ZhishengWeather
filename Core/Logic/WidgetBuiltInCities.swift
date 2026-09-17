@@ -40,8 +40,11 @@ enum WidgetBuiltInCities {
     /// ⚠️ 本表**不是**「回退城市来源」：全仓**没有任何代码**把 `cities.first` 当默认城市。
     /// 它只在三处被当 `builtIn:` 目录传入 —— `WeatherProvider`（timeline 解析）与
     /// `WidgetCityQuery.suggestedEntities` / `entities(for:)`（配置界面候选与回显）；
-    /// 解析器 `WidgetCityResolver.resolveOutcome` 在两条目录都命中不到时一律
-    /// `.needsConfiguration`（诚实空态），**不存在静默回退北京**的路径。
+    /// 解析器 `WidgetCityResolver.resolveOutcome` 在两条目录都命中不到时**绝不回退北京**：
+    ///   - 容器**可用** → 按 **AC-C5** 回退「跟随 App」（跟随用户自己的 App 选中城市）；
+    ///   - 容器**不可用** → 用配置携带的**规范坐标**回填（用户确实选过的坐标）；
+    ///   - 其余（非法坐标的怪值）→ `.needsConfiguration`（诚实空态）。
+    /// 三条路径都不含「注入北京」这一条。
     /// 故原注释「首项是共享容器不可用时的**唯一**默认坐标真源」属**过度声明**，已删。
     ///
     /// 已知限制（**数据缺失的诚实结果，禁用时区猜测填充**）：
