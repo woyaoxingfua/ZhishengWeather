@@ -252,15 +252,46 @@ fi
 
 # SC-40 【F-C 防线②】widget 目录零网络符号（配置解析在 widget 进程执行且预算极低，
 #        一旦联网「编辑小组件」会卡死 —— F-C-8 / AC-C8 的静态防线）
+#
+#        ⚠️ 2026-09-17 补强（真实漏网）：原实现只 grep 裸网络符号
+#        （URLSession/dataTask/NSURLRequest/dataTaskPublisher）。而实际发生的联网是
+#        「经由 Core 的 service 类型」间接完成的 —— `WidgetCityIntent.swift` 里一句
+#        `GeocodingService().search(name:)` 就能让**配置解析路径联网**，
+#        而本项对 `GeocodingService` 这个名字完全无感，于是**守卫显示通过、
+#        它要守的性质已经破了**（守卫自己成了 P-18 的受害者：检查与被检对象
+#        共享了「联网必须出现 URLSession 字面量」这个错误假设）。
+#        补强分两段：
+#          SC-40a：整个 widget 目录不得出现裸网络符号（裸 session 只能活在 Core）。
+#          SC-40b：**配置解析路径文件**（AppEntity/EntityQuery/AppIntent 的实现处）
+#                  额外禁止引用任何联网 service 类型 —— 因为该文件属于 AC-C8
+#                  管辖的「配置解析」范围，而 timeline 取数不在此列（那是允许的）。
 if [ -d "$WIDGET_DIR" ]; then
     hit=$(grep -rnE '\bURLSession\b|\bdataTask\b|\bNSURLRequest\b|\bdataTaskPublisher\b' "$WIDGET_DIR" 2>/dev/null | grep -vE ':[0-9]+:\s*(//|\*|///)' || true)
     if [ -z "$hit" ]; then
-        ok SC-40 "widget 目录零网络符号（配置解析纯本地读，F-C-8）"
+        ok SC-40a "widget 目录无裸网络符号（裸 session 只在 Core，配置解析纯本地读，F-C-8）"
     else
-        bad SC-40 "widget 目录出现网络符号（配置解析严禁联网）：$(echo "$hit" | sed -n '1p')"
+        bad SC-40a "widget 目录出现裸网络符号（配置解析严禁联网）：$(echo "$hit" | sed -n '1p')"
     fi
 else
-    bad SC-40 "无法检查 widget 网络符号：目录缺失"
+    bad SC-40a "无法检查 widget 网络符号：目录缺失"
+fi
+
+# SC-40b 配置解析文件禁引用联网 service（AC-C8「禁止在配置解析里发起网络请求」）
+CFG_INTENT="$WIDGET_DIR/WidgetCityIntent.swift"
+if [ -f "$CFG_INTENT" ]; then
+    # 联网 service 类型清单：凡新增网络出口都应在此登记（Core/Networking 下的 service）。
+    # ⚠️ 过滤注释必须用 `^[0-9]+:`（**不是** `:[0-9]+:`）：对**单个文件**做 grep -n
+    #    时输出是「行号:内容」，不带文件名，故 `:[0-9]+:` 永不匹配、过滤形同虚设
+    #    —— 这会让注释里的名字也被判成违规（本项初版就踩了这个坑，实测修正）。
+    hitb=$(grep -nE '\bGeocodingService\b|\bWeatherService\b|\bWidgetWeatherService\b|\bEnsembleService\b|\bArchiveService\b|\bAirQualityService\b|\bClimateProfileService\b' "$CFG_INTENT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*(//|\*|///)' || true)
+    if [ -z "$hitb" ]; then
+        ok SC-40b "配置解析文件零联网 service 引用（AC-C8：配置解析不得发起网络请求）"
+    else
+        bad SC-40b "配置解析文件引用了联网 service，违反 AC-C8（PRD-P1:404/424，P1 起为硬禁止）：$(echo "$hitb" | sed -n '1p') —— 该处应改为在内置城市 + 容器城市里做纯本地匹配。"
+    fi
+else
+    # 文件被改名/搬迁时不应静默失去这项防线：报 WARN 并要求重新指向。
+    warn SC-40b "配置解析文件 $CFG_INTENT 不存在（被改名或搬迁？）—— 请把 SC-40b 的检查目标重新指向承载 AppEntity/EntityQuery 的那个文件，否则该防线静默失效"
 fi
 
 # SC-41 【F-C 防线③】kind 字符串逐字 = "ZhishengWeatherWidget"
