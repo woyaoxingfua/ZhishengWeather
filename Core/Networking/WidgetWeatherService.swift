@@ -8,8 +8,9 @@
 //  `WeatherProvider.swift`）：
 //    1. `qa-static-check.sh` 的 **SC-40** 明令 widget 目录零网络符号
 //       （`URLSession` / `dataTask` / `NSURLRequest` / `dataTaskPublisher`）。
-//       C2（配置界面地理编码搜索）已按 ARCH §0 收窄为「仅 `entities(matching:)`
-//       允许联网」，但**网络类型引用仍不应散落在 Widget target**；
+//       本服务**只被小组件时间线取数**路径使用（`WidgetDataResolver`）；
+//       **配置解析路径零网络**（AC-C8 / 真机判据 F-C-8，PRD-P1:404/424）——
+//       故网络类型引用不应散落在 Widget target；
 //    2. 把「一个短超时会话 + 一个 WeatherService」的构造收进 Core，网络配置
 //       只有**一处**真源（将来调超时只改这里），Widget 侧只引用 `WeatherService`
 //       这一类型名（不出现任何网络符号）。

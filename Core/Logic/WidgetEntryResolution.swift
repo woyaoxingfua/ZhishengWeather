@@ -11,9 +11,14 @@
 //  故小组件必须能自己取数（L1），同时保留容器快路径（L0）与如实空态（L2）。
 //
 //  裁定（ARCH §8.2，**不推翻**）：**不**给 `WidgetPayloadStatus` 新增 case。
-//  理由：全仓对它的消费是 `==` 比较而**非穷尽 switch**（Core/视图/测试逐点核实），
-//  加 case 能过 CI，但视图会**静默落到 else** 渲染错文案 —— 即 P-18 同源盲区变体
-//  （编译通过、CI 全绿、真机文案错）。来源与空因改用两个**正交**字段表达，
+//  理由（**已按当前事实订正**）：全仓对它的消费是**零穷尽 switch**，实际读取点
+//  只有两处 —— `Core/Logic/WidgetCopy.swift` 的 `resolution.status == .stale`，
+//  与 `WeatherEntry.swift` 的同名转发属性 `payloadStatus`（纯转发、无判断）。
+//  故新增 case **没有任何渲染路径消费它**，只会变成一个**静默无效果**的状态
+//  （编译通过、CI 全绿、真机上该状态永不显示）。
+//  原文「视图以 `==` 消费、加 case 会静默落到 else 渲染错文案」**已不成立**：
+//  视图文案现全部走 `WidgetCopy`，不再直接比较本枚举。
+//  来源与空因改用两个**正交**字段表达：空态语义由 `WidgetEmptyReason` 承担，
 //  可在 CI 单测里逐条断言，不依赖 Widget 渲染。
 //
 //  正交性：`WidgetPayloadStatus` 是「有无 + 新旧」单轴；`WidgetDataSource` 是

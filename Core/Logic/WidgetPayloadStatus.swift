@@ -17,8 +17,13 @@
 //
 //  状态模型的**裁定**（ARCH §8.2）：`WidgetPayloadStatus` 的 case 集合**不变**。
 //  来源（`WidgetDataSource`）与空因（`WidgetEmptyReason`）作为**正交**字段另立
-//  于 `WidgetEntryResolution`。理由：全仓对 `WidgetPayloadStatus` 的消费是
-//  `==` 比较而非穷尽 switch，加 case 能过 CI 但视图会**静默落到 else** 渲染错文案。
+//  于 `WidgetEntryResolution`。
+//  理由（**已按当前事实订正**）：全仓对 `WidgetPayloadStatus` **零穷尽 switch**，
+//  唯一读取点是 `WidgetCopy.swift` 的 `status == .stale`（`WeatherEntry` 里的同名
+//  属性只是转发、无判断）。新增 case **没有任何渲染路径消费它** → 会变成一个
+//  **静默无效果**的状态；空态语义已由正交的 `WidgetEmptyReason` 承担。
+//  原文「视图以 `==` 消费、加 case 会静默落到 else 渲染错文案」**已不成立**：
+//  视图文案现全部走 `WidgetCopy`，不再直接比较本枚举。
 //
 //  为什么放 Core：Widget target 不被测试 bundle 引入（测试宿主是主 App），
 //  逻辑若写在 Widget target 里就**无法单测**（CI-pitfalls P-18 同源盲区）。

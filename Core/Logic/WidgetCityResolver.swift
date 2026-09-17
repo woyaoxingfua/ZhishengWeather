@@ -19,6 +19,9 @@
 //    **北京** → 未签名产物上小组件顶着「北京」标题显示「暂无数据」，
 //    把**防御性默认城市**冒充成用户的**城市归属**（决策 #4 明令禁止）。
 //    现在容器真空即 `.needsConfiguration`（诚实空态），**绝不**注入 `initial()`。
+//  - **AC-C5 分层回退（B 组回归修复）**：`.fixed` 未命中两条目录时，是否可用
+//    **坐标回填**取决于**容器是否可用**（= 信息是否可得），而不是无条件回填。
+//    详见 `resolveOutcome` 第 3 步。
 //
 //  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
 //
@@ -53,19 +56,30 @@ enum WidgetCityResolver {
     /// 配置 + **原始容器** + 内置目录 → 本实例应渲染的目标城市。
     ///
     /// 优先级（**写死**，实现与测试不得各自解读 —— P-13）：
-    ///   0. 哨兵 id → `.followApp` 分支：
+    ///   0. 哨兵 id → `.followApp` 分支（`followAppOutcome`）：
     ///      a. `container.selectedID` 在 `container.cities` 中命中 → `.resolved(该城市)`；
     ///      b. 否则（容器空 / 选中失效）→ `.needsConfiguration`
     ///         ⚠️ **绝不**注入 `CityDirectory.initial()` 的北京（幽灵北京修复点）。
-    ///   1. id 命中**容器**目录 → `.resolved(容器城市，全量元数据)`；
-    ///   2. 否则命中**内置**目录（C1）→ `.resolved(内置城市，全量元数据)`；
-    ///   3. 否则 id 可解析为**规范坐标** → `.resolved(坐标回填 City(name: 配置携带名))`；
-    ///   4. 否则 → `.needsConfiguration`（不冒充、不默认）。
+    ///   1. id 命中**城市目录** → `.resolved(该城市，全量元数据)`。
+    ///      目录口径 = `WidgetCityCatalog.city(forID:container:builtIn:)`，**容器项优先**
+    ///      （用户自己加的项带容器侧元数据；仅在容器未命中时才落到内置目录 C1）。
+    ///      内置目录的存在意义见第 3 步：它保证「从未联网的内置列表里选的城市」
+    ///      **永远不算「被删除」**。
+    ///   2. 两条目录**都不命中** → 按**信息是否可得**分层（AC-C5，B 组回归修复）：
+    ///      a. 容器**可用**（能读到容器）→ 说明这条记录**确已不存在**
+    ///         （用户在主 App 删了它）→ **回退 `.followApp` 语义**
+    ///         （跟随 App；App 侧也无有效选中 → `.needsConfiguration`）。
+    ///         **不做坐标回填** —— 回填会让小组件继续显示、并继续为
+    ///         一个「已被用户删除的城市」取数，与 AC-C5 直接冲突（真机可复现）。
+    ///      b. 容器**不可用**（未签名侧载 / entitlements 失效）→ **无法得知**
+    ///         是否被删除 → 才允许**坐标回填**（C2）：
+    ///         id 可解析为规范坐标 → `.resolved(回填的 City，名取配置携带值)`。
+    ///   3. 其余（非法坐标的怪值）→ `.needsConfiguration`（不冒充、不默认）。
     ///
-    /// 与旧规则的差别（有意变更）：`.fixed` 未命中**不再**回退成 `.followApp` 语义 ——
-    /// 旧的双层回退在「用户已选城市但容器被清空」时会**静默换成 App 当前城市**，
-    /// 正是决策 #4 禁止的行为；新规则改为坐标 id 优先回填真实坐标，
-    /// 真正无法解析（既非目录项、又非合法坐标）才 `.needsConfiguration`。
+    /// 与初版规则的差别（有意变更）：初版在第 2 步**无条件**坐标回填 ——
+    /// 等于让「已被用户删除的城市」继续存活并继续取数（AC-C5 违规）。
+    /// 现改为**先判容器是否可用**，只在「无法得知是否被删除」时才回填；
+    /// 并在容器可用时按 AC-C5 回退到「跟随 App」，而非静默保留一个已删除的城市。
     ///
     /// - Parameters:
     ///   - selection: 本实例的配置值（id / name / subtitle 的 Core 侧投影）。
@@ -77,26 +91,48 @@ enum WidgetCityResolver {
                                builtIn: [City]) -> WidgetCityOutcome {
         switch mode(forEntityID: selection.id) {
         case .followApp:
-            // 容器里有「用户在主 App 主动选中」的城市才跟随；容器真空 → 无城市。
-            guard let selectedID = container.selectedID,
-                  let selected = container.cities.first(where: { $0.id == selectedID }) else {
-                return .needsConfiguration
-            }
-            return .resolved(selected)
+            return followAppOutcome(container: container)
 
         case .fixed(let cityID):
-            // C0 → C1：容器优先（全量元数据），其次内置目录（C1 新增能力）。
+            // 第 1 步：命中城市目录（容器项优先，其次内置目录 C1）→ 直接用目录项。
             if let city = WidgetCityCatalog.city(forID: cityID,
                                                 container: container.cities,
                                                 builtIn: builtIn) {
                 return .resolved(city)
             }
-            // C2 回填：非目录项但合法规范坐标 id → 用坐标 + 配置携带名重建城市。
+
+            // 第 2 步：两条目录都不命中 → 按「信息是否可得」分层（AC-C5）。
+            if container.containerAvailable {
+                // 2a. 容器可用 = 信息可得 → 该城市确已被删除 → 回退「跟随 App」语义。
+                //     绝不坐标回填（否则会顶着一个已删除城市继续显示 + 继续取数）。
+                return followAppOutcome(container: container)
+            }
+
+            // 2b. 容器不可用 = 信息不可得 → 允许坐标回填，保住实例可用
+            //     （未签名侧载下容器恒不可用，这是 `.fixed` 实例唯一的存活路径）。
             if let city = WidgetCityCatalog.city(fromCanonicalID: cityID, name: selection.name) {
                 return .resolved(city)
             }
-            // 怪值（既非目录项、又非合法坐标）→ 如实空态，**不**静默改城市。
+
+            // 第 3 步：怪值（既非目录项、又非合法坐标）→ 如实空态，**不**静默改城市。
             return .needsConfiguration
         }
+    }
+
+    /// `.followApp` 语义：容器里有「用户在主 App 主动选中」的城市才跟随，否则诚实空态。
+    ///
+    /// 哨兵分支与 AC-C5 回退（`resolveOutcome` 第 2a 步）**共用**此实现，
+    /// 保证「跟随 App」只有一处定义（避免两处各自解读，P-13）。
+    ///
+    /// ⚠️ 绝不注入 `CityDirectory.initial()` 的北京：容器真空 = 用户从未在主 App
+    /// 选过城市 → 如实空态（幽灵北京修复点）。
+    /// - Parameter container: **原始**容器城市快照。
+    /// - Returns: `.resolved(选中城市)`；选中缺失或失效 → `.needsConfiguration`。
+    private static func followAppOutcome(container: WidgetContainerSnapshot) -> WidgetCityOutcome {
+        guard let selectedID = container.selectedID,
+              let selected = container.cities.first(where: { $0.id == selectedID }) else {
+            return .needsConfiguration
+        }
+        return .resolved(selected)
     }
 }

@@ -2,8 +2,8 @@
 //  WidgetBuiltInCitiesTests.swift
 //  ZhishengWeatherTests
 //
-//  C1 内置城市目录（ARCH §7.3 / §12.1）：数量、首项复用、id 唯一、
-//  无哨兵冲突、坐标合法、名称非空。
+//  C1 内置城市目录（ARCH §7.3 / §12.1）：数量、首项**坐标同源**、id 唯一、
+//  无哨兵冲突、坐标合法、名称非空、**每条都带 IANA 时区**。
 //
 //  为什么必须有这些断言：内置目录是「容器永久为空」场景下选择器**唯一**的真实
 //  城市来源；坐标写错 / id 撞车都会让 L1 自力取数取到**别的地方**的天气
@@ -20,11 +20,23 @@ final class WidgetBuiltInCitiesTests: XCTestCase {
                        "4 直辖市 + 27 省会/自治区首府 + 3 港澳台 = 34（ARCH §7.3 表）")
     }
 
-    func testCitiesContainBeijingDefaultReusedFromSharedTruth() {
-        XCTAssertTrue(WidgetBuiltInCities.cities.contains(City.beijingDefault),
-                      "首项必须**复用** City.beijingDefault（不引入第二套默认坐标）")
-        XCTAssertEqual(WidgetBuiltInCities.cities.first, City.beijingDefault,
-                       "北京必须是第一项（展示顺序：直辖市在前）")
+    /// 首项必须与 App 默认北京**坐标同源**（同 lat/lon → 同 `City.makeID` id）。
+    ///
+    /// ⚠️ **不能**断言整值相等（如 `cities.first == City.beijingDefault`）：
+    /// `City` 是**合成 `Equatable`**（`Core/Models/City.swift`），会连
+    /// `timeZoneIdentifier` / `admin1` 一起比较；而 `City.beijingDefault` **按契约
+    /// tz = nil**（`WeatherTimeFormatterTests` 用它验证「城市无时区 → 回退设备时区」），
+    /// 本表条目则**一律携带 IANA 时区**（见下方
+    /// `testEveryCityHasNameAndCanonicalIDRoundTrip`）。两条性质**逻辑上不可同时成立**
+    /// —— 原先那对互相矛盾的断言正是 CI run 35214688790 的红点。
+    /// 收窄到**真实不变式**：坐标同源；时区由下面那条测试独立覆盖（守卫一条没丢）。
+    func testFirstCitySharesBeijingCoordinateTruth() {
+        XCTAssertEqual(WidgetBuiltInCities.cities.first?.id,
+                       City.beijingDefault.id,
+                       "首项必须是北京**同一坐标真源**：id 由 City.makeID 从坐标派生，id 相等即坐标相等")
+        XCTAssertEqual(WidgetBuiltInCities.cities.first?.name,
+                       City.beijingDefault.name,
+                       "首项展示名也必须与 App 默认北京同源")
     }
 
     func testCityIDsAreUnique() {

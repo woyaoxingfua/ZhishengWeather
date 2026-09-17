@@ -13,8 +13,13 @@
 //  **编译期检查**、零资源配置、`@testable import` 直接可测。
 //
 //  纪律：
-//  - 首项**复用** `City.beijingDefault`（满足「复用 `LocationInfo.beijing`、
-//    不引入第二套默认坐标」）；其余显式构造，坐标取自公开 WGS84 城市中心点。
+//  - **坐标与 App 默认北京同源**：首项坐标单一取自 `LocationInfo.beijing`
+//    （不引入第二套默认经纬度）；其余条目坐标取自公开 WGS84 城市中心点。
+//    ⚠️ 但**不复用** `City.beijingDefault` 整值 —— 该常量按契约 tz = nil
+//    （`WeatherTimeFormatterTests` 依赖它验证「城市无时区 → 回退设备时区」），
+//    而本表纪律是**条目一律携带 IANA 时区**。「坐标同源」与「整值等同」是
+//    **两条独立性质**；早前把它们捆成一句，才写出「首项 tz=nil」与「全表带 tz」
+//    自相矛盾的注释 —— 被 §12.1 的 tz 断言抓出（CI run 35214688790）。
 //  - 全部 id 由 `City.makeID`（"%.2f,%.2f"）生成，**互不重复**且**无一等于
 //    `WidgetCityResolver.followAppID`**（§12.1 测试兜底）。
 //  - C1 **不是**替用户默认城市：它只让用户在小部件配置界面**主动选到**真实城市
@@ -30,10 +35,31 @@ enum WidgetBuiltInCities {
 
     /// 内置城市（顺序即配置界面展示顺序）。
     ///
-    /// 数量与内容见 ARCH §7.3 表（逐条列出，禁止臆造坐标）；首项为共享容器
-    /// 不可用时的**唯一**默认坐标真源 `City.beijingDefault`。
+    /// 数量与内容见 ARCH §7.3 表（逐条列出，**禁止臆造坐标**）。
+    ///
+    /// ⚠️ 本表**不是**「回退城市来源」：全仓**没有任何代码**把 `cities.first` 当默认城市。
+    /// 它只在三处被当 `builtIn:` 目录传入 —— `WeatherProvider`（timeline 解析）与
+    /// `WidgetCityQuery.suggestedEntities` / `entities(for:)`（配置界面候选与回显）；
+    /// 解析器 `WidgetCityResolver.resolveOutcome` 在两条目录都命中不到时一律
+    /// `.needsConfiguration`（诚实空态），**不存在静默回退北京**的路径。
+    /// 故原注释「首项是共享容器不可用时的**唯一**默认坐标真源」属**过度声明**，已删。
+    ///
+    /// 已知限制（**数据缺失的诚实结果，禁用时区猜测填充**）：
+    /// `WidgetCityCatalog.city(fromCanonicalID:name:)` 回填出的 `City` 其
+    /// `timeZoneIdentifier == nil` —— 任意坐标**没有时区真源**，臆造一个会掩盖
+    /// 真实缺失。这类实例的时刻按**设备时区**渲染（`WidgetTimeFormatter` 既有的
+    /// 安全回退，绝不硬编码偏移）。对绝大多数中国城市（`Asia/Shanghai`）与设备时区
+    /// 一致，影响可忽略；登记为假设 A10。
     static let cities: [City] = [
-        City.beijingDefault,
+        // 首项：坐标与 App 默认北京**同源**（`LocationInfo.beijing`，全表禁止第二套 39.9042/116.4074），
+        // 但**不**直接复用 `City.beijingDefault` —— 该常量按契约 `timeZoneIdentifier == nil`
+        // （`WeatherTimeFormatterTests` 用它验证「城市无时区 → 回退设备时区」这条既有行为，
+        // 给它补时区会打掉那条契约测试）；而本表纪律是**条目一律携带 IANA 时区**。
+        // 两者是**分开的性质**（坐标同源 ≠ 整值等同），故此处走同形的 `make(...)`。
+        make(LocationInfo.beijing.name,
+             LocationInfo.beijing.latitude,
+             LocationInfo.beijing.longitude,
+             admin1: "北京", timeZone: "Asia/Shanghai"),
         make("上海", 31.23, 121.47, admin1: "上海", timeZone: "Asia/Shanghai"),
         make("天津", 39.13, 117.20, admin1: "天津", timeZone: "Asia/Shanghai"),
         make("重庆", 29.56, 106.55, admin1: "重庆", timeZone: "Asia/Shanghai"),
