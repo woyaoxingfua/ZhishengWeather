@@ -22,6 +22,11 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- 实时活动（ActivityKit）：声明本 App 支持 Live Activities。
+	     声明只是「允许发起」，运行期是否真的可用仍由
+	     ActivityAuthorizationInfo().areActivitiesEnabled 实测决定。 -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<!-- A1-7/A1-8：深链 scheme 注册（Widget 刷新按钮 → zhisheng://refresh）。 -->
 	<key>CFBundleURLTypes</key>
 	<array>

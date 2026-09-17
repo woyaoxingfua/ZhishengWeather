@@ -43,6 +43,11 @@ struct SettingsView: View {
     /// 真正创建移到 init 体内。
     private let iconSwitcher: AppIconSwitcher
 
+    /// 实时活动管理器（能力探测 + 手动启动/更新/结束）。
+    /// ⚠️ 同 AppIconSwitcher 陷阱：default 参数在调用方的非隔离上下文求值，
+    /// 故 default 给 nil，真正创建移到 init 体内。
+    private let activityManager: WeatherActivityManager
+
     /// ⚠️ 初值经**注入的 AppearanceStore** 读取（`appearance.setting`），
     /// 不得直接调 `AppearancePreference.appearance()`——那会绕过注入的 store，
     /// 变成「读硬编码 standard、写注入 store」的镜像缝。
@@ -60,6 +65,11 @@ struct SettingsView: View {
     /// 换图标失败短句（非空时在图标区下方弱提示展示；成功后清空）。
     @State private var iconErrorMessage: String?
 
+    /// 实时活动开关（本页状态源；初值由管理器从 App 本地偏好读出，缺省为关）。
+    @State private var liveActivityEnabled: Bool
+    /// 实时活动失败短句（非空时在实时活动区下方红色小字展示；成功后清空）。
+    @State private var liveActivityErrorMessage: String?
+
     /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），而
     /// UmbrellaReminderScheduler 是 @MainActor 隔离 init（CI 实测挂编译，
     /// 与 LocationProvider 同款陷阱）。故 default 用 nil，真正创建移到本
@@ -69,7 +79,8 @@ struct SettingsView: View {
          freshnessWindow: TimeInterval,
          appearance: AppearanceStore,
          reminderScheduler: UmbrellaReminderScheduler? = nil,
-         iconSwitcher: AppIconSwitcher? = nil) {
+         iconSwitcher: AppIconSwitcher? = nil,
+         activityManager: WeatherActivityManager? = nil) {
         self.lastUpdated = lastUpdated
         self.timeZone = timeZone
         self.freshnessWindow = freshnessWindow
@@ -78,11 +89,14 @@ struct SettingsView: View {
         self.reminderScheduler = scheduler
         let switcher = iconSwitcher ?? AppIconSwitcher()
         self.iconSwitcher = switcher
+        let manager = activityManager ?? WeatherActivityManager()
+        self.activityManager = manager
         // @State 初值必须在 init 内赋（不能在属性默认值处触碰非隔离参数）。
         // 外观初值走注入的 AppearanceStore（与 .onChange 的写路径同一个 store）。
         _appearanceSetting = State(initialValue: appearance.setting)
         _umbrellaReminderEnabled = State(initialValue: scheduler.isEnabled)
         _iconChoice = State(initialValue: switcher.currentChoice())
+        _liveActivityEnabled = State(initialValue: manager.isEnabled)
     }
 
     var body: some View {
@@ -127,6 +141,33 @@ struct SettingsView: View {
                 }
                 if let iconErrorMessage {
                     Text(iconErrorMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                }
+            }
+
+            // 实时活动（ActivityKit）：能力探测诚实降级。
+            // 能力不可用 → 开关**置灰**（绝不让用户点了没反应）+ 红色说明；
+            // 可用 → 12 号次级说明写清「自动更新尚未接线」。
+            // 所有文案的单一真源都在 WeatherActivityManager，本页只负责展示。
+            Section("实时活动") {
+                Toggle("显示实时活动", isOn: $liveActivityEnabled)
+                    // 能力不可用时禁用：与其让用户点了静默失败，不如直接不给点。
+                    .disabled(!activityManager.areActivitiesEnabled)
+                    .onChange(of: liveActivityEnabled) { _, newValue in
+                        toggleLiveActivity(newValue)
+                    }
+                if activityManager.areActivitiesEnabled {
+                    Text(WeatherActivityManager.availableHint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                } else {
+                    Text(WeatherActivityManager.unavailableHint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                }
+                if let liveActivityErrorMessage {
+                    Text(liveActivityErrorMessage)
                         .font(.system(size: 12))
                         .foregroundStyle(.red)
                 }
@@ -227,6 +268,42 @@ struct SettingsView: View {
                 iconErrorMessage = nil
             }
         }
+    }
+
+    // MARK: - 实时活动开关
+
+    /// 实时活动开关变更（副作用出口走注入的 WeatherActivityManager）。
+    ///
+    /// 开启：城市名/天气文案本页拿不到（未接线），如实传 nil —— **绝不填伪数据**；
+    /// 更新时间取本页已有的 `lastUpdated`（真实数据，按选中城市时区格式化）。
+    /// 失败：开关回滚到设备事实（偏好未被写入）+ 展示红色短句；绝不重试。
+    /// 关闭：结束活动并清空引用。
+    ///
+    /// - Parameter enabled: 目标状态。
+    private func toggleLiveActivity(_ enabled: Bool) {
+        Task { @MainActor in
+            if enabled {
+                let message = await activityManager.start(cityName: nil,
+                                                          conditionText: nil,
+                                                          updatedAtText: updatedAtText())
+                liveActivityErrorMessage = message
+                // 设备事实优先：启动失败时回滚开关（管理器未写偏好）。
+                liveActivityEnabled = activityManager.isEnabled
+            } else {
+                await activityManager.end()
+                liveActivityErrorMessage = nil
+            }
+        }
+    }
+
+    /// 实时活动的更新时间文案（复用本页「最近更新」的时区与格式；无数据为 nil）。
+    ///
+    /// - Returns: 形如「09-18 23:21」；`lastUpdated` 为空时返回 nil。
+    private func updatedAtText() -> String? {
+        guard let lastUpdated else { return nil }
+        return WeatherTimeFormatter.string(from: lastUpdated,
+                                           format: "MM-dd HH:mm",
+                                           timeZone: timeZone)
     }
 
     // MARK: - 数据状态（D-5 诊断面板）
