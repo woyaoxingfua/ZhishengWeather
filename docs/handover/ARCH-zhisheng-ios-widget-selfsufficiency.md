@@ -27,9 +27,10 @@
    > 「⚠️ 禁联网（F-C-8 / AC-C8）：本文件所有方法只允许经 AppGroupStore 读本地共享容器；
    > 不含任何网络类型引用 —— T06 静态自查项（grep 网络符号零命中）。」
 
-   —— 该「禁联网」纪律对 `suggestedEntities()` 仍然成立，但 **C2 地理编码搜索**
-   （§7.3）必须在同一类型内新增联网方法，故该条须改写为
-   「`suggestedEntities()` / `entities(for:)` 仍纯本地；**仅** `entities(matching:)` 允许联网」。
+   —— 🔴 **该「禁联网」纪律**不**因 C2 收窄，必须原样保留为绝对规则。**
+   本文件 §1.4 的 `废弃-3` 一度把它收窄为「仅 C2 允许联网」，该收窄**已被 team lead
+   否决并撤回**（详见本文 §21「裁定记录」）。故本文件头**不删不改**上面这条陈述，
+   实施者**不得**在同一类型内新增任何联网方法。
 
 ---
 
@@ -72,7 +73,7 @@ Apple 官方「Supported capabilities (iOS)」表中，`App groups` 只挂在
 |---|------|--------|------|
 | 废弃-1 | `Core/Logic/WidgetPayloadStatus.swift` 文件头 | 「Widget **没有网络**」 | **废弃**。理由：App Group 在本分发渠道不可用 → 唯一数据来源只剩自力取数。 |
 | 废弃-2 | `ZhishengWeatherWidget/WeatherProvider.swift` 文件头 | 「全程无网络、无同步阻塞调用」 | **废弃**。同上。 |
-| 废弃-3 | `ZhishengWeatherWidget/WidgetCityIntent.swift` 文件头 | 「禁联网（F-C-8 / AC-C8）…… grep 网络符号零命中」 | **收窄**：仅 `entities(matching:)`（C2）允许联网；`suggestedEntities()` / `entities(for:)` 继续纯本地。 |
+| 废弃-3 | `ZhishengWeatherWidget/WidgetCityIntent.swift` 文件头 | 「禁联网（F-C-8 / AC-C8）…… grep 网络符号零命中」 | **不废弃**（原「收窄」已撤回）：**AC-C8 原样有效；C2（配置路径联网）否决**。该文件头注释**保持绝对禁联网**，不得新增任何联网方法。详见 §21「裁定记录（team lead，2026-09-17）」。 |
 
 这就是 **P-18「同源盲区」的又一例**：单测注入自己的独立 suite（读写同进程同容器），
 与实现共享了「容器一定可用」这个**错误假设**，所以 CI 全绿、真机全白。
@@ -127,10 +128,13 @@ Apple 官方「Supported capabilities (iOS)」表中，`App groups` 只挂在
    「**原始**容器城市目录」，不再接受 `loadReadOnly` 的 `initial()` 兜底产物。
    详见 §7.2。
 
-### C. 需要追加的更正 ❗
+### C. 需要追加的更正 ❗（🔴 **已被 §21 裁定推翻**）
 
-`WidgetCityIntent.swift` 文件头的「禁联网 / grep 网络符号零命中」在 C2 落地后**必然被打破**，
-须按 §0 的处置收窄（任务书只点了两处文件头，此处是第三处）。
+`WidgetCityIntent.swift` 文件头的「禁联网 / grep 网络符号零命中」**不需要**、也**不允许**被打破。
+
+> 原文写「在 C2 落地后**必然被打破**，须按 §0 的处置收窄」—— **该处置已撤回**：
+> C2（配置路径联网）被 team lead 否决，AC-C8 原样有效（含真机判据 F-C-8），
+> 文件头**保持绝对禁联网**，不得新增任何联网方法。见 §21「裁定记录（team lead，2026-09-17）」。
 
 ---
 
@@ -145,8 +149,9 @@ Apple 官方「Supported capabilities (iOS)」表中，`App groups` 只挂在
    **L0 共享容器**（本地、快、零配额，命中即用，现状语义不变）→
    **L1 自力取数** → **L2 如实空态 + 可操作文案**。
 3. **城市阶梯**：
-   **C0 共享容器城市目录** → **C1 内置城市目录**（Core 常量，保证选择器永不为空）→
-   **C2 免密钥的地理编码搜索**（用户在小部件配置界面输入城市名）。
+   **C0 共享容器城市目录** → **C1 内置城市目录**（Core 常量，保证选择器永不为空）。
+   ~~**C2 免密钥的地理编码搜索**（用户在小部件配置界面输入城市名）~~ —— 🔴 **C2 已否决**
+   （§21）：配置路径严禁联网（AC-C8 / F-C-8）；替代方案见 §21.3。
 4. **绝不静默替换成别的城市**。本项目有明确的诚实纪律（见 `WeatherEntry.swift`
    注释与 `WidgetPayloadResolver` 第 4 条判定）：没有城市必须渲染**如实的、可操作的**
    空态，**绝不**偷偷回落到北京。C1 是让用户**主动选**到真实城市，不是替用户默认。
@@ -168,9 +173,11 @@ Apple 官方「Supported capabilities (iOS)」表中，`App groups` 只挂在
       │ 未命中                               │ 未命中（missing/corrupt/不可用/归属不符）
       ▼                                      ▼
   C1 内置城市目录（Core 常量，永不为空）   L1 自力取数（复用 WeatherService，至多 1 次请求）
-      │ 未命中（用户主动搜索）                │ 失败
+      │ 未命中（怪值）                        │ 失败
       ▼                                      ▼
-  C2 地理编码搜索（用户输入城市名）        L2 如实空态 + 可操作文案
+  如实空态（请配置城市，绝不默认）           L2 如实空态 + 可操作文案
+
+  ※ C2 地理编码搜索已否决（§21）：**配置路径严禁联网**（AC-C8 / F-C-8）。
 ```
 
 **正交性**：城市阶梯产出 `City?`，数据阶梯产出 `payload + status + source`。
@@ -201,7 +208,7 @@ Apple 官方「Supported capabilities (iOS)」表中，`App groups` 只挂在
 | `Core/Logic/WidgetCityResolver.swift` | 新增按 `WidgetCitySelection + 原始容器 + 内置目录` 的解析入口；新增「规范坐标 id → City」回填；`Mode` 保留 |
 | `ZhishengWeatherWidget/WeatherEntry.swift` | 载荷改为持有 `WidgetEntryResolution`；`payload`/`city`/`payloadStatus`/`displayCityName` 改为**转发计算属性**（视图调用点零改动） |
 | `ZhishengWeatherWidget/WeatherProvider.swift` | `makeEntry` 变 `async`；`snapshot` 仅 L0；`timeline` 单次阶梯；注入了「短超时 URLSession」的 `WeatherService` |
-| `ZhishengWeatherWidget/WidgetCityIntent.swift` | `suggestedEntities()` / `entities(for:)` 接入 C1/C2 目录；新增 `EntityStringQuery.entities(matching:)`（C2） |
+| `ZhishengWeatherWidget/WidgetCityIntent.swift` | `suggestedEntities()` / `entities(for:)` 接入 **C1** 目录（纯本地读）；~~新增字符串搜索方法（C2 联网）~~ 🔴 **已否决**（§21），**不得实现** |
 | `ZhishengWeatherWidget/{Small,Medium,Large,Accessory}WeatherView*.swift` | 文案改走 `WidgetCopy`；新增可操作提示行渲染 |
 | `ZhishengWeatherTests/WidgetCityResolverTests.swift` | 适配新解析入口（见 §11 必查项 #5） |
 
@@ -441,7 +448,7 @@ struct WeatherEntry: TimelineEntry {
 
 ---
 
-## 7. 城市阶梯 C0 / C1 / C2
+## 7. 城市阶梯 C0 / C1 / C2（🔴 C2 已否决，见 §21）
 
 ### 7.1 `WidgetContainerSnapshot` 与解析优先级（**纯函数**）
 
@@ -459,22 +466,43 @@ struct WidgetContainerSnapshot: Equatable, Sendable {
 
 ```
 0. selection.id == followAppID                 → .followApp 分支
-1. 若 id 在 container.cities 中命中            → .resolved(容器城市，全量元数据)
-2. 否则若 id 在 builtIn 中命中                 → .resolved(内置城市，全量元数据)
-3. 否则若 id 可解析为规范坐标 "%.2f,%.2f"      → .resolved(坐标回填 City(name: selection.name, …))
-4. 否则                                         → .needsConfiguration   （不冒充、不默认）
+1. 若 id 在**城市目录**中命中                  → .resolved(该城市，全量元数据)
+   目录口径 = WidgetCityCatalog.city(forID:container:builtIn:)：
+   **容器项优先**（用户自己在 App 里加的、元数据更全），容器未命中才落到内置目录 C1。
+   内置目录的意义：用户可能就是从「从不联网的内置列表」里选的 →
+   内置城市**永不算「被删除」**。
+2. 否则（两条目录都不命中）→ **按「信息是否可得」分层**（AC-C5，B 组回归修复）：
+   a. container.containerAvailable == true     → **回退 .followApp 语义**
+      （容器可用 ⇒ 信息可得 ⇒ 该记录确已不存在：用户在主 App 删了它）
+      **不做坐标回填**（否则会继续显示、并继续为一个已删除的城市取数）
+   b. container.containerAvailable == false    → 若 id 可解析为规范坐标 "%.2f,%.2f"
+      → .resolved(坐标回填 City(name: selection.name, …))
+      （容器不可用 ⇒ 无法得知是否被删除；未签名侧载下这是 .fixed 唯一的存活路径）
+3. 否则                                         → .needsConfiguration   （不冒充、不默认）
 
-.followApp 分支：
+.followApp 分支（与上面 2a **共用**同一实现 `followAppOutcome`，避免两处各自解读）：
   a. container.selectedID 在 container.cities 中命中 → .resolved(该城市)
   b. 否则（容器空 / 选中失效）                        → .needsConfiguration
      ⚠️ **绝不**注入 CityDirectory.initial() 的北京（修 §2-B 幽灵北京）
 ```
 
-> **注意**：`.fixed(id)` 未命中时，**不再**回退成 `.followApp` 语义（旧 AC-C5 的双层回退
-> 在容器空时会退到北京）。新规则改为：**坐标 id 优先回填真实坐标**；真正无法解析
-> （既非目录项、又非合法坐标）才 `needsConfiguration`。
-> 理由：旧回退在「用户已选城市但容器被清空」时会**静默换成 App 当前城市**，
-> 正是决策 #4 禁止的行为。
+> **注意（B 组回归修复，本节规则已二次修订）**：`.fixed(id)` 未命中两条目录时**是否回退**，
+> 取决于**容器是否可用**（= 信息是否可得），而不是「固定优先级」：
+> - **容器可用** ⇒ 该记录**确已不存在**（用户在主 App 主动删了它）⇒ 按 **AC-C5** 回退
+>   `.followApp` 语义（跟随 App；App 侧也无有效选中 → `.needsConfiguration`）。
+>   初版曾在此**无条件坐标回填** → 结果是「已被删除的城市」继续被显示、并继续取数
+>   （真机可复现），与 AC-C5 直接冲突 —— 已修。
+> - **容器不可用**（未签名侧载 / entitlements 失效）⇒ **无法得知**是否被删除
+>   ⇒ 才允许**坐标回填**。回填的是**用户确实选过**的坐标，属「保住实例可用」，
+>   不是「替用户决定城市」。
+>
+> **与决策 #4 的关系（勿混淆）**：决策 #4 禁止的是**静默替换**——在**信息不可得**时
+> 擅自换成另一个城市（旧实现正是在容器空时静默退到北京）。AC-C5 的回退发生在
+> **信息可得**时（用户的删除动作是可知事实），且回退目标是**用户自己的 App 选中**，
+> 属「如实跟随」，不是「冒充」。故两者不冲突。
+>
+> **为什么不「容器不可用也一律回退 followApp」**：容器不可用时 App 侧同样读不到任何
+> 城市 → 回退只会让实例**永久空态**，而用户明明选过城市。那不是诚实，是坏掉。
 
 ### 7.2 ⚠️ 为什么不能再用 `CityDirectory.loadReadOnly`
 
@@ -531,29 +559,37 @@ struct WidgetContainerSnapshot: Equatable, Sendable {
   | 澳门 | 22.20 | 113.54 | 中国 | 澳门特别行政区 | Asia/Macau |
   | 台北 | 25.03 | 121.57 | 中国 | 台湾省 | Asia/Taipei |
 
-  - **第一项复用 `City.beijingDefault`**（满足「复用 `LocationInfo.beijing`、不引入第二套
-    默认坐标」纪律）；其余显式构造。测试须断言
-    `WidgetBuiltInCities.cities.contains(City.beijingDefault)`。
+  - **第一项与 `City.beijingDefault` 坐标同源**（`LocationInfo.beijing`，全表禁止第二套
+    默认坐标），但**不整值复用**：`City.beijingDefault` 按契约 `timeZoneIdentifier == nil`
+    （`WeatherTimeFormatterTests` 用它验证「城市无时区 → 回退设备时区」这条既有行为），
+    而本表纪律是**条目一律携带 IANA 时区** —— 两者是**分开的性质**（坐标同源 ≠ 整值等同），
+    故首项走同形的 `make(LocationInfo.beijing.…, timeZone: "Asia/Shanghai")`。
+    测试须断言首项 **id / name 与 `City.beijingDefault` 相等**；**不得**断言
+    `cities.contains(City.beijingDefault)`（整值比较会因 `timeZoneIdentifier` 而失败）。
   - 全部 id 已人工比对**互不重复**（2 位小数），且**无一等于 `followAppID`**（测试兜底，§12）。
 
 - **选择器顺序**（`suggestedEntities()`，纯函数部分下沉到 Core，见 §7.5）：
   `[哨兵] + 容器城市（App 内顺序）+ 内置城市中**不在容器里**的（C1 顺序）`。
   **哨兵恒为第一项**（硬要求）。
 
-### 7.4 C2 地理编码搜索
+### 7.4 C2 地理编码搜索 —— 🔴 **已否决（team lead，2026-09-17）**
 
-- 复用**已存在**的 `GeocodingService` / `GeocodingEndpoint` / `GeocodingMapper` /
-  `GeocodingResponse`（免密钥、中文安全、`language=zh`、`format=json`）。
-- 落点：`WidgetCityQuery` 增加 `EntityStringQuery` 一致性，实现
-  `entities(matching string:) async throws -> [WidgetCityEntity]`：
-  `try await GeocodingService().search(name: string)` → `map(WidgetCityEntity.make)`。
-  空白串 → 返回 `[]`（`GeocodingEndpoint.url` 已对空白返回 nil → `badURL`，此处先判空短路）。
-- **不新增端点、不新增凭据**；仅在小部件**配置界面**用户输入时触发（不是 timeline 路径，
-  不进 §13 的配额核算，但计入 §13 的「配置期一次性请求」注脚）。
-- ⚠️ **需真机验证**（进 §15 前提登记表 A9）：`EntityStringQuery` 在 iOS 17 小部件配置界面
-  的搜索框可达性、以及配置 UI 进程能否联网。
+> **本节失效。** C2（在配置解析路径里发起地理编码搜索）**违反 AC-C8**
+> （「配置解析必须纯本地读，禁止在配置解析里发起网络请求」，`PRD-zhisheng-ios-P1.md`
+> §4.4(a)，挂真机判据 F-C-8），**已由 team lead 否决**。`WidgetCityQuery`
+> **不得**符合字符串搜索协议、**不得**实现城市名搜索方法、**不得**引用任何联网 service。
+>
+> 替代方案（内置目录扩容至地级市 / 「当前位置」配置项）见 §21「裁定记录」。
+>
+> 以下为**历史设计**（保留以便追溯，**不得实施**）：
+>
+> - 曾计划复用 Core 既有地理编码 service（免密钥、中文安全、`language=zh`、`format=json`）。
+> - 曾计划落点：`WidgetCityQuery` 增加字符串搜索协议一致性，实现城市名搜索方法
+>   `try await <geocoding service>().search(name: string)` → `map(WidgetCityEntity.make)`。
+> - ⚠️ 该设计依赖的真机前提 A9（配置界面进程能否联网）**本仓无法验证**（唯一编译门禁
+>   是 CI，不能跑真机），而带不可验证的卡死风险违明文禁令不成立 —— 这正是否决理由之一。
 
-### 7.5 使 C1/C2 可被 CI 单测：把「合并 / 查找」下沉到 Core
+### 7.5 使 C1（含坐标回填）可被 CI 单测：把「合并 / 查找」下沉到 Core
 
 `WidgetCityEntity` 定义在 **Widget target**，Core 无法引用它 → 因此 Core 只能处理
 **`City` 层**的纯逻辑，Widget 侧只做 1 行 `map`：
@@ -587,7 +623,7 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
                                              builtIn: WidgetBuiltInCities.cities) {
             return WidgetCityEntity.make(city)
         }
-        // C2 回填：非目录项但合法坐标 id → 用坐标串作确定性名称（见 §11-必查项 #7）
+        // 坐标回填（兼容历史 C2 实例）：非目录项但合法坐标 id → 用坐标串作确定性名称（见 §11-必查项 #7）
         if let city = WidgetCityCatalog.city(fromCanonicalID: id, name: id) {
             return WidgetCityEntity.make(city)
         }
@@ -603,22 +639,28 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 ### 8.1 必查项结论：`WidgetPayloadStatus` 的使用侧**不是穷尽 switch**
 
 任务书要求「必须查」。我**逐一核实**了 `WidgetPayloadStatus` 的全部使用点（`git grep` 全仓，
-排除 `_joblog*.txt` / `_watch_joblog.txt` 日志文件）：
+排除 `_joblog*.txt` / `_watch_joblog.txt` 日志文件）。
+
+> ⚠️ **本表已按实现上线后的真实形态重测**。初版测于设计期，列的是**视图直接做 `==` 判断**
+> 的旧形态 —— 那是**已经作废**的前提（`WidgetCopy` 落地后视图不再比较本枚举）。
+> 重测口径：`git grep -rn "WidgetPayloadStatus" --include=*.swift`。
 
 | 文件 | 行 | 用法 | 是否 switch |
 |------|----|------|-------------|
-| `Core/Logic/WidgetPayloadStatus.swift` | 19 | 定义 | — |
-| `Core/Logic/WidgetPayloadStatus.swift` | 37 | `var status: WidgetPayloadStatus` 字段 | — |
-| `ZhishengWeatherWidget/WeatherEntry.swift` | 34 | `var payloadStatus: … = .available` | — |
-| `ZhishengWeatherWidget/WeatherProvider.swift` | 121 | 赋值 `payloadStatus: resolution.status` | — |
-| `ZhishengWeatherWidget/SmallWeatherView.swift` | 78, 87 | `== .unavailable` / `== .stale` | **否（`==` 比较）** |
-| `ZhishengWeatherWidget/MediumWeatherView.swift` | 171, 182, 185 | `== .unavailable` / `== .stale` | **否** |
-| `ZhishengWeatherWidget/LargeWeatherView.swift` | 275, 291, 294 | `== .unavailable` / `== .stale` | **否** |
-| `ZhishengWeatherWidget/AccessoryWeatherViews.swift` | 100, 138 | `== .unavailable` | **否** |
+| `Core/Logic/WidgetPayloadStatus.swift` | 36 | 定义 | — |
+| `Core/Logic/WidgetPayloadStatus.swift` | 54 | `WidgetPayloadResolution.status` 字段 | — |
+| `Core/Logic/WidgetEntryResolution.swift` | 98 | 收敛值 `status` 字段 | — |
+| `Core/Logic/WidgetDataResolver.swift` | 86, 97, 106, 123, 156, 162 | **构造赋值**（`status:` 传参） | — |
+| `Core/Logic/WidgetCopy.swift` | 84 | `resolution.status == .stale` | **否（`==` 比较）** |
+| `ZhishengWeatherWidget/WeatherEntry.swift` | 66 | `var payloadStatus: … { resolution.status }`（**纯转发，无判断**） | — |
+| `ZhishengWeatherWidget/WeatherEntry.swift` | 100 | 预览占位构造（`status: .available`） | — |
 | `ZhishengWeatherTests/WidgetPayloadStatusTests.swift` | 全 | `XCTAssertEqual(status, .xxx)` | **否** |
+| `ZhishengWeatherTests/WidgetCopyTests.swift` | 35, 122 | 构造 + 表驱动断言 | **否** |
 
 **结论**：全仓**零** `switch` 语句消费 `WidgetPayloadStatus`（`LoadResult` 侧的
-`switch` 与它无关）。因此，**加 case 今天能编过 CI**。
+`switch` 与它无关）。因此，**加 case 今天能编过 CI**；但加 case 之后**没有任何渲染路径
+会消费它** —— 视图文案已全部下沉到 `WidgetCopy`，新 case 只会变成一个**静默无效果**的
+死状态（详见 §8.2 理由 2）。
 
 ### 8.2 裁定：**不**给 `WidgetPayloadStatus` 加 case；改用**正交字段**
 
@@ -635,15 +677,23 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
    自力取数引入的是**来源**轴，与新鲜度**正交**。把来源硬塞进同一枚举会造出
    `availableFromWidget` / `staleFromWidget` 之类**笛卡尔膨胀**，且 `stale` 与
    `selfFetched` 逻辑上互斥却无法在类型上表达。
-2. **能编过 ≠ 正确（P-18 同源盲区变体）**：加 case 虽能过 CI，但**视图用的是 `==` 比较**
-   （见上表），新 case 会**静默落到 else 分支**、渲染错文案——编译通过、CI 全绿、真机文案错。
-   把新语义放独立字段，可**在 CI 单测里逐条断言**（Core 纯函数），不依赖 Widget 渲染。
+2. **新 case 不会渲染错文案，但会变成「静默无效果」的死状态**：`WidgetPayloadStatus`
+   目前**零穷尽 `switch`**，且视图文案已全部下沉到 `WidgetCopy` —— 实际读取点只剩
+   `Core/Logic/WidgetCopy.swift:84` 的 `status == .stale` 一处（`WeatherEntry.swift:66`
+   的同名属性纯转发、无判断）。因此：
+   - **原文「加 case 会静默落到 else 分支、渲染错文案」已作废**（视图不再比较本枚举，
+     见 §8.1 重测表）；该理由**不再成立**，不得再引用；
+   - 但新 case **没有任何渲染路径消费它** → 编译通过、CI 全绿、真机上该状态**永不显示**，
+     即一个**静默无效果**的死状态 —— 加它等于没加，故裁定不变。
+   把新语义放独立字段，可**在 CI 单测里逐条断言**（Core 纯函数），不依赖 Widget 渲染，
+   也不会退化成死状态。
 3. **文案单一真源**：新增 `WidgetCopy`（Core 纯函数，仿 `FaultDomain.message(for:)`）承担
    全部面向用户的空态 / 标注文案；视图**不再 `switch` / `==` 拼文案**，
    从根上消除「跨 target 穷尽 switch」这一类风险。
 
-> **兜底纪律**：若未来确需给 `WidgetPayloadStatus` 加 case，**必须先**把上述所有
-> `==` 消费点改为**穷尽 `switch`**（或改走 `WidgetCopy`），否则就是制造下一处 P-18。
+> **兜底纪律**：若未来确需给 `WidgetPayloadStatus` 加 case，**必须先**为它落实消费路径 ——
+> 要么把新 case 接进 `WidgetCopy`（文案真源），要么把 `WidgetCopy.swift:84` 那个
+> `== .stale` 消费点改为**穷尽 `switch`**；否则新 case 就是一个**静默无效果**的死状态。
 
 ---
 
@@ -678,7 +728,7 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 **裁定：保持 `WidgetCityEntity` 的存储形状不变**（`id` / `name` / `subtitle` 三个字段，
 不加、不减）。**理由**：
 
-1. **`id` 已足够确定行为**：解析所需的坐标就在 id 字符串里（§7.1 步骤 3 的**坐标回填**），
+1. **`id` 已足够确定行为**：解析所需的坐标就在 id 字符串里（§7.1 步骤 **2b** 的**坐标回填**，
    `name` 用于显示，`subtitle` 仅用于去歧义。旧实体天然满足。
 2. **加字段虽兼容但无必要**：本仓已有「可选字段 + 合成 Codable + 默认 nil → 旧 JSON 解码
    不失败」的成熟范式（`City.isFavorite`、`SharedWeatherPayload.timeZoneIdentifier`）。
@@ -689,14 +739,15 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
    |-------------|--------|
    | `"follow-app"` | `.followApp`：容器有选中城市 → 显示之；容器空 → **无城市**（「请配置城市」，不再是幽灵北京）。 |
    | 命中容器目录的城市 id | 正常（L0/L1 阶梯）。 |
-   | 命中**内置**目录的城市 id | **新增能力**：旧实例若恰配了内置城市（以前会因容器查不到而回退），现能**正确解析**。 |
-   | 合法坐标 id 但不在任何目录 | **坐标回填**：用 id 解析坐标 + 旧实体携带的 `name` 重建 City → 正常取数。 |
+   | 命中**内置**目录的城市 id | **新增能力**：旧实例若恰配了内置城市（以前会因容器查不到而回退），现能**正确解析**；且内置城市**永不算「被删除」**（用户可能就是从未联网的内置列表里选的）。 |
+   | 未命中两条目录 + **容器可用** | **回退「跟随 App」语义**（AC-C5）：跟随 App 当前选中；App 侧也无有效选中 → `.needsConfiguration`。**不做坐标回填** —— 回填会让小组件继续显示、并继续为一个**已被用户删除的城市**取数（B 组回归修复，真机可复现）。 |
+   | 未命中两条目录 + **容器不可用** | **坐标回填**：用 id 解析坐标 + 旧实体携带的 `name` 重建 City → 正常取数。容器不可用 = **无法得知**是否被删除，故不能按 AC-C5 判为「已删除」；未签名侧载下这是 `.fixed` 实例**唯一**的存活路径。 |
    | 既非目录项、又非合法坐标（怪值） | `.needsConfiguration`（如实空态，**不**静默改城市）。 |
 
-4. **`entities(for:)` 的编辑态回显**：必须同步接入 C1/C2（§7.5），否则
+4. **`entities(for:)` 的编辑态回显**：必须同步接入 C1（§7.5），否则
    「用内置城市配置的实例」在编辑界面会**错误回显为哨兵**（系统只按 id 查回实体）。
    这是**必查项**之一（§11-#7）。
-5. **已知限制（登记为假设 A10）**：C2（坐标回填）路径拿不到 `timeZoneIdentifier`
+5. **已知限制（登记为假设 A10）**：C2（坐标回填，**仅容器不可用分支**）路径拿不到 `timeZoneIdentifier`
    （旧实体无此字段）→ 时刻渲染回退**设备时区**（`WidgetTimeFormatter.timeZone(for:)`
    的既有安全行为，绝不硬编码偏移）。对绝大多数中国城市（`Asia/Shanghai`）与设备时区
    一致，影响可忽略。如日后确需精确，再以**可选字段**方式追加（不破坏兼容）。
@@ -713,7 +764,7 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 | 4 | `AppGroupStore.isSharedContainerAvailable` 的调用点 | `grep -rn "isSharedContainerAvailable"` | 仅 Provider / VM；解析函数里以**注入的 Bool** 使用，不直接调用 |
 | 5 | 若删除旧 `WidgetCityResolver.resolve(_:directory:)` | `grep -rn "resolve(.followApp\|resolve(.fixed\|mode(forEntityID" ZhishengWeatherTests` | `WidgetCityResolverTests` 须同步适配（保留旧重载则零改动） |
 | 6 | `WeatherEntry(date:payload:city:)` 既有调用点 | `grep -rn "WeatherEntry(" ZhishengWeatherWidget` | 仅 `WeatherProvider`（placeholder/snapshot/makeEntry）→ 改 `resolution` 版本 |
-| 7 | `entities(for:)` 是**唯一**的配置回显路径 | `grep -rn "entities(for"` | 仅 `WidgetCityQuery`；须接入 C1/C2 目录（否则内置城市实例回显成哨兵） |
+| 7 | `entities(for:)` 是**唯一**的配置回显路径 | `grep -rn "entities(for"` | 仅 `WidgetCityQuery`；须接入 **C1** 目录（否则内置城市实例回显成哨兵） |
 | 8 | 内置城市 id 自查 | 见 §12 测试用例 | 互不重复、无 `followAppID`、`City.makeID` 往返稳定 |
 | 9 | `snapshot(for:)` 返回类型兼容「不取数」 | 看 `WeatherProvider.snapshot` 签名 | `async -> WeatherEntry`，可返回 L0 结果 |
 | 10 | 无任何测试直接调 `WeatherProvider.makeEntry` | `grep -rn "makeEntry" ZhishengWeatherTests` | 零命中（`makeEntry` 是 private，逻辑在 Core） |
@@ -734,7 +785,7 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 | 用例 | 断言 |
 |------|------|
 | 非空 | `cities.count == 34`（或 ≥30） |
-| 含北京默认项 | `cities.contains(City.beijingDefault)` |
+| 首项与北京同源 | 首项 `id` / `name` 等于 `City.beijingDefault` 的（**不得**整值相等：`City.beijingDefault` 契约上 `timeZoneIdentifier == nil`，而本表条目一律带 IANA 时区） |
 | id 唯一 | `Set(cities.map(\.id)).count == cities.count` |
 | 无哨兵冲突 | 无 `cities.contains { $0.id == WidgetCityResolver.followAppID }` |
 | 坐标合法 | 每项 `(-90...90).contains(lat) && (-180...180).contains(lon)` |
@@ -759,8 +810,10 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 | **followApp·容器空但有内置目录 → 仍无城市** | container=[], builtIn=[…34] → `.needsConfiguration`（C1 只经**主动选择**生效） |
 | fixed·命中容器 | → `.resolved(容器城市)` |
 | fixed·命中内置 | container=[], builtIn=[北京…] → `.resolved(内置北京)` |
-| fixed·合法坐标不在任何目录 | id="30.25,120.17", selection.name="自定义" → `.resolved(name == "自定义")` |
-| fixed·怪值 | id="no,such" → `.needsConfiguration` |
+| fixed·未命中两条目录 + **容器可用** → 回退跟随 App（AC-C5） | container=[北京,杭州] sel=杭州, id="31.30,120.58"（苏州，不在目录）→ `.resolved(杭州)`；**并断言 ≠ 苏州** |
+| fixed·未命中 + 容器可用 + App 无有效选中 | container=[北京] sel=nil, id="31.30,120.58" → `.needsConfiguration` |
+| fixed·未命中两条目录 + **容器不可用** → 坐标回填 | container=[], available=false, id="30.25,120.17", selection.name="自定义" → `.resolved(name == "自定义")` |
+| fixed·怪值 + 容器不可用 | id="no,such", available=false → `.needsConfiguration`（**容器不可用**才检验得到「非法坐标不可回填」，容器可用时会先按 AC-C5 回退） |
 | 哨兵互斥 | `followAppID` 永不与合法坐标 id 相等 |
 
 ### 12.4 `WidgetDataResolver.resolve`（新，**本设计的核心**）
@@ -871,7 +924,7 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 | A6 | Widget 时间线预算容忍 8s 网络调用 | WidgetKit 预算常识 | 真机观察刷新频率是否被系统惩罚；若惩罚 → 下调超时（§9） |
 | A7 | `City.makeID`（2 位小数）对内置 34 城**无碰撞** | §7.3 人工比对 | §12.1 的 id 唯一性测试；若碰撞 → 调整坐标或去重策略 |
 | A8 | 小组件**不**需要把自力取数结果**写回**容器 | 设计选择（避免与主 App 写竞态、避免无谓写） | 若产品要求「主 App 复用小组件取到的数据」→ 该假设需重新评估（当前不做） |
-| A9 | `EntityStringQuery`（C2 搜索）在小部件配置界面可达且能联网 | AppIntents 惯例 | **真机**在配置界面输入城市名，观察是否出现候选；若不可达 → C2 降级为「仅 C1 内置目录」（决策 #3 的 C0/C1 部分仍完整） |
+| A9 | ~~C2 搜索在小部件配置界面可达且能联网~~ | —— | 🔴 **已作废**：C2 已否决（§21），配置路径严禁联网；本假设不再需要验证。 |
 | A10 | C2 坐标回填路径回退设备时区可接受 | 中国单一时区 + 设备时区常识 | 真机在**异地时区**设备上配置中国城市，观察「更新于」时刻；若偏差 → 改为在 `WidgetCityEntity` 追加**可选** `timeZoneIdentifier`（兼容） |
 | A11 | 全仓对 `WidgetPayloadStatus` **零穷尽 switch** | §8.1 逐文件核对 | 重跑必查项 #1；若出现 switch → 本设计的「不加 case」策略须连带把该 switch 改穷尽 |
 
@@ -907,8 +960,11 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 - [ ] `Core/Logic/WidgetPayloadStatus.swift`：删除「Widget 没有网络」段落，改为引用本文档。
 - [ ] `ZhishengWeatherWidget/WeatherProvider.swift`：删除「全程无网络、无同步阻塞调用」，
       改写为「L0 本地优先；L0 未命中时 L1 自力取数（至多 1 次、8s 有界）；L2 如实空态」。
-- [ ] `ZhishengWeatherWidget/WidgetCityIntent.swift`：把「禁联网（F-C-8 / AC-C8）」收窄为
-      「`suggestedEntities()`/`entities(for:)` 纯本地；仅 `entities(matching:)`（C2）联网」。
+- [x] `ZhishengWeatherWidget/WidgetCityIntent.swift`：**保持**「禁联网（F-C-8 / AC-C8）」
+      **绝对规则**（原文曾要求「把禁联网收窄为仅 C2 允许联网」—— **该要求已撤回**，见 §21）。
+      该文件**只允许纯本地读**，不得出现任何联网 service 引用、也不得符合字符串搜索协议。
+      由 `qa-static-check.sh` SC-40b 守住（**性质锚定**：扫 widget 目录中除 timeline provider
+      外的每一个 `.swift`，不再锚在 `WidgetCityIntent.swift` 这个文件名上）。
 - [ ] `ZhishengWeatherWidget/WeatherEntry.swift`：注明 `payload` 语义新增「可来自自力取数」。
 
 ---
@@ -1025,7 +1081,6 @@ classDiagram
     class WidgetCityQuery {
         +suggestedEntities() [WidgetCityEntity]
         +entities(for) [WidgetCityEntity]
-        +entities(matching) [WidgetCityEntity]
         +defaultResult() WidgetCityEntity
     }
     class WidgetCityEntity {
@@ -1114,7 +1169,10 @@ sequenceDiagram
     P-->>WK: Timeline([entry], .after(now+45min))
 ```
 
-### 19.3 配置界面（C1 非空 + C2 搜索）
+### 19.3 配置界面（C1 非空；🔴 C2 搜索已否决，见 §21）
+
+> ⚠️ 下图中的地理编码搜索分支（C2）**已否决**（配置路径严禁联网）。当前配置界面
+> 只有 C0（容器城市）+ C1（内置 34 城）：`[哨兵] + 真实城市`，永不为空，且**零网络**。
 
 ```mermaid
 sequenceDiagram
@@ -1133,7 +1191,7 @@ sequenceDiagram
     B-->>Cat: [北京…台北]（34）
     Cat-->>Q: [容器城市…] + [内置未重复项]
     Q-->>U: [哨兵] + 真实城市（永不为空）
-    U->>Q: 输入城市名（C2）
+    U->>Q: 输入城市名（C2，🔴 已否决 —— 该分支不得实现）
     Q->>G: search(name:)
     G-->>Q: [City]（免密钥）
     Q-->>U: 候选实体
@@ -1169,6 +1227,53 @@ sequenceDiagram
 - **补充**：`docs/CI-pitfalls.md` P-19（本设计是 P-19 的**架构级对治**：
   不修签名，而是让小组件不再依赖 App Group）。
 - **承接**：`docs/handover/open-meteo-capability-verified.md`（自力取数复用的
-  `/v1/forecast` 与 geocoding 能力均已实测可用、免密钥）。
+  `/v1/forecast` 能力已实测可用、免密钥）。geocoding 能力仍由**主 App** 使用
+  （`CityListView` / `CitySearchModel`），但**不再用于小组件配置路径**（C2 已否决，§21）。
 - **纪律承接**：P-18 同源盲区（新逻辑全在 Core、测试注入而非模拟）、
   P-13（优先级写死，见 §7.1）、P-06（Widget 视图非隔离，Core 纯函数不依赖 MainActor）。
+
+---
+
+## 21. 裁定记录（team lead，2026-09-17）：C2 否决
+
+### 21.1 裁定
+
+**AC-C8 原样有效；C2（在配置解析路径里发起联网）否决。**
+
+- `ZhishengWeatherWidget/WidgetCityIntent.swift` 中的字符串搜索方法
+  （城市名 → 联网地理编码 → 实体映射）**删除**；
+- `WidgetCityQuery` 去掉字符串搜索协议的一致性声明（改回仅符合基础 `EntityQuery`）；
+- 本文件 §1.4 的 `废弃-3`（把 AC-C8 收窄为「仅 C2 允许联网」）**撤回**为「**不废弃**」。
+
+### 21.2 三条理由
+
+1. **越权收窄**：`废弃-3` 把一条**已批准、且挂真机判据（F-C-8）**的 AC 单方面收窄成
+   「仅某方法允许联网」。收窄一条 AC 属 **AC 拥有者（PM）** 的权限，
+   架构师 / 实现者无权自行废止。
+2. **不可验 + 真实卡死风险**：F-C-8 只能在**真机**验（飞行模式 + 断 App Group 下编辑界面
+   不卡死），而本仓唯一编译门禁是 CI，验不了真机。同时 `URLSession` 默认超时 **60s**，
+   在小部件配置界面的执行预算下是**真实卡死风险** —— 带着不可验证的卡死风险去违一条
+   明文禁令，不成立。
+3. **C2 非必要条件**：`suggestedEntities()` 已是「**哨兵 + 容器城市 + 内置目录（34 城）**」，
+   去掉 C2 后配置界面**照样有 34 个真实城市可选**。C2 只是额外多给了「搜任意城市」。
+
+### 21.3 替代方案（**不是**简单砍掉功能）
+
+> ⚠️ 以下两项**本文档只做设计记录，不在本任务内实现**（另派人在 PM 定稿后实施）。
+
+- **方案 A：内置目录扩容（C1 扩容）**
+  把 `Core/Logic/WidgetBuiltInCities.swift` 从 34 座（省会级）扩到**地级市量级**。
+  仍是**编译期 Swift 常量**（纯本地读、零执行预算风险、天然合规），覆盖任意中国城市，
+  替代 C2 的「搜到任意城市」能力。
+- **方案 B：「当前位置」配置项（推荐）**
+  定位在 **timeline provider** 路径解析（该路径**允许**联网 / 定位），**不在**配置路径。
+  定位**不是 entitlement 门禁能力**（只需 Info.plist 用途说明）：主 App 已有
+  `NSLocationWhenInUseUsageDescription`，widget 侧需加 `NSWidgetWantsLocation` →
+  未签名侧载产物下可用。对侧载自用场景，这比「打字搜索」更好：不用打字、不联网、
+  不被 AC-C8 管到，且直接命中「看我在哪儿的天气」。
+
+### 21.4 L1（timeline 自力取数）**保留不动**
+
+AC-C8 明文限定在「**配置解析**」。SC-40 原始注释与 SC-40b 补强都明确把
+**timeline 取数**排除在外（那是**允许**的）。故 `ZhishengWeatherWidget/WeatherProvider.swift`
+的取数逻辑**不改**。
