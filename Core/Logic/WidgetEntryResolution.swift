@@ -61,9 +61,23 @@ enum WidgetEmptyReason: Equatable, Sendable {
     case fetchFailed
     /// L1 取数成功但该城市**结构性无数据**（`WeatherError.dataMissing`）→ 换城市。
     case cityHasNoData
+    /// 「当前位置」配置 + 小组件**未获定位资格**
+    /// （`CLLocationManager.isAuthorizedForWidgetUpdates == false`：宿主 App 从未
+    /// 请求过授权，或用户拒绝了「允许小组件使用位置」）→ 引导用户去授权。
+    ///
+    /// ⚠️ 与 `.locationUnavailable` 是**两种不同状态**（Apple 明文要求区分）：此处
+    /// 「有资格但拿不到」与「压根没资格」的用户动作完全不同，合并即等于给出错处方。
+    /// 与 `.noCity` 的区别：`.noCity` 是**没配过 / 配置无法解析**，用户要去做「选城市」；
+    /// 本态是**已选「当前位置」**，用户要做的是「授权」。
+    case locationNotAuthorized
+    /// 「当前位置」配置、已获资格但**本轮未取到坐标**（取点超时 / 定位服务不可用 /
+    /// 系统在小组件不可见后停止提供定位更新 —— Apple 明文：这是常态）→ 如实说明，
+    /// 并给出「改选具体城市」这条**真实可行**的出路。
+    case locationUnavailable
 }
 
-/// 城市阶梯（C0 容器目录 → C1 内置目录 → C2 坐标回填）的产出。
+/// 城市阶梯（C0 容器目录 → C1 内置目录 → C2 坐标回填；另加 P1-C7「当前位置」定位分支）
+/// 的产出。
 enum WidgetCityOutcome: Equatable, Sendable {
 
     /// 解析出**用户（直接或经哨兵跟随）指定**的城市，元数据完整。
@@ -76,13 +90,40 @@ enum WidgetCityOutcome: Equatable, Sendable {
     /// 用户的城市归属。新实现容器真空即回本分支（诚实空态）。
     case needsConfiguration
 
+    /// 「当前位置」配置但**未获定位资格** → 可操作空态（引导用户授权）。
+    ///
+    /// 理由见 `WidgetEmptyReason.locationNotAuthorized`：与 `.needsConfiguration`
+    /// 的区别是「用户已经选过东西了」，故**不能**复用「请配置城市」那句提示。
+    case locationNotAuthorized
+    /// 「当前位置」配置、已获资格但本轮未取到坐标 → 如实空态（可改选具体城市）。
+    case locationUnavailable
+
     /// 目标城市；`.needsConfiguration` → nil。
     var city: City? {
         switch self {
         case .resolved(let city):
             return city
-        case .needsConfiguration:
+        case .needsConfiguration, .locationNotAuthorized, .locationUnavailable:
             return nil
+        }
+    }
+
+    /// 本产出对应的**空态原因**（`.resolved` → nil）。
+    ///
+    /// 为什么把这条映射放在这里：`WidgetDataResolver` 的「无城市 → 不取数」分支只有
+    /// **一处**，它需要拿到「为什么无城市」。若在别处再写一遍 switch，就出现第二处
+    /// 真源（新增产出时必然漏改一处，P-13 纪律）。故**唯一**映射点在本计算属性，
+    /// 且**穷尽**、不留 `default`（新增产出时编译器直接指出漏改处）。
+    var emptyReason: WidgetEmptyReason? {
+        switch self {
+        case .resolved:
+            return nil
+        case .needsConfiguration:
+            return .noCity
+        case .locationNotAuthorized:
+            return .locationNotAuthorized
+        case .locationUnavailable:
+            return .locationUnavailable
         }
     }
 }
@@ -93,7 +134,9 @@ enum WidgetCityOutcome: Equatable, Sendable {
 /// `payload != nil` ⟺ `emptyReason == nil`（有数据就无空因；有空因必无数据）。
 struct WidgetEntryResolution: Equatable, Sendable {
 
-    /// 本实例目标城市；nil = 无城市（此时 `emptyReason == .noCity`）。
+    /// 本实例目标城市；nil = 无城市（此时 `emptyReason` **必非 nil**，可能是
+    /// `.noCity` / `.locationNotAuthorized` / `.locationUnavailable` —— 三者由
+    /// `WidgetCityOutcome.emptyReason` 一一映射而来）。
     var city: City?
     /// 下发给视图的载荷；nil = 空态（此时 `emptyReason` 必非 nil）。
     var payload: SharedWeatherPayload?

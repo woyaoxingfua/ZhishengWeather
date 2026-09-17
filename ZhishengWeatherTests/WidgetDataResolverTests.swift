@@ -255,6 +255,66 @@ final class WidgetDataResolverTests: XCTestCase {
         XCTAssertEqual(calls, 0, "无城市时绝不取数（没有坐标可请求）")
     }
 
+    // MARK: - 9.x P1-C7「当前位置」的两个空态 → 如实空态 + **零取数**
+
+    /// 未获定位资格：用户**已经**选过「当前位置」，空因必须能区分于 `.noCity`
+    /// （提示动作完全不同：一个是去授权，一个是去选城市）。
+    func testLocationNotAuthorizedNeverFetches() async {
+        let fake = FakeWeatherProvider(behavior: .success(snapshot(location: LocationInfo.beijing)))
+
+        let resolution = await resolve(cityOutcome: .locationNotAuthorized,
+                                       loadResult: .missing,
+                                       allowNetwork: true,
+                                       weather: fake)
+
+        XCTAssertNil(resolution.payload)
+        XCTAssertNil(resolution.city, "未授权 → 无城市（不伪造坐标、绝不回落北京）")
+        XCTAssertEqual(resolution.status, .missing)
+        XCTAssertEqual(resolution.dataSource, .none)
+        XCTAssertEqual(resolution.emptyReason, .locationNotAuthorized,
+                       "空因必须**逐层透传**：与 `.noCity` 分开（Apple 明文要求区分）")
+        let calls = await fake.calls()
+        XCTAssertEqual(calls, 0, "没有坐标 → 绝不取数（取谁的天气？）")
+    }
+
+    /// 已获资格但本轮没拿到坐标（Apple：系统只在组件可见后的一小段时间内提供定位）
+    /// → 如实说明，同样**零取数**。
+    func testLocationUnavailableNeverFetches() async {
+        let fake = FakeWeatherProvider(behavior: .success(snapshot(location: LocationInfo.beijing)))
+
+        let resolution = await resolve(cityOutcome: .locationUnavailable,
+                                       loadResult: .missing,
+                                       allowNetwork: true,
+                                       weather: fake)
+
+        XCTAssertNil(resolution.payload)
+        XCTAssertNil(resolution.city)
+        XCTAssertEqual(resolution.status, .missing)
+        XCTAssertEqual(resolution.dataSource, .none)
+        XCTAssertEqual(resolution.emptyReason, .locationUnavailable)
+        let calls = await fake.calls()
+        XCTAssertEqual(calls, 0, "没拿到坐标 → 绝不取数（不会拿别处的天气冒充）")
+    }
+
+    /// 「当前位置」拿到坐标后，取数必须**按该坐标**发起（而不是容器里的北京）。
+    func testLocatedCurrentLocationFetchesByTheLocatedCoordinate() async {
+        let located = City(name: WidgetLocationResolver.currentLocationName,
+                           latitude: 30.25, longitude: 120.17, isCurrentLocation: true)
+        let fake = FakeWeatherProvider(behavior: .success(snapshot(location: located.locationInfo)))
+
+        let resolution = await resolve(cityOutcome: .resolved(located),
+                                       loadResult: .missing,
+                                       allowNetwork: true,
+                                       weather: fake)
+
+        XCTAssertEqual(resolution.dataSource, .selfFetched)
+        XCTAssertEqual(resolution.payload?.snapshot.location.name,
+                       WidgetLocationResolver.currentLocationName,
+                       "城市名必须被覆盖为实例目标城市（不顶着服务层返回的「当前位置」以外的值）")
+        let calls = await fake.calls()
+        XCTAssertEqual(calls, 1, "定位实例同样遵守「全路径至多一次」的配额纪律")
+    }
+
     // MARK: - 10. 快照路径（allowNetwork = false）→ 零请求
 
     func testSnapshotPathNeverFetches() async {
@@ -316,6 +376,8 @@ final class WidgetDataResolverTests: XCTestCase {
             (.resolved(Self.beijing), true, .missing, true, failure),
             (.resolved(Self.beijing), true, .missing, false, failure),
             (.needsConfiguration, true, .missing, true, failure),
+            (.locationNotAuthorized, true, .missing, true, failure),
+            (.locationUnavailable, true, .missing, true, failure),
         ]
 
         for (index, item) in cases.enumerated() {

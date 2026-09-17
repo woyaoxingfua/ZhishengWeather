@@ -48,6 +48,9 @@ final class WidgetBuiltInCitiesTests: XCTestCase {
     func testNoCityIDEqualsSentinel() {
         XCTAssertFalse(WidgetBuiltInCities.cities.contains { $0.id == WidgetCityResolver.followAppID },
                        "内置城市 id 不得等于哨兵 id（否则哨兵语义被击穿）")
+        XCTAssertFalse(WidgetBuiltInCities.cities.contains { $0.id == WidgetCityResolver.currentLocationID },
+                       "内置城市 id 也不得等于「当前位置」哨兵 id（P1-C7 / R-C6：两个哨兵"
+                       + "都要纳入同一套互斥断言，否则会双向静默错）")
     }
 
     func testCoordinatesAreWithinValidRanges() {

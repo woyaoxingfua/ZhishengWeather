@@ -25,5 +25,15 @@
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.widgetkit-extension</string>
 	</dict>
+	<!-- P1-C7「当前位置」：小组件要接收定位更新，**必须**在本扩展的 Info.plist
+	     声明该键（Boolean = true）。用途字符串放在**宿主 App** 的 Info.plist
+	     （Config/ZhishengWeather-Info.plist 的 NSLocationWhenInUseUsageDescription，
+	     Apple 要求如此分工，本扩展**不**重复声明）。
+	     ⚠️ 写错 / 漏写**不报错、不告警、测试全绿** —— 只有真机上小组件永远拿不到
+	     定位。拦住它的断言见
+	     ZhishengWeatherTests/WidgetLocationBuildProductTests.swift（读**构建产物**
+	     appex 的 Info.plist，不许 skip）。 -->
+	<key>NSWidgetWantsLocation</key>
+	<true/>
 </dict>
 </plist>

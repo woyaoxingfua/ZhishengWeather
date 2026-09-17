@@ -861,6 +861,8 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
 | 容器不可用（快照） | `.unavailable` | `.none` | `.sharedContainerDown` | `共享数据不可用` | `共享数据不可用` | `稍候将自动获取` |
 | 取数失败 | `.unavailable` | `.none` | `.fetchFailed` | `未能获取天气` | `未能获取天气` | `请检查网络后重试` |
 | 城市无数据 | `.missing` | `.none` | `.cityHasNoData` | `该城市暂无天气数据` | — | `换一个城市试试` |
+| **定位未授权**（P1-C7） | `.missing` | `.none` | `.locationNotAuthorized` | `定位未授权` | `定位未授权` | `先允许定位，再重新添加小组件` |
+| **定位落空**（P1-C7） | `.missing` | `.none` | `.locationUnavailable` | `位置暂时不可用` | `位置暂时不可用` | `可改选具体城市试试` |
 
 - 文案**只**从 `WidgetCopy` 出；视图**禁止**再各自拼句（消除第二处真源）。
 - `conditionText` 有数据时复用既有 `WMOCodeMapper.description(for:)`（不新增映射）。
@@ -879,10 +881,20 @@ func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
     `.sharedContainerDown` 的前置条件就是「城市**已**解析」（无城市走 `.noCity`），
     再让用户去选城市等于让他重做刚做过的事。
   - `.fetchFailed`（检查网络）/ `.cityHasNoData`（换城市）保留：两条都是用户照做**能**改善的动作。
+  - `.locationNotAuthorized` → 「先允许定位，再重新添加小组件」：**能**改善 —— 定位授权
+    **不受** entitlement 门禁（PRD §4.7.2），它是本产品侧载渠道上少数真能改变的状态之一；
+    「重新添加」是因为小组件那次授权问句只在**添加组件时**出现，设置里没有小组件子项。
+  - `.locationUnavailable` → 「可改选具体城市试试」：该态是「**已授权**但本轮拿不到」
+    （Apple：系统只在组件可见后的一小段时间内提供定位更新）→ 用户**已经**授权过，
+    再叫他去授权是**错处方**；改选具体城市是真实可行的出路（内置目录不依赖容器）。
+- ⚠️ 这条硬规则的**适用边界**（别读成「永远不许提主 App」）：
+  它管的是「**状态是否由 App Group 决定**」。容器类状态在侧载上**永不可变** → 提主 App
+  无效；**定位授权不属于此类** → 可以、也应该给出真实动作。判据始终是「照做会不会变好」。
 - **禁止写回**的历史文案：「打开主 App 取数后自动显示」「请在主 App 中打开一次天气」
   （原文案在侧载渠道上不可能生效，属错建议）。
 - CI 已锁：`WidgetCopyTests.testNoWidgetCopyRowEverAsksUserToOpenTheMainApp` 断言
-  提示行 / 现象位 / 时间位**一律不含「App」字样**（大小写都拦）。
+  提示行 / 现象位 / 时间位**一律不含「App」字样**（大小写都拦）；新增的两条定位文案
+  同样在该断言的覆盖范围内（措辞里本就没有 App 字样）。
 
 ---
 
@@ -1295,3 +1307,78 @@ sequenceDiagram
 AC-C8 明文限定在「**配置解析**」。SC-40 原始注释与 SC-40b 补强都明确把
 **timeline 取数**排除在外（那是**允许**的）。故 `ZhishengWeatherWidget/WeatherProvider.swift`
 的取数逻辑**不改**。
+
+---
+
+## 22. P1-C7「当前位置」：三态判定 + 绝不回落（实现记录）
+
+对应 PRD `P1-C7` / `AC-C14` / `AC-C15` / `AC-C16`；本节是**实现后的落地面**（§21.3 方案 B
+已在设计中定稿，本节只记录实现时的判定与取舍）。
+
+### 22.1 配置路径：静态哨兵，零 IO
+
+- 哨兵 id `current-location`（`WidgetCityResolver.currentLocationID`），与 `follow-app`
+  **同构且互异**，且与 `City.makeID` 产物（`"%.2f,%.2f"`）格式互斥 → 三者互斥由
+  `WidgetCityResolverTests.testSentinelIDsAreMutuallyExclusive` 一条断言同时看住
+  （PRD §4.7.2 实施注意：漏了会出现「坐标 ↔ 哨兵」的**双向静默错**）。
+- 「当前位置」项**恒出现**于候选（`WidgetCityQuery.suggestedEntities()`，第二项），
+  **不查权限、不定位、不联网** —— 候选内容不得依赖运行时设备状态（AC-C15② 的
+  理由①：否则配置界面的行为不确定，CI 与真机必然分歧）。
+- 真取点只在 `WeatherProvider.timeline`；`snapshot`（画廊 / 瞬时预览）**不取点**
+  （与「快照不联网」同源纪律，此时如实给出 `.unavailable`）。
+
+### 22.2 三态的判定点与文案
+
+| # | 判定条件（唯一判据：`CLLocationManager.isAuthorizedForWidgetUpdates`） | 落点 | 现象行 | 提示行 |
+|---|---|---|---|---|
+| ① | `false`（宿主 App 从未授权 / 用户拒绝了小组件使用位置） | `WidgetLocationService.currentLocationFix` → `WidgetLocationResolver.outcome(fix:)` → `.locationNotAuthorized` | `定位未授权` | `先允许定位，再重新添加小组件` |
+| ② | `true` 但本轮没拿到坐标（超时 / 定位服务不可用 / 系统在组件不可见后停止提供） | 同上 → `.locationUnavailable` | `位置暂时不可用` | `可改选具体城市试试` |
+| ③ | `true` 且拿到坐标 | 同上 → `.resolved(City)`（名「当前位置」、`isCurrentLocation = true`） | WMO 现象描述 | —（无） |
+
+- ① 与 ② **禁止合并成一句话**：Apple 明文要求区分，且用户动作完全不同
+  （去授权 vs 改选城市）。CI 侧由 `WidgetCopyTests.testTheTwoLocationRowsAreDistinct`
+  与 `WidgetLocationTests.testTheTwoLocationEmptyReasonsAreDistinctFromEachOtherAndFromNoCity`
+  两条断言看住。
+- **绝不回落**：三条路径里没有一条产出北京。容器里放着北京也不认
+  （`testNoLocationOutcomeEverFallsBackToBeijing`）。主 App `LocationProvider` 的
+  `.beijing` 兜底是**主 App 的策略**，小组件照搬即幽灵北京。
+
+### 22.3 为什么取点用「闭包注入」而不是「传值」
+
+`WidgetCityResolver.resolveOutcome` 的 `location` 参数是一个
+`() async -> WidgetLocationOutcome` 闭包，**只有 `.currentLocation` 分支会 `await` 它**，
+且恰好一次（其余分支零调用）。理由：
+
+- 传值的话，「什么时候该取点」这条判定就散落到调用方（Widget 侧，CI 不可测）；
+  一旦调用方忘了取点，用户会**永久**看到一个看似正常的空态 —— 静默错。
+- 闭包注入把判定锁进 Core：单测可断言「非当前位置 → 零调用」「当前位置 → 恰好一次」
+  （`WidgetCityResolverTests` ⑱⑲），把「定位开销」也纳入配额纪律。
+
+### 22.4 不做反向地理编码（有意的取舍）
+
+AC-C14 已把展示名定死为「**当前位置**」，故**不做** `CLGeocoder` 反查：
+
+- 反查是**第二次联网**，要挤进同一条 timeline 预算，还引入新的失败面
+  （拿到坐标却丢了名字 → 又得再设计一套降级文案）；
+- 代价是时区缺省（nil）→ 时刻渲染回退**设备时区**。这是已知限制：
+  「当前位置」的语义就是「用户就在这里」，设备时区与当地时区通常一致；
+  无论如何**不臆造**（绝不硬编码 `Asia/Shanghai`）。
+
+### 22.5 产物级断言（防「写错不报错」）
+
+`NSWidgetWantsLocation` 是配置驱动的能力开关，**写错 / 漏写 / 写进宿主 App
+都不报错、不告警、单测全绿**，只有真机上「当前位置」永远空态 —— 与备用图标那个
+缺陷（`ca7f224`：actool 静默忽略）**同一类**。故
+`ZhishengWeatherTests/WidgetLocationBuildProductTests.swift` 只读**构建产物**里
+appex 的 Info.plist，断言该键存在且为 Boolean `true`；顺带断言宿主 App 的
+`NSLocationWhenInUseUsageDescription` 非空（Apple 的分工，缺一半同样是静默失败）。
+定位不到 bundle 时 **XCTFail**（静默 skip = 永远为真的假绿）。
+
+### 22.6 ⚠️ 必须由真机验证、CI 与本文档都不能替它下结论的部分
+
+| # | 待验证 | 为什么必须真机 |
+|---|---|---|
+| 1 | `isAuthorizedForWidgetUpdates` 在 **iOS 17** 与**未签名侧载产物**上是否照常工作 | 定位不是 entitlement 门禁是**原理判断**（PRD §4.7.2 也是这么写的，并自己标了 ⚠️ 需真机实测）；P-19 的教训正是「CI 全绿 / 原理可行 ≠ 真机可用」 |
+| 2 | 添加小组件时系统是否真的抛出「允许该小组件使用位置」的问句；拒绝后**重新添加**是否会再问一次 | 提示行 `.locationNotAuthorized` 的「重新添加」二字就是按这个假设写的；若不成立，该提示需改成别的动作 |
+| 3 | 切到别的主屏页再回来 / 锁屏 / 隔夜后，定位是否不再提供（Apple 第 5 点） | 决定状态 ② 是「偶发」还是「常态」，进而决定文案是否要再调整 |
+| 4 | 未签名侧载下，扩展能否真正拿到一次定位（而非永远落到状态 ②） | 决定本功能在**本产品的分发渠道**上是否真的可用；不可用时它必须**优雅**退化为状态 ②，且**不影响**内置目录这条主路径 |

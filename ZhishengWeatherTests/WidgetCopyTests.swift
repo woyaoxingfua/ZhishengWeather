@@ -15,6 +15,12 @@
 //     （`testNoWidgetCopyRowEverAsksUserToOpenTheMainApp`）—— 任何人把「去开 App」写回来，
 //     CI 立刻红。
 //
+//  ⚠️ 这条硬规则的**边界**（别读成「永远不许提 App」）：判据始终是
+//  「照做，这个状态会不会变好」。App Group 类状态在侧载上**永不可变** → 提主 App 无效；
+//  而**定位授权不受 entitlement 门禁**（PRD §4.7.2），「允许定位」是真能改变状态的动作。
+//  故 P1-C7 新增的两行虽属「可操作」，措辞上仍**不含** App 字样 —— 上面这条断言
+//  对它们同样成立、同样是绿的。
+//
 
 import XCTest
 @testable import ZhishengWeather
@@ -133,6 +139,50 @@ final class WidgetCopyTests: XCTestCase {
         XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "换一个城市试试")
     }
 
+    // MARK: - P1-C7「当前位置」两态（Apple：未授权 ≠ 已授权但拿不到，禁止合并）
+
+    /// 状态 ①：未获定位资格 → 引导**真能改变该状态**的动作（授权 + 重新添加组件）。
+    ///
+    /// 为什么这里可以给出「去授权」这类动作（而 App Group 类状态不行）：定位**不受**
+    /// entitlement 门禁（PRD §4.7.2），用户授权**确实**能让状态变好；
+    /// 「重新添加小组件」则是小组件那一次系统授权问句（只在添加时出现）的唯一重来入口。
+    func testLocationNotAuthorizedRowAsksUserToGrantAndReAddTheWidget() {
+        let resolution = empty(.locationNotAuthorized, status: .missing)
+
+        XCTAssertEqual(WidgetCopy.conditionText(resolution: resolution), "定位未授权")
+        XCTAssertEqual(WidgetCopy.updateText(resolution: resolution, timeText: nil), "定位未授权")
+        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution),
+                       "先允许定位，再重新添加小组件",
+                       "未授权必须给**可操作**动作；绝不回落北京（AC-C15③）")
+        XCTAssertNil(WidgetCopy.cityText(resolution: resolution),
+                     "没有坐标 → 没有城市名可显示（绝不顶着「北京」）")
+    }
+
+    /// 状态 ②：已获资格但本轮没拿到 → 用户**已经**授权过，再叫他去授权是错处方；
+    /// 给「改选具体城市」这条真实出路（内置目录路径不依赖容器）。
+    func testLocationUnavailableRowOffersPickingAConcreteCity() {
+        let resolution = empty(.locationUnavailable, status: .missing)
+
+        XCTAssertEqual(WidgetCopy.conditionText(resolution: resolution), "位置暂时不可用")
+        XCTAssertEqual(WidgetCopy.updateText(resolution: resolution, timeText: nil), "位置暂时不可用")
+        XCTAssertEqual(WidgetCopy.hintText(resolution: resolution), "可改选具体城市试试",
+                       "该态是「已授权但拿不到」（Apple：系统只在组件可见后的一小段时间内"
+                       + "提供定位）→ 不应再叫用户去授权")
+    }
+
+    /// 两态**不许合并**成一句话（Apple 明文要求区分）：合并即等于给用户开错处方。
+    func testTheTwoLocationRowsAreDistinct() {
+        let unauthorized = empty(.locationNotAuthorized, status: .missing)
+        let unavailable = empty(.locationUnavailable, status: .missing)
+
+        XCTAssertNotEqual(WidgetCopy.conditionText(resolution: unauthorized),
+                          WidgetCopy.conditionText(resolution: unavailable),
+                          "未授权 / 拿不到 的现象位必须可区分")
+        XCTAssertNotEqual(WidgetCopy.hintText(resolution: unauthorized),
+                          WidgetCopy.hintText(resolution: unavailable),
+                          "未授权 → 去授权；已授权拿不到 → 改选城市。两者动作不同，禁止同文案")
+    }
+
     // MARK: - 兜底 / 穷尽（对任意输入不崩、现象位不返回空串）
 
     func testEveryEmptyReasonYieldsNonEmptyConditionAndHintText() {
@@ -142,6 +192,8 @@ final class WidgetCopyTests: XCTestCase {
             (.sharedContainerDown, .unavailable),
             (.fetchFailed, .unavailable),
             (.cityHasNoData, .missing),
+            (.locationNotAuthorized, .missing),
+            (.locationUnavailable, .missing),
         ]
 
         for (reason, status) in rows {
@@ -166,6 +218,8 @@ final class WidgetCopyTests: XCTestCase {
             (.sharedContainerDown, .unavailable),
             (.fetchFailed, .unavailable),
             (.cityHasNoData, .missing),
+            (.locationNotAuthorized, .missing),
+            (.locationUnavailable, .missing),
         ]
 
         for (reason, status) in rows {

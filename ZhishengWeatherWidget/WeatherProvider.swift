@@ -25,6 +25,15 @@
 //  网络配置的唯一真源在 Core：`WidgetWeatherService`（8s ephemeral 会话）。
 //  本文件**不出现任何网络符号**（`qa-static-check.sh` SC-40 纪律，见该文件说明）。
 //
+//  P1-C7「当前位置」（AC-C14 / AC-C15）：定位是**唯一**被允许的第二类 IO，且
+//  **只在 timeline 路径**（本文件）：
+//    · 取点器 = `WidgetLocationService`（`CLLocationManager` 外壳，零判定）；
+//    · **什么时候取点**由 Core 的 `WidgetCityResolver.resolveOutcome` 决定 ——
+//      本文件只把「取点动作」作为闭包注入：配置为「当前位置」时**恰好调用一次**，
+//      其余配置**零调用**（没配当前位置的实例零定位开销）；
+//    · `snapshot(for:)`（画廊 / 瞬时预览）**不取点**（与「快照不联网」同源纪律）；
+//    · 定位**不产生**任何天气请求 → 配额纪律不变（全路径 `weather.fetch` 仍 ≤ 1 次）。
+//
 //  iOS 16 兼容（任务 B）：`containerBackground(for: .widget)` 是 iOS 17 API。
 //  iOS 16 上小组件**没有** containerBackground，系统对时间线视图的渲染路径
 //  与 17 不同（系统仍会自行裁圆角），此时改为：
@@ -44,16 +53,21 @@ struct WeatherProvider: AppIntentTimelineProvider {
 
     private let store: AppGroupStore
     private let weather: WeatherProviding
+    private let location: WidgetLocationProviding
 
     /// 初始化。
     /// - Parameters:
     ///   - store: 共享容器读取器（widget 进程只用其读路径）。
     ///   - weather: 取数器；默认注入**短超时会话**的 `WeatherService`
     ///     （Core 的 `WidgetWeatherService`，8s + 不等待连通性）。测试可注入 Fake。
+    ///   - location: 定位取点器；默认 `WidgetLocationService`。**仅**在实例配置为
+    ///     「当前位置」时被 Core 调用（且只调一次），其余配置零调用。
     init(store: AppGroupStore = AppGroupStore(),
-         weather: WeatherProviding = WidgetWeatherService.makeDefault()) {
+         weather: WeatherProviding = WidgetWeatherService.makeDefault(),
+         location: WidgetLocationProviding = WidgetLocationService()) {
         self.store = store
         self.weather = weather
+        self.location = location
     }
 
     /// 占位条目（系统首次渲染 / 画廊预览）；示例数据路径不变。
@@ -121,10 +135,13 @@ struct WeatherProvider: AppIntentTimelineProvider {
     ///    —— 那是「幽灵北京」的来源（把防御性默认城市冒充成用户的城市归属）。
     /// ② 数据阶梯在 Core（`WidgetDataResolver`），失败一律收敛为 entry，不抛错。
     ///
+    /// ③ 「当前位置」实例（P1-C7）：取点动作以闭包注入 Core —— **由 Core 决定何时调用**
+    ///    （只有「当前位置」分支会 `await` 它，且恰好一次）。快照路径恒不取点。
+    ///
     /// - Parameters:
     ///   - configuration: 系统按实例持久化的配置 Intent。
     ///   - now: 当前时刻（注入给 Core 的新鲜度判定，Core 禁内部 `Date()`）。
-    ///   - allowNetwork: 是否允许 L1 自力取数（`snapshot` 传 false）。
+    ///   - allowNetwork: 是否允许 L1 自力取数与定位（`snapshot` 传 false）。
     /// - Returns: 城市 + 载荷 + 状态 + 来源 + 空因的收敛值。
     private func makeResolution(configuration: WidgetCitySelectionIntent,
                                 now: Date,
@@ -138,9 +155,18 @@ struct WeatherProvider: AppIntentTimelineProvider {
                                             name: configuration.city.name,
                                             subtitle: configuration.city.subtitle)
 
-        let cityOutcome = WidgetCityResolver.resolveOutcome(selection: selection,
-                                                            container: container,
-                                                            builtIn: WidgetBuiltInCities.cities)
+        // 取点源：快照路径（画廊 / 瞬时预览）**不取点** —— 与「快照不联网」同源纪律，
+        // 且预览里没有 "当前位置" 可言，故如实给出 `.unavailable`（由 Core 映射为
+        // 「位置暂时不可用 + 可改选具体城市」）。
+        let locationProvider = location
+        let locationSource: () async -> WidgetLocationOutcome = allowNetwork
+            ? { await locationProvider.currentLocationFix(budget: WidgetLocationResolver.fixBudget) }
+            : { .unavailable }
+
+        let cityOutcome = await WidgetCityResolver.resolveOutcome(selection: selection,
+                                                                 container: container,
+                                                                 builtIn: WidgetBuiltInCities.cities,
+                                                                 location: locationSource)
 
         return await WidgetDataResolver.resolve(cityOutcome: cityOutcome,
                                                 containerAvailable: container.containerAvailable,

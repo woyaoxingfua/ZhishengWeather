@@ -10,7 +10,8 @@
 //      │ L0 共享容器载荷（复用 WidgetPayloadResolver 的容器 / 归属 / 新鲜度判定）│
 //      │     命中 → .sharedContainer（零网络、零配额）          │
 //      ├───────────────────────────────────────────────────────┤
-//      │ 无城市 → .noCity（**不取数**，诚实空态）               │
+//      │ 无城市 → 按成因给空因（**不取数**，诚实空态）：          │
+//      │         .noCity / .locationNotAuthorized / .locationUnavailable │
 //      ├───────────────────────────────────────────────────────┤
 //      │ L1 自力取数（原样复用 WeatherService，**至多一次**请求）│
 //      │     成功 → .selfFetched；失败 → L2                    │
@@ -49,7 +50,8 @@ enum WidgetDataResolver {
 
     /// 数据阶梯主入口（纯编排：无 IO、无时钟，全部依赖注入）。
     /// - Parameters:
-    ///   - cityOutcome: 城市阶梯产出（`.resolved` / `.needsConfiguration`）。
+    ///   - cityOutcome: 城市阶梯产出（`.resolved` / `.needsConfiguration` /
+    ///     `.locationNotAuthorized` / `.locationUnavailable`）。
     ///   - containerAvailable: `AppGroupStore.isSharedContainerAvailable` 的探测结果（**注入**）。
     ///   - loadResult: `AppGroupStore.loadResult()` 的三态结果。
     ///   - now: 当前时刻（注入；Core 禁内部 `Date()`）。
@@ -91,12 +93,19 @@ enum WidgetDataResolver {
         // ── 无城市：诚实空态，**不取数**（即便 allowNetwork == true）──────────
         // 这是「幽灵北京」修复的验收点：容器真空 → 无城市 → 引导用户主动配置，
         // 绝不替用户默认北京、绝不冒充城市归属。
+        //
+        // 空因**不写死**为 `.noCity`：无城市有三种成因（未配置 / 定位未授权 / 定位
+        // 落空），三者的**下一步动作完全不同**（选城市 / 授权 / 改选城市），
+        // 合并成一句话就是给用户开错处方。映射的唯一真源是
+        // `WidgetCityOutcome.emptyReason`（穷尽 switch，新增产出时编译器会指出漏改）。
         guard let city = cityOutcome.city else {
             return WidgetEntryResolution(city: nil,
                                          payload: nil,
                                          status: .missing,
                                          dataSource: .none,
-                                         emptyReason: .noCity)
+                                         // `?? .noCity` 不可达（`emptyReason` 为 nil
+                                         // **仅** `.resolved` 一途），留作类型兜底。
+                                         emptyReason: cityOutcome.emptyReason ?? .noCity)
         }
 
         // ── 快照路径：仅 L0，不联网（画廊 / 瞬时预览不消耗时间线与配额）──────

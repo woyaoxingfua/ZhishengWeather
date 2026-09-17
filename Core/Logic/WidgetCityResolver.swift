@@ -11,6 +11,11 @@
 //  - R-C1（哨兵）："跟随 App" = 非可选参数 + 哨兵实体（id = followAppID），
 //    不用"可选参数 + nil 默认"；哨兵 id 与 `City.makeID` 产物（"%.2f,%.2f"）
 //    格式互斥（R-5），判定集中在 `mode(forEntityID:)`，禁止散落字符串比较。
+//  - R-C6（P1-C7「当前位置」哨兵）：第二个静态哨兵 `currentLocationID`，与
+//    `followAppID` **同构且互斥**（都是「含字母/连字符、不含逗号」的串 → 与坐标 id
+//    不可能碰撞）。它**恒出现**在配置候选里（AC-C15②：不按权限动态隐藏），
+//    选中后由 **timeline 路径**取点（`WidgetLocationResolver`），配置路径零 IO。
+//    互斥断言与 `followAppID` 同一套测试（PRD §4.7.2 实施注意：漏了会双向静默错）。
 //  - 解析优先级**写死**（ARCH §7.1，P-13 纪律）：见 `resolveOutcome`。
 //  - **幽灵北京修复（ARCH §7.2 / §10-3）**：输入语义从 `CityDirectory`
 //    改为 `WidgetContainerSnapshot`（**原始**容器）。旧实现接收
@@ -38,19 +43,32 @@ enum WidgetCityResolver {
     /// 不可能冲突（含字母与连字符）。
     static let followAppID = "follow-app"
 
+    /// 「当前位置」哨兵 id（P1-C7 / AC-C14；R-C6 唯一真源）。
+    ///
+    /// 与 `followAppID` 同构：`WidgetCityEntity.currentLocationID` 引用此处常量，
+    /// 全仓禁止再写 "current-location" 字面量。
+    /// 与 `City.makeID` 产物（数字+逗号+小数点）**不可能冲突**（含字母与连字符），
+    /// 与 `followAppID` 亦**互异** —— 两处互斥断言在同一份测试里，见
+    /// `WidgetCityResolverTests.testSentinelIDsAreMutuallyExclusive`。
+    static let currentLocationID = "current-location"
+
     /// 实例的配置模式（由 Intent 的 entity.id 映射而来）。
     enum Mode: Equatable, Sendable {
         /// 哨兵 id → 跟随主 App 选中（AC-C2）。
         case followApp
+        /// 哨兵 id → 「当前位置」：定位解析在 **timeline 路径**（AC-C14 / AC-C15）。
+        case currentLocation
         /// 固定某城市（AC-C3）。
         case fixed(cityID: String)
     }
 
     /// 配置 entity id → 模式（哨兵判定**集中于此**）。
     /// - Parameter id: Intent 参数携带的 entity id。
-    /// - Returns: `.followApp`（哨兵）或 `.fixed`（城市 id）。
+    /// - Returns: `.followApp` / `.currentLocation`（哨兵）或 `.fixed`（城市 id）。
     static func mode(forEntityID id: String) -> Mode {
-        id == followAppID ? .followApp : .fixed(cityID: id)
+        if id == followAppID { return .followApp }
+        if id == currentLocationID { return .currentLocation }
+        return .fixed(cityID: id)
     }
 
     /// 配置 + **原始容器** + 内置目录 → 本实例应渲染的目标城市。
@@ -76,22 +94,45 @@ enum WidgetCityResolver {
     ///         id 可解析为规范坐标 → `.resolved(回填的 City，名取配置携带值)`。
     ///   3. 其余（非法坐标的怪值）→ `.needsConfiguration`（不冒充、不默认）。
     ///
+    ///   0'. 哨兵 id → `.currentLocation` 分支：**本函数唯一的取点动作**，
+    ///      调用方注入的 `location` 闭包**只在此分支被 `await`**，且恰好一次
+    ///      （其余分支**零调用** → 没配「当前位置」的实例零定位开销）。
+    ///      结果由 `WidgetLocationResolver.outcome(fix:)` 映射为三态之一：
+    ///      `.located` → `.resolved(当前位置 City)`；
+    ///      `.notAuthorized` → `.locationNotAuthorized`；
+    ///      `.unavailable` → `.locationUnavailable`。
+    ///
     /// 与初版规则的差别（有意变更）：初版在第 2 步**无条件**坐标回填 ——
     /// 等于让「已被用户删除的城市」继续存活并继续取数（AC-C5 违规）。
     /// 现改为**先判容器是否可用**，只在「无法得知是否被删除」时才回填；
     /// 并在容器可用时按 AC-C5 回退到「跟随 App」，而非静默保留一个已删除的城市。
     ///
+    /// ⚠️ 为什么取点用**闭包注入**而不是「调用方先取好再传值」：传值的话
+    /// 「什么时候该取点」这条判定就散落到调用方（Widget 侧，CI 不可测）；
+    /// 一旦调用方忘了取点，用户会**永久**看到一个看似正常的空态（静默错）。
+    /// 闭包注入把这条判定锁进 Core：只有本函数能决定何时取点，且单测可断言
+    /// 「非当前位置 → 闭包零调用」「当前位置 → 恰好一次」。
+    ///
     /// - Parameters:
     ///   - selection: 本实例的配置值（id / name / subtitle 的 Core 侧投影）。
     ///   - container: **原始**容器城市快照（missing / corrupt → 空数组）。
     ///   - builtIn: 内置城市目录（C1，保证选择器非空）。
-    /// - Returns: 城市解析结果；无城市 → `.needsConfiguration`（UI 走「请配置城市」空态）。
+    ///   - location: 取点动作（由 `WeatherProvider` 注入 `WidgetLocationProviding`
+    ///     的调用；**仅**在 `.currentLocation` 分支被调用，且恰好一次）。
+    /// - Returns: 城市解析结果；无城市 → `.needsConfiguration` / `.locationNotAuthorized`
+    ///   / `.locationUnavailable`（UI 一律走 `WidgetCopy` 的如实空态）。
     static func resolveOutcome(selection: WidgetCitySelection,
                                container: WidgetContainerSnapshot,
-                               builtIn: [City]) -> WidgetCityOutcome {
+                               builtIn: [City],
+                               location: () async -> WidgetLocationOutcome) async -> WidgetCityOutcome {
         switch mode(forEntityID: selection.id) {
         case .followApp:
             return followAppOutcome(container: container)
+
+        case .currentLocation:
+            // 定位解析**只**发生在 timeline 路径（AC-C14）：配置界面（`WidgetCityQuery`）
+            // 永不调用 `resolveOutcome`，故配置路径零定位 / 零联网（AC-C8 / AC-C17）。
+            return WidgetLocationResolver.outcome(fix: await location())
 
         case .fixed(let cityID):
             // 第 1 步：命中城市目录（容器项优先，其次内置目录 C1）→ 直接用目录项。

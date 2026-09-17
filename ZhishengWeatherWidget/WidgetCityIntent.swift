@@ -10,6 +10,14 @@
 //  **只允许纯本地读**（经 `AppGroupStore` 读共享容器；容器不可用 → 只剩哨兵 +
 //  内置目录），**禁止任何网络类型引用**；`qa-static-check.sh` SC-40 保持零命中。
 //
+//  ⚠️ 同源的「禁定位」硬规则（P1-C7 / AC-C15② / AC-C17）：本文件**禁止**引用
+//  `CoreLocation` 或 `WidgetLocationProviding`。「当前位置」在本文件里**只是一个
+//  静态哨兵项**（`WidgetCityEntity.currentLocation`）：
+//    · **恒出现**（不查权限、不看设备状态 —— 候选列表的内容不得依赖运行时状态，
+//      否则配置界面的行为不确定，且 CI 与真机必然分歧）；
+//    · **不定位**（真正的取点在 `WeatherProvider.timeline`，那才是允许的 IO 路径）。
+//  故本文件即便把「当前位置」加进候选，也**零新增 IO**。
+//
 //  依据：AC-C8（docs/handover/PRD-zhisheng-ios-P1.md §4.4(a)）——
 //  「配置解析是纯本地读 + 纯函数映射，不允许任何网络请求」；对应真机判据 F-C-8
 //  （飞行模式 + 断 App Group 下，编辑小组件界面仍能打开、不卡死）。
@@ -51,8 +59,23 @@ struct WidgetCityEntity: AppEntity, Identifiable, Codable, Sendable {
     /// 全仓禁止再写 "follow-app" 字面量。
     static let followAppID = WidgetCityResolver.followAppID
 
+    /// "当前位置"哨兵 id；唯一真源在 Core 的 `WidgetCityResolver.currentLocationID`
+    /// （R-C6：与 `City.makeID` 产物、与 `followAppID` 三者互斥），此处仅转发，
+    /// 全仓禁止再写 "current-location" 字面量。
+    static let currentLocationID = WidgetCityResolver.currentLocationID
+
     /// 哨兵实体（候选列表第一项；AC-C1 / AC-C2）。
     static let followApp = WidgetCityEntity(id: followAppID, name: "跟随 App", subtitle: nil)
+
+    /// 「当前位置」哨兵实体（候选列表第二项；AC-C14 / AC-C15②）。
+    ///
+    /// ⚠️ **恒出现**：不查权限、不定位、不联网（见文件头「禁定位」规则）。
+    /// 展示名取自 Core 的 `WidgetLocationResolver.currentLocationName`（AC-C14 明文的
+    /// 「当前位置」），避免两处各写一套名字。
+    static let currentLocation = WidgetCityEntity(
+        id: currentLocationID,
+        name: WidgetLocationResolver.currentLocationName,
+        subtitle: nil)
 
     /// Apple 规范形式：AppIntents 编译期抽取器要求 name 为字面量；
     /// 直接 `= "城市"` 会触发 "Expect a compile-time constant literal"（CI 实测）。
@@ -102,7 +125,11 @@ struct WidgetCityEntity: AppEntity, Identifiable, Codable, Sendable {
 /// 配置路径联网，违反 AC-C8（详见文件头 C2 撤回声明）。
 struct WidgetCityQuery: EntityQuery {
 
-    /// 配置 picker 候选 = **[哨兵] + 可见城市**（口径见下）；哨兵**恒为第一项**。
+    /// 配置 picker 候选 = **[跟随 App, 当前位置] + 可见城市**（口径见下）。
+    ///
+    /// 两个哨兵**恒为前两项**且顺序固定：① 「跟随 App」是默认值（AC-C2），
+    /// ② 「当前位置」**恒出现**（AC-C15②：不按权限动态隐藏 —— 隐藏会让人以为
+    /// 功能不存在；且候选列表内容不得依赖运行时设备状态）。
     ///
     /// 可见城市 = 容器城市（保持共享容器数组顺序 = App 内顺序，AC-C1）
     ///          + 内置城市中**未在容器出现**的（C1 顺序）。
@@ -114,7 +141,8 @@ struct WidgetCityQuery: EntityQuery {
         let container = WidgetCityCatalog.rawCities(from: AppGroupStore().loadCities())
         let visible = WidgetCityCatalog.visibleCities(container: container,
                                                      builtIn: WidgetBuiltInCities.cities)
-        return [WidgetCityEntity.followApp] + visible.map(WidgetCityEntity.make)
+        return [WidgetCityEntity.followApp, WidgetCityEntity.currentLocation]
+            + visible.map(WidgetCityEntity.make)
     }
 
     /// 系统恢复既有配置值时调用（配置界面的**唯一**回显路径）。
@@ -133,6 +161,7 @@ struct WidgetCityQuery: EntityQuery {
         let container = WidgetCityCatalog.rawCities(from: AppGroupStore().loadCities())
         return identifiers.map { id in
             guard id != WidgetCityEntity.followAppID else { return .followApp }
+            guard id != WidgetCityEntity.currentLocationID else { return .currentLocation }
             if let city = WidgetCityCatalog.city(forID: id,
                                                 container: container,
                                                 builtIn: WidgetBuiltInCities.cities) {
