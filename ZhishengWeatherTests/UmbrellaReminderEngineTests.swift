@@ -66,12 +66,30 @@ final class UmbrellaReminderEngineTests: XCTestCase {
     }
 
     func testFiresAtLastPossibleWindowBoundary() throws {
-        // 起始点恰在 2 小时窗界（now + 7200s = 序列第 4 窗起始）→ 触发（闭区间）。
-        let list = points([0, 0, 0, 0.4], from: now)
+        // 起始点恰在 2 小时窗界（now + 7200s = 第 8 窗起始，闭区间）→ 触发。
+        // 9 点序列：第 0..7 窗全干，第 8 窗起始湿（+7200s）。
+        let values = [Double](repeating: 0, count: 8) + [0.4]
+        let list = points(values, from: now)
+        XCTAssertEqual(list[8].time.timeIntervalSince(now), 7200, accuracy: 1e-9,
+                       "前置校验：起始点必须恰在 2h 边界")
         let decision = UmbrellaReminderEngine.decide(minutely15: list,
                                                      now: now,
                                                      timeText: fixedTimeText)
-        XCTAssertTrue(decision.shouldFire, "窗口边界（恰 2h）应触发")
+        XCTAssertTrue(decision.shouldFire, "窗口边界（恰 2h，闭区间）应触发")
+        XCTAssertEqual(try XCTUnwrap(decision.onset), list[8].time)
+    }
+
+    func testDoesNotFireJustPastWindowBoundary() {
+        // 起始点在 now + 7300s（超出 2h 窗 100s）→ 不触发（闭区间上界的另一半）。
+        let values = [Double](repeating: 0, count: 8) + [0.4]
+        let list = points(values, from: now).map { point in
+            MinutelyPrecipitationPoint(time: point.time.addingTimeInterval(100),
+                                       precipitation: point.precipitation)
+        }
+        let decision = UmbrellaReminderEngine.decide(minutely15: list,
+                                                     now: now,
+                                                     timeText: fixedTimeText)
+        XCTAssertFalse(decision.shouldFire, "起始超过 2h 边界即不触发")
     }
 
     // MARK: - 不触发：正在下雨（防重复骚扰）
