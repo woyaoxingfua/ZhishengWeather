@@ -92,22 +92,25 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
-        # 备用图标名**必须写成 YAML 数组**（两个独立值），绝不能写回
-        # "AppIcon-Jade,AppIcon-Rain" 这种逗号串：
-        #   ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES 是**多值（列表）**设置，
-        #   分隔符是空白，逗号不是分隔符。写成逗号串时整串会被当成**一个**
-        #   备用图标名传给 actool（CI run 35217270251 实测构建日志：
-        #   `--alternate-app-icon AppIcon-Jade,AppIcon-Rain`），而这个名字在
-        #   Assets.xcassets 里并不存在 —— actool 带 `--warnings --notices` 却
-        #   **零告警地静默跳过**，于是产物里既没有 CFBundleAlternateIcons，
-        #   也没有备用图标的图，`UIApplication.supportsAlternateIcons` 恒为 false，
-        #   App 内换图标**必然失败**——而整条 CI 全绿（无任何断言读构建产物）。
-        #   写成数组后 XcodeGen 落成 pbxproj 列表，Xcode 才展开为两个独立的
-        #   `--alternate-app-icon` flag。拦住这个回归的测试见
-        #   ZhishengWeatherTests/AppIconBuildProductTests.swift。
-        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES:
-          - AppIcon-Jade
-          - AppIcon-Rain
+        # 备用图标名必须写成**空格分隔**的多值字符串（引号要留着，值里有空格），
+        # 绝不能写回 "AppIcon-Jade,AppIcon-Rain"：
+        #   ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES 是**按空白切分**的多值设置，
+        #   **逗号不是分隔符**。写成逗号串时整串会被当成**一个**图标名传给 actool
+        #   （CI run 35217270251 构建日志逐字实测：只有一个 flag，
+        #   `--alternate-app-icon AppIcon-Jade,AppIcon-Rain` —— 逗号没被切开），
+        #   而这个名字在 Assets.xcassets 里并不存在；actool 那次调用带了
+        #   `--warnings --notices` 却**零告警地静默跳过**。后果（同 run 的 IPA
+        #   产物逐字节确认）：Info.plist 里没有 CFBundleAlternateIcons、
+        #   Assets.car（3070776 字节）里两个备用名各出现 0 次
+        #   → UIApplication.supportsAlternateIcons == false
+        #   → App 内换图标**必然失败**——而整条 CI 全绿（没有任何断言读构建产物）。
+        #   空格串在 pbxproj 里就是一个带引号的字符串，Xcode 按空白切成两个值，
+        #   才会发出两个 `--alternate-app-icon` flag（与 Apple 文档的写法逐字一致）。
+        #   别改成逗号；也别指望数组——数组要多经
+        #   XcodeGen → XcodeProj 序列化 → pbxproj 列表 → Xcode 读回四道手，
+        #   中间任何一环把数组插值成字符串，就会退回单值形态。
+        #   拦住这个回归的测试见 ZhishengWeatherTests/AppIconBuildProductTests.swift。
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "AppIcon-Jade AppIcon-Rain"
     dependencies:
       - target: ZhishengWeatherWidget
         embed: true
