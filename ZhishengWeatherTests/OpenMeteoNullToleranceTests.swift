@@ -35,7 +35,12 @@ final class OpenMeteoNullToleranceTests: XCTestCase {
     func testHourlyTrailingNullsDecodeSuccessfully() throws {
         let dto = try decodeResponse(
             hourlyTimes: (0..<12).map { baseEpoch + $0 * 3_600 },
-            hourlyTemps: [20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0, 23.5, 24.0, nil, nil, nil],
+            // 三类不对称形态（真机是"温度与现象码同时 null"，这里刻意拆开，
+            // 证明跳过判据是"任一为 null"而非"两者同时缺失"）：
+            //   下标 9 ：温度 null + 现象码有值(5)
+            //   下标 10：温度有值(26.0) + 现象码 null
+            //   下标 11：两者皆 null
+            hourlyTemps: [20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0, 23.5, 24.0, nil, 26.0, nil],
             hourlyCodes: [1, 1, 2, 2, 3, 3, 1, 1, 2, 5, nil, nil]
         )
 
@@ -43,11 +48,10 @@ final class OpenMeteoNullToleranceTests: XCTestCase {
         XCTAssertEqual(dto.hourly.temperature_2m.count, 12, "null 元素不计为缺项，长度仍为 12")
         XCTAssertEqual(dto.hourly.weather_code.count, 12)
         // 元素级 null 必须如实解码为 nil，不得被静默填 0。
-        XCTAssertNil(dto.hourly.temperature_2m[9])
-        XCTAssertNil(dto.hourly.temperature_2m[10])
-        XCTAssertNil(dto.hourly.temperature_2m[11])
-        XCTAssertNil(dto.hourly.weather_code[10])
-        XCTAssertNil(dto.hourly.weather_code[11])
+        XCTAssertNil(dto.hourly.temperature_2m[9], "下标 9 温度为 null")
+        XCTAssertNil(dto.hourly.temperature_2m[11], "下标 11 温度为 null")
+        XCTAssertNil(dto.hourly.weather_code[10], "下标 10 现象码为 null")
+        XCTAssertNil(dto.hourly.weather_code[11], "下标 11 现象码为 null")
         // 下标 9：温度 null 但现象码**有值** —— 用于证明跳过是"任一为 null"触发，
         // 而非两边同时缺失才跳过。
         XCTAssertNotNil(dto.hourly.weather_code[9], "下标 9 的现象码有值，只有温度为 null")
@@ -59,7 +63,12 @@ final class OpenMeteoNullToleranceTests: XCTestCase {
     func testMapperSkipsHourlyRowsWithAnyNullElement() throws {
         let dto = try decodeResponse(
             hourlyTimes: (0..<12).map { baseEpoch + $0 * 3_600 },
-            hourlyTemps: [20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0, 23.5, 24.0, nil, nil, nil],
+            // 三类不对称形态（真机是"温度与现象码同时 null"，这里刻意拆开，
+            // 证明跳过判据是"任一为 null"而非"两者同时缺失"）：
+            //   下标 9 ：温度 null + 现象码有值(5)
+            //   下标 10：温度有值(26.0) + 现象码 null
+            //   下标 11：两者皆 null
+            hourlyTemps: [20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0, 23.5, 24.0, nil, 26.0, nil],
             hourlyCodes: [1, 1, 2, 2, 3, 3, 1, 1, 2, 5, nil, nil]
         )
 
