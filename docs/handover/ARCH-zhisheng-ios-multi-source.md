@@ -98,7 +98,11 @@ init(service: WeatherProviding = WeatherService(),
 
 ### 2.1 原则：**一个源一个 key**，`zs.weather.payload` 一个字节都不动
 
-现有唯一载荷 key：`AppGroup.payloadKey = "zs.weather.payload"`（`Core/Storage/AppGroup.swift:16`）。其余 key 见 L14/L18/L20/L22/L25/L27。
+现有唯一载荷 key：`AppGroup.payloadKey = "zs.weather.payload"`（`Core/Storage/AppGroup.swift`）。其余共享 key 见该文件的 `locationKey` / `citiesKey` / `selectedCityIDKey` / `pendingForceRefreshKey`。
+
+> **引用纪律（2026-09-17 修订）**：此处原本写的是**行号**（`L14/L18/L20/L22/L25/L27`）。行号会随任何一次编辑腐烂——删掉一条零引用的死常量 `unitPreferenceKey` 之后，`L27` 立刻不再指向 key。**文档引用一律用符号名，禁止用行号。**
+>
+> **例外**：单位偏好的 key **不在** `AppGroup.swift`，真源是 `Core/Models/UnitPreference.swift` 的 `temperatureKey` / `windSpeedKey` / `pressureKey`（`zs.weather.unit.*`，同样是 App Group 共享容器）。它们与「读写必须绑同一个 store」的实现绑在一起，硬搬到本文件只会让两处真理重新分裂。
 
 新增源的纪律：
 - **在 `AppGroup.swift` 追加常量**（该文件是"key 唯一真源"，其他文件一律引用常量，**禁止散落字符串字面量**）。
