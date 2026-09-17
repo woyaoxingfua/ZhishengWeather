@@ -698,8 +698,11 @@ final class OpenMeteoMapperTests: XCTestCase {
             ),
             hourly: OpenMeteoResponse.Hourly(
                 time: times,
-                temperature_2m: temps,
-                weather_code: codes,
+                // v1.6：DTO 元素改为可选（容忍 Open-Meteo null），此处**显式**做
+                // 元素可选提升 —— 不依赖 Swift 的隐式 [Double] → [Double?] 转换
+                // （隐式转换在「数组 + 可选」双重形态下不保证成立，CI 实测挂过编译）。
+                temperature_2m: temps.map { Optional($0) },
+                weather_code: codes.map { Optional($0) },
                 precipitation_probability: nil
             ),
             daily: daily,
@@ -720,9 +723,12 @@ final class OpenMeteoMapperTests: XCTestCase {
                            uv: [Double?]? = nil) -> OpenMeteoResponse.Daily {
         OpenMeteoResponse.Daily(
             time: times,
-            temperature_2m_max: maxTemps,
-            temperature_2m_min: minTemps,
-            weather_code: codes,
+            // v1.6：同 makeResponse，显式元素可选提升（不依赖隐式转换）。
+            // `codes` 本身是 `[Int]?`，故用 `codes?.map` 一次性完成
+            // `[Int]?` → `[Int?]?` 的转换。
+            temperature_2m_max: maxTemps.map { Optional($0) },
+            temperature_2m_min: minTemps.map { Optional($0) },
+            weather_code: codes?.map { Optional($0) },
             precipitation_probability_max: precip,
             sunrise: sunrise,
             sunset: sunset,
