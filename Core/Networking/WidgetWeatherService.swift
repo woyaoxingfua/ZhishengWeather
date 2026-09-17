@@ -9,7 +9,8 @@
 //    1. `qa-static-check.sh` 的 **SC-40** 明令 widget 目录零网络符号
 //       （`URLSession` / `dataTask` / `NSURLRequest` / `dataTaskPublisher`）。
 //       本服务**只被小组件时间线取数**路径使用（`WidgetDataResolver`）；
-//       **配置解析路径零网络**（AC-C8 / 真机判据 F-C-8，PRD-P1:404/424）——
+//       **配置解析路径零网络**（AC-C8 / 真机判据 F-C-8；「配置解析」范围澄清见
+//       PRD-zhisheng-ios-P1.md §4.7，及 AC-C17 的「经 Core service 间接联网同等违规」）——
 //       故网络类型引用不应散落在 Widget target；
 //    2. 把「一个短超时会话 + 一个 WeatherService」的构造收进 Core，网络配置
 //       只有**一处**真源（将来调超时只改这里），Widget 侧只引用 `WeatherService`
