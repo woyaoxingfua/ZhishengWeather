@@ -107,15 +107,13 @@ final class UmbrellaReminderEngineTests: XCTestCase {
     // MARK: - 不触发：超出前瞻窗口
 
     func testDoesNotFireWhenOnsetBeyondLookAhead() {
-        // 起始点在 now + 2h15min（超出 2h 窗）→ 不触发。
-        let lateOnset = now.addingTimeInterval(2 * 60 * 60 + 15 * 60)
-        let list = points([0, 0, 0, 0, 0.4], from: now)
-        // 直接以 lateOnset 起始构造序列（防御 mapper 未来放宽截窗的场景）。
-        let shifted = list.map { point in
-            MinutelyPrecipitationPoint(time: point.time.addingTimeInterval(15 * 60),
+        // 起始点在 now + 7300s（> 2h 窗）→ 不触发（防御 mapper 未来放宽截窗）。
+        // 9 点序列前 8 窗全干、第 8 窗湿，再整体平移 +100s：首湿窗起始 = 7200+100 = 7300s。
+        let values = [Double](repeating: 0, count: 8) + [0.4]
+        let shifted = points(values, from: now).map { point in
+            MinutelyPrecipitationPoint(time: point.time.addingTimeInterval(100),
                                        precipitation: point.precipitation)
         }
-        _ = lateOnset
         let decision = UmbrellaReminderEngine.decide(minutely15: shifted,
                                                      now: now,
                                                      timeText: fixedTimeText)
