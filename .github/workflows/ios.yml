@@ -65,12 +65,35 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
+          # 输出同时落盘（pipefail 保证 xcodebuild 的失败码能传出），供下一步抽取注解。
           xcodebuild test \
             -project ZhishengWeather.xcodeproj \
             -scheme ZhishengWeather \
             -destination "platform=iOS Simulator,OS=latest,name=${{ steps.sim.outputs.device }}" \
             -resultBundlePath build/TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild-test.log
+
+      # 为什么需要这一步：作业日志（/actions/jobs/{id}/logs）与产物下载都要求
+      # 管理员权限，Windows 侧免鉴权拿不到 → CI 一红就只能靠读代码盲猜。
+      # `::error::` 注解会写进 check run 的 output.annotations，而 check-runs
+      # 接口对公开仓库免鉴权可读 —— 于是「红在哪一行」变成可观测事实。
+      - name: Report test failures as annotations
+        if: failure()
+        run: |
+          set -euo pipefail
+          LOG=build/xcodebuild-test.log
+          if [ ! -f "$LOG" ]; then
+            echo "::warning::未找到 xcodebuild 日志，无法抽取失败原因"
+            exit 0
+          fi
+          # 抽取编译错误与失败断言；每行一条注解（% 需转义为 %25）。
+          grep -aE "error:|XCTAssert[A-Za-z]* failed|failed - |TEST FAILED" "$LOG" \
+            | sed -e 's/\r$//' \
+            | head -40 \
+            | while IFS= read -r line; do
+                escaped=$(printf '%s' "$line" | sed 's/%/%25/g')
+                echo "::error::$escaped"
+              done
 
       - name: Archive (unsigned)
         run: |
