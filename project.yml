@@ -82,6 +82,7 @@ targets:
     sources:
       - path: ZhishengWeather
       - path: Core
+      - path: Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zhisheng.weather
@@ -89,7 +90,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Config/ZhishengWeather.entitlements
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIcon-Jade,AppIcon-Rain
     dependencies:
       - target: ZhishengWeatherWidget
         embed: true

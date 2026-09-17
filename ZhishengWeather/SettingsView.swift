@@ -37,6 +37,12 @@ struct SettingsView: View {
     /// 雨伞提醒调度器（开关读写单一真源；App 本地 UserDefaults，不进共享容器）。
     let reminderScheduler: UmbrellaReminderScheduler
 
+    /// 应用图标切换器（AppIconChoice 纯映射 + setAlternateIconName 副作用出口；
+    /// App 本地 UserDefaults，不进共享容器）。⚠️ default 参数在调用方的
+    /// 非隔离上下文求值，同 UmbrellaReminderScheduler 陷阱——default 给 nil，
+    /// 真正创建移到 init 体内。
+    private let iconSwitcher: AppIconSwitcher
+
     @State private var appearanceSetting = AppearancePreference.appearance()
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
     @State private var windSpeedUnit = UnitPreference.windSpeedUnit()
@@ -46,6 +52,11 @@ struct SettingsView: View {
     /// 数据链路健康快照（诊断用；进入页面时从记录器读取一次，进程内内存）。
     @State private var linkHealth: [LinkHealth] = []
 
+    /// 应用图标档位（本页状态源；初值 = 设备事实 + 本地偏好归一化）。
+    @State private var iconChoice: IconChoice = .phosphor
+    /// 换图标失败短句（非空时在图标区下方弱提示展示；成功后清空）。
+    @State private var iconErrorMessage: String?
+
     /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），而
     /// UmbrellaReminderScheduler 是 @MainActor 隔离 init（CI 实测挂编译，
     /// 与 LocationProvider 同款陷阱）。故 default 用 nil，真正创建移到本
@@ -54,15 +65,19 @@ struct SettingsView: View {
          timeZone: TimeZone = .current,
          freshnessWindow: TimeInterval,
          appearance: AppearanceStore,
-         reminderScheduler: UmbrellaReminderScheduler? = nil) {
+         reminderScheduler: UmbrellaReminderScheduler? = nil,
+         iconSwitcher: AppIconSwitcher? = nil) {
         self.lastUpdated = lastUpdated
         self.timeZone = timeZone
         self.freshnessWindow = freshnessWindow
         self.appearance = appearance
         let scheduler = reminderScheduler ?? UmbrellaReminderScheduler()
         self.reminderScheduler = scheduler
+        let switcher = iconSwitcher ?? AppIconSwitcher()
+        self.iconSwitcher = switcher
         // @State 初值必须在 init 内赋（不能在属性默认值处触碰非隔离参数）。
         _umbrellaReminderEnabled = State(initialValue: scheduler.isEnabled)
+        _iconChoice = State(initialValue: switcher.currentChoice())
     }
 
     var body: some View {
@@ -77,6 +92,27 @@ struct SettingsView: View {
                 }
                 .onChange(of: appearanceSetting) { _, newValue in
                     appearance.set(newValue)
+                }
+            }
+
+            // 应用图标三档：磷光（默认）/ 清冷翡翠 / 终端雨字。
+            // 走 iOS 10.3+ 备用图标 API（setAlternateIconName）；
+            // 系统切换成功会弹**自己的**确认框，本页不再补提示。
+            // 文案单一真源：IconChoice.displayName（Core）。
+            Section("应用图标") {
+                Picker("应用图标", selection: $iconChoice) {
+                    ForEach(IconChoice.allCases, id: \.self) { choice in
+                        Text(choice.isDefault ? "\(choice.displayName)（默认）" : choice.displayName)
+                            .tag(choice)
+                    }
+                }
+                .onChange(of: iconChoice) { _, newValue in
+                    switchIcon(to: newValue)
+                }
+                if let iconErrorMessage {
+                    Text(iconErrorMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
                 }
             }
 
@@ -157,6 +193,24 @@ struct SettingsView: View {
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadLinkHealth() }
+    }
+
+    // MARK: - 应用图标切换
+
+    /// 切换应用图标（副作用出口走注入的 AppIconSwitcher）。
+    ///
+    /// 失败：恢复 Picker 到设备当前档位并展示短句（错误不静默）；
+    /// 成功：系统自带确认弹窗，本侧不补提示。
+    private func switchIcon(to choice: IconChoice) {
+        Task { @MainActor in
+            if let errorMessage = await iconSwitcher.apply(choice) {
+                iconErrorMessage = errorMessage
+                // 设备事实优先：切换失败时回滚 UI 状态（偏好未被写入）。
+                iconChoice = iconSwitcher.currentChoice()
+            } else {
+                iconErrorMessage = nil
+            }
+        }
     }
 
     // MARK: - 数据状态（D-5 诊断面板）
