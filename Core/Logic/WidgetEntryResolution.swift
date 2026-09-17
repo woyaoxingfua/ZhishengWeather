@@ -50,9 +50,12 @@ enum WidgetEmptyReason: Equatable, Sendable {
     /// 无城市（容器空 + 哨兵实例 / 配置值无法解析）→ 引导用户配置城市。
     /// **绝不含**「注入 `CityDirectory.initial()` 的北京」这条路径（幽灵北京修复点）。
     case noCity
-    /// 快照路径（不联网）且容器无归属缓存 → 待主 App 取数后自动显示。
+    /// 快照路径（不联网）且容器无归属缓存 → 城市**已**解析、只是这一路不联网 →
+    /// 随后 timeline 的 L1 会自取（**自愈**），故文案**不索取**任何用户动作。
     case noCachedData
-    /// 共享容器不可用（快照路径）→ 提示去主 App 打开一次天气。
+    /// 共享容器不可用（快照路径）→ 同 `noCachedData`：城市已解析、L1 仍能自力取数。
+    /// 未签名侧载上容器**永不**可用，故**禁止**任何「去开主 App」类提示
+    /// （判据见 `WidgetCopy` 文件头的「提示行硬规则」）。
     case sharedContainerDown
     /// L1 取数失败（传输层：超时 / 无网络 / 非 2xx / 解码）→ 提示检查网络后重试。
     case fetchFailed
