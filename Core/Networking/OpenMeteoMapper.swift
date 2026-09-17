@@ -22,6 +22,16 @@
 //  v1.4 修订（B1-2 短时降水）：新增 `minutelyWindow`（自当前 15 分钟窗起截 ≤ 8 条），
 //  无有效点 → snapshot.minutely15 = nil（整卡隐藏）。实况/逐时/逐日映射逻辑零改动。
 //
+//  v1.6 修订（null 容忍 · 真机崩溃修复）：DTO 的 hourly.temperature_2m /
+//    weather_code 与 daily.temperature_2m_max / _min / weather_code 改为
+//    **元素可选**后，本层按"缺值就跳过、绝不编造"消费：
+//    - 逐小时循环：温度或现象码任一为 null → 该下标不构造 HourlyPoint；
+//    - dailyHigh/dailyLow：今日行元素为 null → 保留既有回退链（hourly 窗口 → current）；
+//    - 逐日行 / 昨日行：weather_code / tempMax / tempMin 任一为 null →
+//      逐日整行丢弃、昨日返回 nil。
+//    背景（真机，北京，forecast_days=16 + past_days=1）：hourly 下标 399..407
+//    与 daily 下标 16 为 null —— 这是 Open-Meteo 允许的截断日空值，不是接口变更。
+//
 //  约束（跨层纪律 §7.3 / 团队硬约束 ⑤）：
 //  - 禁止内部调用 `Date()`；`now` 必须由参数传入，保证可测。
 //    （注：ARCH §3.1 的签名未含 `now`，与 §7.3「now 注入」冲突；
@@ -54,16 +64,25 @@ enum OpenMeteoMapper {
         let hourly = response.hourly
 
         // ── 1. 对齐三个并行数组的最小长度，逐点构造 ──────────────────────
+        // 长度对齐规则不变（v1.0 起）；v1.6 新增"行内 null 跳过"：
+        // 温度或现象码任一为 null → 该下标**整点跳过**，不构造 HourlyPoint。
+        // 理由：领域模型 HourlyPoint.temperature / weatherCode 是非可选
+        // Double / Int，补 0 / 复用上一小时都会把编造值画进逐时折线图；
+        // 而"少几个小时"只是尾部截断，用户看不出、也不会被误导。
         let alignedCount = min(hourly.time.count,
                                min(hourly.temperature_2m.count, hourly.weather_code.count))
         var points: [HourlyPoint] = []
         if alignedCount > 0 {
             points.reserveCapacity(alignedCount)
             for index in 0..<alignedCount {
+                guard let temperature = hourly.temperature_2m[index],
+                      let weatherCode = hourly.weather_code[index] else {
+                    continue
+                }
                 let point = HourlyPoint(
                     time: Date(timeIntervalSince1970: TimeInterval(hourly.time[index])),
-                    temperature: hourly.temperature_2m[index],
-                    weatherCode: hourly.weather_code[index]
+                    temperature: temperature,
+                    weatherCode: weatherCode
                 )
                 points.append(point)
             }
@@ -87,17 +106,22 @@ enum OpenMeteoMapper {
         // 再配合每日数组各自的前置 guard 实现逐字段独立回退。
         let todayIndex = self.todayIndex(in: response.daily, utcOffsetSeconds: response.utc_offset_seconds, now: now)
 
+        // v1.6：DTO 元素为 `[Double?]` —— 今日行元素为 null（截断日）时
+        // **不写 dailyHigh / dailyLow**，即保留上面的回退链（hourly 窗口 → current）。
+        // 越界 guard 原样保留。
         var dailyHigh = fallbackHigh
         var dailyLow = fallbackLow
         if let dailyBlock = response.daily,
            let index = todayIndex,
-           index < dailyBlock.temperature_2m_max.count {
-            dailyHigh = dailyBlock.temperature_2m_max[index]
+           index < dailyBlock.temperature_2m_max.count,
+           let value = dailyBlock.temperature_2m_max[index] {
+            dailyHigh = value
         }
         if let dailyBlock = response.daily,
            let index = todayIndex,
-           index < dailyBlock.temperature_2m_min.count {
-            dailyLow = dailyBlock.temperature_2m_min[index]
+           index < dailyBlock.temperature_2m_min.count,
+           let value = dailyBlock.temperature_2m_min[index] {
+            dailyLow = value
         }
 
         // ── 4. A1-1：气压 msl→surface 一次回退定值（ARCH-A1 §1.1）────────
@@ -237,6 +261,7 @@ enum OpenMeteoMapper {
     ///   - utcOffsetSeconds: 同响应根级时区偏移（秒）。
     ///   - now: 当前时刻（注入，纪律同 map）。
     /// - Returns: 今日下标；daily 缺失或 time 数组为空时 nil。
+
     /// 可选 Double 数组的安全下标取值（A2-2）：数组为 nil / 越界 / 元素 null → nil。
     /// 可选数组不参与 alignedCount 对齐（服务端未返回时不拖短其他数组），
     /// 逐点取值时以下标判断兜底（ARCH-A2 §1.3）。
@@ -274,6 +299,10 @@ enum OpenMeteoMapper {
     ///   长度不齐按四者的最短长度截断（AC-A6）；
     ///   `weather_code` 整键缺失按**空数组**参与对齐 → 逐日为空 → 区块隐藏，
     ///   不显示脏数据；
+    /// - **行级 null 跳过（v1.6）**：对齐区间内某行的 weather_code / tempMax /
+    ///   tempMin **任一为 null**（真机：forecast_days=16 的截断日，daily 下标 16
+    ///   三个字段全 null）→ 该行**整体丢弃**，不补 0、不冒充"晴 / 0°"；
+    ///   丢弃是逐行判定的，不会截断其后的有效行；
     /// - `precipitation_probability_max`：整体缺失 → 每行 nil；
     ///   元素 null / 越界 → 该行 nil（AC-A5：绝不把「未知」当 0）；
     /// - `sunrise`/`sunset`：整键缺失 → 全行 nil；元素 null / 坏串 → 该行 nil
@@ -307,6 +336,14 @@ enum OpenMeteoMapper {
         var forecasts: [DailyForecast] = []
         forecasts.reserveCapacity(min(alignedCount - clampedStart, maxDailyCount))
         for index in clampedStart..<alignedCount {
+            // v1.6 行级 null 跳过：截断日（真机 daily 下标 16）的 weather_code /
+            // tempMax / tempMin 为 null —— 任一为 null 就整行丢弃（AC-A5 纪律）。
+            guard let weatherCode = weatherCodes[index],
+                  let tempMax = daily.temperature_2m_max[index],
+                  let tempMin = daily.temperature_2m_min[index] else {
+                continue
+            }
+
             // precip 整键缺失 → nil；元素越界 → nil；元素 null → nil（[Int?] 原生表达）。
             var precipitation: Int?
             if let precipitations, index < precipitations.count {
@@ -317,9 +354,9 @@ enum OpenMeteoMapper {
 
             forecasts.append(DailyForecast(
                 date: Date(timeIntervalSince1970: TimeInterval(daily.time[index])),
-                weatherCode: weatherCodes[index],
-                tempMax: daily.temperature_2m_max[index],
-                tempMin: daily.temperature_2m_min[index],
+                weatherCode: weatherCode,
+                tempMax: tempMax,
+                tempMin: tempMin,
                 precipitationProbability: precipitation,
                 sunrise: decodedSunTime(from: daily.sunrise, at: index, utcOffsetSeconds: utcOffsetSeconds),
                 sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds),
@@ -332,11 +369,14 @@ enum OpenMeteoMapper {
     /// 提取昨日行（A1-5）：按今日索引 - 1 的下标，走与 `dailyForecasts`
     /// 完全相同的对齐与可选字段规则；任何缺失 → nil（UI 整行隐藏，AC-A1-16）。
     ///
+    /// v1.6：weather_code / tempMax / tempMin **任一为 null** → 同样返回 nil
+    /// （与 `dailyForecasts` 的行级跳过规则一致，不冒充）。
+    ///
     /// - Parameters:
     ///   - daily: DTO 逐日块（调用方已保证非 nil）。
     ///   - utcOffsetSeconds: 同响应根级时区偏移（秒）。
     ///   - index: 昨日下标（= 今日索引 - 1，调用方保证 ≥ 0）。
-    /// - Returns: 昨日领域点；对齐后越界（如 weather_code 缺键对齐截断）→ nil。
+    /// - Returns: 昨日领域点；对齐后越界、或该行任一必需元素为 null → nil。
     private static func yesterdayForecast(from daily: OpenMeteoResponse.Daily,
                                           utcOffsetSeconds: Int,
                                           index: Int) -> DailyForecast? {
@@ -346,6 +386,13 @@ enum OpenMeteoMapper {
                                    min(daily.temperature_2m_min.count, weatherCodes.count)))
         guard index < alignedCount else { return nil }
 
+        // v1.6：任一必需元素为 null → 整行不给（与 dailyForecasts 同判据）。
+        guard let weatherCode = weatherCodes[index],
+              let tempMax = daily.temperature_2m_max[index],
+              let tempMin = daily.temperature_2m_min[index] else {
+            return nil
+        }
+
         var precipitation: Int?
         if let precipitations = daily.precipitation_probability_max, index < precipitations.count {
             precipitation = precipitations[index]
@@ -353,9 +400,9 @@ enum OpenMeteoMapper {
 
         return DailyForecast(
             date: Date(timeIntervalSince1970: TimeInterval(daily.time[index])),
-            weatherCode: weatherCodes[index],
-            tempMax: daily.temperature_2m_max[index],
-            tempMin: daily.temperature_2m_min[index],
+            weatherCode: weatherCode,
+            tempMax: tempMax,
+            tempMin: tempMin,
             precipitationProbability: precipitation,
             sunrise: decodedSunTime(from: daily.sunrise, at: index, utcOffsetSeconds: utcOffsetSeconds),
             sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds),

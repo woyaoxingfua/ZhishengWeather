@@ -177,9 +177,11 @@ final class OpenMeteoDecodingTests: XCTestCase {
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
         let daily = try XCTUnwrap(dto.daily)
         XCTAssertEqual(daily.time.count, 3)
-        XCTAssertEqual(daily.temperature_2m_max, [26.1, 24.0, 25.5])
-        XCTAssertEqual(daily.temperature_2m_min, [15.2, 14.0, 13.5])
-        XCTAssertEqual(daily.weather_code, [0, 61, 3])
+        // v1.6：DTO 数组元素已改为可选，显式声明字面量类型以锁死"元素值不变"。
+        XCTAssertEqual(daily.temperature_2m_max, [26.1, 24.0, 25.5] as [Double?])
+        XCTAssertEqual(daily.temperature_2m_min, [15.2, 14.0, 13.5] as [Double?])
+        let weatherCodes = try XCTUnwrap(daily.weather_code)
+        XCTAssertEqual(weatherCodes, [0, 61, 3] as [Int?])
 
         let precip = try XCTUnwrap(daily.precipitation_probability_max)
         XCTAssertEqual(precip[0], 10)
@@ -209,7 +211,8 @@ final class OpenMeteoDecodingTests: XCTestCase {
         let daily = try XCTUnwrap(dto.daily)
         XCTAssertNil(daily.precipitation_probability_max,
                      "precip 整键缺失必须解码为 nil")
-        XCTAssertEqual(daily.weather_code, [0])
+        let weatherCodes = try XCTUnwrap(daily.weather_code)
+        XCTAssertEqual(weatherCodes, [0] as [Int?])
     }
 
     /// daily 无 weather_code 键 → 键级可选，整个响应解码成功（偏差备案 D-1 的目标）。
