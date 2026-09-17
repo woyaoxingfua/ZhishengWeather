@@ -14,6 +14,7 @@
 //  直接调 `AppearancePreference` 的静态方法——那会退化成「读硬编码、写注入」。
 //
 
+import Foundation
 import Observation
 
 /// 外观档位的可观察存储（写入的单一真源）。
