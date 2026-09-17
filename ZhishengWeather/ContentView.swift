@@ -12,6 +12,7 @@
 //  A1-7/A1-8：深链 + 快捷方式统一路由出口（AppRouter，挂在 body 层全分支生效）。
 //
 
+import CoreSpotlight
 import SwiftUI
 
 /// @MainActor：同 CityListView——辅助成员（content 等）需主 actor 隔离
@@ -28,7 +29,14 @@ struct ContentView: View {
     @State private var navigation: NavigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack(path: $navigation) {
+        // Handoff / Siri 建议：先把「当前城市」取成**局部值**再交给下面的
+        // userActivity 闭包 —— 该闭包是 @escaping 且非主 actor 隔离，若直接
+        // 捕获 `self` / `viewModel`（@MainActor）会踩本仓已踩过的
+        // 「非隔离上下文求值」陷阱（SettingsView default 参数同款）。
+        // `City` 是 Sendable 值类型，捕获它是安全的。
+        let activityCity: City? = viewModel.directory.selectedCity
+
+        return NavigationStack(path: $navigation) {
             ZStack {
                 Theme.background.ignoresSafeArea()
                 content
@@ -39,6 +47,27 @@ struct ContentView: View {
             // 挂在 body 层：state 任何分支（loading/empty/failed）都能接住深链。
             .onOpenURL { url in
                 AppRouter.shared.handle(url: url, viewModel: viewModel)
+            }
+            // 系统搜索结果点击（CoreSpotlight）与 Handoff（本 App 活动类型）
+            // 两个入口共用 AppRouter 的 NSUserActivity 分发。
+            .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                AppRouter.shared.handle(activity: activity, viewModel: viewModel)
+            }
+            .onContinueUserActivity(WeatherSpotlight.activityType) { activity in
+                AppRouter.shared.handle(activity: activity, viewModel: viewModel)
+            }
+            // 把当前浏览的城市声明为 NSUserActivity：支持 Handoff 跨设备接续、
+            // Siri 建议与系统内搜索建议。
+            // 写法说明：只传活动类型 + 一个更新闭包（不传 isEligibleFor* 参数），
+            // 三个开关在闭包内设置 —— 该修饰符在不同 SDK 上的重载参数表有差异，
+            // 「类型 + 尾随闭包」是各版本都成立的最小形态。
+            .userActivity(WeatherSpotlight.activityType) { activity in
+                guard let city = activityCity else { return }
+                activity.title = WeatherSpotlight.activityTitle(cityName: city.name)
+                activity.userInfo = WeatherSpotlight.userInfo(cityID: city.id)
+                activity.isEligibleForHandoff = true
+                activity.isEligibleForSearch = true
+                activity.isEligibleForPrediction = true
             }
             // A1-8：快捷方式路由观察（AppDelegate/SceneDelegate 转发 → AppRouter 发布 → 这里消费）。
             // ⚠️ @Observable 宏不合成 $投影（那是 ObservableObject/@Published 的机制），
@@ -53,6 +82,15 @@ struct ContentView: View {
                 if let pending = AppRouter.shared.pendingRoute {
                     handleRouterRoute(pending)
                 }
+            }
+            // 系统搜索索引：冷启动先写一次；其后城市集合 / 各城市已知温度
+            // 任一变化再重写一次（见 `spotlightSignature`）。
+            // 索引是**增强能力**：失败只打印，绝不触碰取数状态、绝不弹窗。
+            .task {
+                await indexCitiesForSpotlight()
+            }
+            .onChange(of: spotlightSignature) { _, _ in
+                Task { await indexCitiesForSpotlight() }
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
             .navigationDestination(for: CityRoute.self) { route in
@@ -70,6 +108,35 @@ struct ContentView: View {
                                  reminderScheduler: viewModel.reminderSchedulerForSettings)
                 }
             }
+        }
+    }
+
+    // MARK: - 系统搜索索引（Spotlight）
+
+    /// 索引重写触发签名：城市集合（id 列表）+ 各城市已知温度。
+    ///
+    /// 为什么用「签名」而不是挂在每个动作上：索引写入需要**城市列表变化后**
+    /// 与**取数成功后**两个时机都触发，逐个动作挂点会散落到 VM 的
+    /// select / addAndSelect / remove / refresh 四处（且会改到既有数据流）。
+    /// 这里只观察「可索引内容的快照签名」，两个时机天然都被覆盖，
+    /// VM 侧零改动。
+    private var spotlightSignature: String {
+        let cityIDs: String = viewModel.directory.cities.map { $0.id }.joined(separator: ",")
+        let temperatures: String = viewModel.snapshotsByCity
+            .map { "\($0.key)=\(Int($0.value.temperature.rounded()))" }
+            .sorted()
+            .joined(separator: ",")
+        return "\(cityIDs)#\(temperatures)"
+    }
+
+    /// 把当前城市列表写入系统搜索索引。**失败只打印**：索引不是数据源，
+    /// 写不进去时天气功能必须完好（绝不弹窗、绝不改 `viewModel.state`）。
+    private func indexCitiesForSpotlight() async {
+        do {
+            try await SpotlightIndexer.shared.index(cities: viewModel.directory.cities,
+                                                    snapshotByCityID: viewModel.snapshotsByCity)
+        } catch {
+            print("[ContentView] 系统搜索索引写入失败（不影响天气取数）：\(error)")
         }
     }
 

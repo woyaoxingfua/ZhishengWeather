@@ -41,6 +41,13 @@
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于获取你所在位置的实时天气；拒绝授权时将使用默认城市（北京）。</string>
+	<!-- 系统级集成：声明本 App 支持的 NSUserActivity 类型（Handoff 跨设备接续 /
+	     Siri 建议）。字符串必须与 Core/Logic/WeatherSpotlight.swift 的
+	     `WeatherSpotlight.activityType` 逐字一致，否则系统不会把活动派发给本 App。 -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.zhisheng.weather.viewCity</string>
+	</array>
 	<!-- A1-8：Home Screen 静态快捷方式三项（刷新 / 搜索城市 / 设置）。
 	     type 逐字对应 AppRouter 的 shortcutType* 常量。 -->
 	<key>UIApplicationShortcutItems</key>

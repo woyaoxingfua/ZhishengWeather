@@ -4,8 +4,11 @@
 //
 //  统一路由出口（A1-7 深链 + A1-8 快捷方式共用一套，ARCH-A1 §1.8）：
 //    - 深链：zhisheng://refresh（Widget 刷新按钮派发）→ 强刷；
+//            zhisheng://city/<id>（系统搜索结果 / 深链）→ 切换该城市；
 //    - 快捷方式：AppDelegate / SceneDelegate 的快捷方式回调转发 →
-//      刷新 / 搜索城市 / 设置（暂路由城市列表页根，偏差备案 D-A3）。
+//      刷新 / 搜索城市 / 设置（暂路由城市列表页根，偏差备案 D-A3）；
+//    - 系统活动：Spotlight 搜索结果点击（CSSearchableItemActionType）与
+//      Handoff / Siri 建议（com.zhisheng.weather.viewCity）→ 切换该城市。
 //
 //  机制：
 //  - `@Observable @MainActor` 单例：快捷方式入口把目的地连同一枚单调
@@ -20,6 +23,7 @@
 //    深链经 URL host 字符串映射 —— 两入口共用一套 Route 枚举。
 //
 
+import CoreSpotlight
 import Foundation
 import Observation
 import SwiftUI
@@ -78,13 +82,58 @@ final class AppRouter {
     // MARK: - 入口①：深链（Widget 刷新按钮）
 
     /// 处理深链 URL（ContentView `.onOpenURL` 汇入）。
+    ///
+    /// 判定逻辑已下沉到 Core 纯函数 `WeatherDeepLink.parse`（可单测、两 target
+    /// 共用），本方法只做「解析结果 → 副作用」分发：
+    ///   - `.refresh` → 强刷（**既有行为逐字不变**：scheme/host 大小写不敏感、
+    ///     不匹配即静默忽略）；
+    ///   - `.city(id:)` → 切换当前城市 + 取数（走 VM 既有的 `select(_:)`，
+    ///     不另起一套切城逻辑）；
+    ///   - `.unknown` → 静默忽略。
+    ///
     /// - Parameters:
     ///   - url: 打开的 URL。
     ///   - viewModel: 执行动作的视图模型。
     func handle(url: URL, viewModel: WeatherViewModel) {
-        guard url.scheme?.lowercased() == "zhisheng" else { return }
-        guard url.host?.lowercased() == "refresh" else { return }
-        Task { await viewModel.refresh() }
+        switch WeatherDeepLink.parse(url) {
+        case .refresh:
+            Task { await viewModel.refresh() }
+        case .city(let id):
+            // 城市不在当前目录时 `select` 内部 no-op（目录层判 false 直接返回），
+            // 不会误切到别的城市 —— 跨设备 Handoff 携带陌生 id 时的安全降级。
+            Task { await viewModel.select(id) }
+        case .unknown:
+            return
+        }
+    }
+
+    // MARK: - 入口①b：系统搜索结果 / Handoff（NSUserActivity）
+
+    /// 处理系统派发回来的 NSUserActivity（ContentView `.onContinueUserActivity` 汇入）。
+    ///
+    /// 两种来源共用一套「取出城市 id → 切换城市」的落点：
+    ///   - **Spotlight 搜索结果**：activityType 为 `CSSearchableItemActionType`，
+    ///     城市 id 藏在 `userInfo[CSSearchableItemActivityIdentifier]`（条目唯一标识）
+    ///     里 —— 少了这一路，用户在系统搜索框点中本 App 的结果会「没反应」；
+    ///   - **Handoff / Siri 建议**：activityType 为本 App 的
+    ///     `WeatherSpotlight.activityType`，城市 id 在本 App 自己的 userInfo 里。
+    ///
+    /// - Parameters:
+    ///   - activity: 系统回传的活动对象。
+    ///   - viewModel: 执行动作的视图模型。
+    func handle(activity: NSUserActivity, viewModel: WeatherViewModel) {
+        if activity.activityType == CSSearchableItemActionType {
+            guard let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+                  let cityID = WeatherSpotlight.cityID(fromUniqueIdentifier: identifier) else {
+                return
+            }
+            Task { await viewModel.select(cityID) }
+            return
+        }
+
+        guard activity.activityType == WeatherSpotlight.activityType else { return }
+        guard let cityID = WeatherSpotlight.cityID(fromUserInfo: activity.userInfo) else { return }
+        Task { await viewModel.select(cityID) }
     }
 
     // MARK: - 入口②：快捷方式（AppDelegate 转发）
