@@ -262,9 +262,20 @@ fi
 #        共享了「联网必须出现 URLSession 字面量」这个错误假设）。
 #        补强分两段：
 #          SC-40a：整个 widget 目录不得出现裸网络符号（裸 session 只能活在 Core）。
-#          SC-40b：**配置解析路径文件**（AppEntity/EntityQuery/AppIntent 的实现处）
-#                  额外禁止引用任何联网 service 类型 —— 因为该文件属于 AC-C8
-#                  管辖的「配置解析」范围，而 timeline 取数不在此列（那是允许的）。
+#          SC-40b：**配置解析路径**额外禁止引用任何联网 service 类型。
+#
+#        ⚠️ 2026-09-17 二次修正（把 SC-40b 从「文件名锚定」改为「性质锚定」）：
+#        SC-40b 初版只盯 `WidgetCityIntent.swift` 这**一个文件名** —— 这正是 SC-40
+#        原版翻车的同一种模式：**防线锚在具名对象上，改名 / 拆分 / 搬迁就静默失效**
+#        （守卫因为找不到靶子而通过）。故改为按**性质**锚定：
+#          「配置解析路径」= widget 目录中**除 timeline provider 之外的每一个 .swift**。
+#        逐个扫描，禁止出现任何联网 service 类型。
+#
+#        允许清单（**唯一**）：`WeatherProvider.swift`（timeline provider）。
+#          只有它被允许联网，且**只能经 Core 的 `WidgetWeatherService`** 取数。
+#          理由：AC-C8 明文只管「配置解析」；timeline 取数不在此列（那是允许的），
+#          故不能对整目录一刀切 —— 但**除它以外**任何 widget 文件都不许联网，
+#          不管它叫什么名字。
 if [ -d "$WIDGET_DIR" ]; then
     hit=$(grep -rnE '\bURLSession\b|\bdataTask\b|\bNSURLRequest\b|\bdataTaskPublisher\b' "$WIDGET_DIR" 2>/dev/null | grep -vE ':[0-9]+:\s*(//|\*|///)' || true)
     if [ -z "$hit" ]; then
@@ -276,22 +287,43 @@ else
     bad SC-40a "无法检查 widget 网络符号：目录缺失"
 fi
 
-# SC-40b 配置解析文件禁引用联网 service（AC-C8「禁止在配置解析里发起网络请求」）
-CFG_INTENT="$WIDGET_DIR/WidgetCityIntent.swift"
-if [ -f "$CFG_INTENT" ]; then
-    # 联网 service 类型清单：凡新增网络出口都应在此登记（Core/Networking 下的 service）。
+# SC-40b 配置解析路径禁引用联网 service（AC-C8「禁止在配置解析里发起网络请求」）
+#        锚定在**性质**（除 timeline provider 外的一切 widget .swift），不锚在文件名。
+#        联网 service 类型清单：凡新增网络出口都应在此登记（Core/Networking 下的 service）。
+TIMELINE_PROVIDER="WeatherProvider.swift"
+NET_SERVICE_RE='\bGeocodingService\b|\bWeatherService\b|\bWidgetWeatherService\b|\bEnsembleService\b|\bArchiveService\b|\bAirQualityService\b|\bClimateProfileService\b'
+if [ -d "$WIDGET_DIR" ]; then
+    # 目标文件被改名/搬迁时**不得静默通过**：允许清单指向的 timeline provider 缺席
+    # 时报 WARN 要求复核（否则 SC-40b 的排除范围可能失真）。
+    if [ ! -f "$WIDGET_DIR/$TIMELINE_PROVIDER" ]; then
+        warn SC-40b "允许清单指向的 timeline provider（$TIMELINE_PROVIDER）不存在（被改名/搬迁？）—— 请复核排除范围，否则 SC-40b 可能扫错文件"
+    fi
+    hitb=""
+    hitb_detail=""
+    scanned=0
+    # 遍历 widget 目录下每个 .swift，跳过 timeline provider。
     # ⚠️ 过滤注释必须用 `^[0-9]+:`（**不是** `:[0-9]+:`）：对**单个文件**做 grep -n
     #    时输出是「行号:内容」，不带文件名，故 `:[0-9]+:` 永不匹配、过滤形同虚设
     #    —— 这会让注释里的名字也被判成违规（本项初版就踩了这个坑，实测修正）。
-    hitb=$(grep -nE '\bGeocodingService\b|\bWeatherService\b|\bWidgetWeatherService\b|\bEnsembleService\b|\bArchiveService\b|\bAirQualityService\b|\bClimateProfileService\b' "$CFG_INTENT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*(//|\*|///)' || true)
-    if [ -z "$hitb" ]; then
-        ok SC-40b "配置解析文件零联网 service 引用（AC-C8：配置解析不得发起网络请求）"
+    for f in "$WIDGET_DIR"/*.swift; do
+        [ -f "$f" ] || continue
+        [ "${f##*/}" = "$TIMELINE_PROVIDER" ] && continue
+        scanned=$((scanned+1))
+        h=$(grep -nE "$NET_SERVICE_RE" "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*(//|\*|///)' || true)
+        if [ -n "$h" ]; then
+            hitb="yes"
+            [ -z "$hitb_detail" ] && hitb_detail="${f}:$(echo "$h" | sed -n '1p')"
+        fi
+    done
+    if [ "$scanned" -eq 0 ]; then
+        warn SC-40b "widget 目录下未找到可扫描的 .swift（除 $TIMELINE_PROVIDER 外）—— SC-40b 可能扫空，请检查排除范围"
+    elif [ -z "$hitb" ]; then
+        ok SC-40b "配置解析路径零联网 service 引用（已扫 $scanned 个 .swift，排除 timeline provider；AC-C8）"
     else
-        bad SC-40b "配置解析文件引用了联网 service，违反 AC-C8（PRD-P1:404/424，P1 起为硬禁止）：$(echo "$hitb" | sed -n '1p') —— 该处应改为在内置城市 + 容器城市里做纯本地匹配。"
+        bad SC-40b "配置解析路径引用了联网 service，违反 AC-C8（PRD-P1:404/424，P1 起为硬禁止）：$hitb_detail —— 该处应改为在内置城市 + 容器城市里做纯本地匹配。"
     fi
 else
-    # 文件被改名/搬迁时不应静默失去这项防线：报 WARN 并要求重新指向。
-    warn SC-40b "配置解析文件 $CFG_INTENT 不存在（被改名或搬迁？）—— 请把 SC-40b 的检查目标重新指向承载 AppEntity/EntityQuery 的那个文件，否则该防线静默失效"
+    bad SC-40b "无法检查配置解析路径：widget 目录缺失"
 fi
 
 # SC-41 【F-C 防线③】kind 字符串逐字 = "ZhishengWeatherWidget"
