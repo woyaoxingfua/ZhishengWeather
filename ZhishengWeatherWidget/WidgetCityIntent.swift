@@ -5,17 +5,28 @@
 //  F-C 桌面小组件城市选择：Intent 三件套
 //  （WidgetCityEntity + WidgetCityQuery + WidgetCitySelectionIntent）。
 //
-//  ⚠️ 「禁联网」纪律**收窄**（原陈述「本文件所有方法只允许经 AppGroupStore 读本地
-//  共享容器；不含任何网络类型引用」**作废**，被
-//  docs/handover/ARCH-zhisheng-ios-widget-selfsufficiency.md §0 / §7.4 取代）：
-//    - `suggestedEntities()` / `entities(for:)` / `defaultResult()` → **纯本地**读
-//      （经 `AppGroupStore` 读共享容器；容器不可用 → 只剩哨兵 + 内置目录），
-//      且仍**不出现任何网络符号**（`qa-static-check.sh` SC-40 保持零命中）；
-//    - **仅** `entities(matching:)`（C2：用户在小部件配置界面输入城市名）
-//      允许联网，且复用**已存在**的 Core `GeocodingService`（免密钥、中文安全），
-//      **不新增端点、不新增凭据、不新增第二套映射**。
-//  旧纪律之所以作废：App Group 在未签名侧载产物上永久不可用 → 容器里可能一个
-//  真实城市都没有 → 用户**无法主动选择**任何城市 → C2 是唯一能看到任意城市的通道。
+//  ⚠️ 「禁联网」硬规则（**绝对规则，不设例外**）：本文件所有方法
+//  （`suggestedEntities()` / `entities(for:)` / `defaultResult()`）
+//  **只允许纯本地读**（经 `AppGroupStore` 读共享容器；容器不可用 → 只剩哨兵 +
+//  内置目录），**禁止任何网络类型引用**；`qa-static-check.sh` SC-40 保持零命中。
+//
+//  依据：AC-C8（docs/handover/PRD-zhisheng-ios-P1.md §4.4(a)）——
+//  「配置解析是纯本地读 + 纯函数映射，不允许任何网络请求」；对应真机判据 F-C-8
+//  （飞行模式 + 断 App Group 下，编辑小组件界面仍能打开、不卡死）。
+//
+//  【C2 撤回声明（team lead 裁定，2026-09-17）】本文件曾一度被
+//  docs/handover/ARCH-zhisheng-ios-widget-selfsufficiency.md 的 `废弃-3`
+//  **单方面收窄**为「仅 C2（配置界面的城市名搜索，即字符串查询）允许联网」。
+//  该收窄**已被否决并撤回**（注意：是**否决**，不是「收窄」）。撤回理由三条：
+//    ① 越权：收窄一条已批准、且挂真机判据的 AC，属 AC 拥有者（PM）的权限，
+//       架构师 / 实现者无权自行废止；
+//    ② 不可验：F-C-8 只能在真机验（本仓唯一编译门禁是 CI，验不了真机），
+//       带着不可验证的卡死风险去违一条明文禁令，不成立；
+//    ③ 非必要：C2 不是「选择器不为空」的必要条件 —— `suggestedEntities()`
+//       已是「哨兵 + 容器城市 + 内置目录（34 城）」，去掉 C2 照样选得到真实城市。
+//  另：URLSession 默认超时 60s，在小组件配置界面的执行预算下是**真实卡死风险**。
+//  替代方案（内置目录扩容至地级市 / 「当前位置」配置项）见上述 ARCH 文档
+//  「裁定记录」一节；本文件不再包含任何联网方法。
 //
 //  关键裁定：
 //  - R-C1：Intent 参数为**非可选** `WidgetCityEntity` + 哨兵实体默认值，
@@ -83,10 +94,13 @@ struct WidgetCityEntity: AppEntity, Identifiable, Codable, Sendable {
 
 /// 候选查询。
 ///
-/// 本地三条（`suggestedEntities` / `entities(for:)` / `defaultResult`）**纯本地读**；
-/// 仅字符串搜索 `entities(matching:)`（C2）联网。判定逻辑全部在 Core 纯函数
-/// （`WidgetCityCatalog` / `WidgetBuiltInCities`），本类型只做 1 行 `map`。
-struct WidgetCityQuery: EntityQuery, EntityStringQuery {
+/// 三条方法（`suggestedEntities` / `entities(for:)` / `defaultResult`）**全部纯本地读**，
+/// 不含任何网络类型引用（AC-C8：配置解析禁止发起网络请求）；判定逻辑全部在 Core
+/// 纯函数（`WidgetCityCatalog` / `WidgetBuiltInCities`），本类型只做 1 行 `map`。
+///
+/// ⚠️ 本类型**不**符合「配置界面的字符串搜索协议」（C2）—— 那会引入
+/// 配置路径联网，违反 AC-C8（详见文件头 C2 撤回声明）。
+struct WidgetCityQuery: EntityQuery {
 
     /// 配置 picker 候选 = **[哨兵] + 可见城市**（口径见下）；哨兵**恒为第一项**。
     ///
@@ -105,7 +119,7 @@ struct WidgetCityQuery: EntityQuery, EntityStringQuery {
 
     /// 系统恢复既有配置值时调用（配置界面的**唯一**回显路径）。
     ///
-    /// 必须与解析层同源接 C0/C1/C2，否则「用内置城市 / 坐标配置的实例」在编辑界面
+    /// 必须与解析层同源接 C0/C1（含规范坐标回填），否则「用内置城市 / 坐标配置的实例」在编辑界面
     /// 会被**错误回显成哨兵**（系统只按 id 查回实体）。
     /// 回显优先级：哨兵 → 容器城市 → 内置城市 → 规范坐标回填（名称为 id 串）
     /// → 哨兵（怪值兜底，与 `WidgetCityResolver.resolveOutcome` 的 `.needsConfiguration`
@@ -129,22 +143,6 @@ struct WidgetCityQuery: EntityQuery, EntityStringQuery {
             }
             return .followApp
         }
-    }
-
-    /// C2：按城市名搜索候选（配置界面输入时触发；**不进 timeline 路径**）。
-    ///
-    /// 复用 Core 既有 `GeocodingService`（Open-Meteo geocoding，免密钥、
-    /// `language=zh`）—— 零新增端点、零新增凭据、零新增映射。
-    /// 空白串直接短路为 `[]`：`GeocodingEndpoint.url` 对空白返回 nil → `badURL`，
-    /// 先判空可省一次无意义失败（且让搜索结果为空 ≠ 失败，AC-B19）。
-    /// - Parameter string: 用户输入的城市名片段。
-    /// - Returns: 候选城市实体；无命中 → 空数组。
-    /// - Throws: `WeatherError`（badStatus / network / timeout / decodingDetail）。
-    func entities(matching string: String) async throws -> [WidgetCityEntity] {
-        let keyword = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyword.isEmpty else { return [] }
-        let cities = try await GeocodingService().search(name: keyword)
-        return cities.map(WidgetCityEntity.make)
     }
 
     /// 默认值 = 哨兵（AC-C2：不是硬编码北京）。
