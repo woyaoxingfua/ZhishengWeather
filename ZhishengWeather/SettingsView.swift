@@ -114,6 +114,17 @@ struct SettingsView: View {
                 .onChange(of: iconChoice) { _, newValue in
                     switchIcon(to: newValue)
                 }
+                // 运行期诊断行（读设备事实，而非构建产物的假设）：用户截一张图
+                // 即可判定本安装是否保留备用图标声明——侧载重签裁 plist 时这里是「否」。
+                // 文案与判据的单一真源都在 AppIconSwitcher，视图只负责展示。
+                Text(iconSwitcher.diagnosticsSummary())
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                if !iconSwitcher.supportsAlternateIcons() {
+                    Text(AppIconSwitcher.declarationMissingHint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                }
                 if let iconErrorMessage {
                     Text(iconErrorMessage)
                         .font(.system(size: 12))

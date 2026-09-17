@@ -111,14 +111,63 @@ final class AppIconSwitcher {
             }
         }
         if let error {
-            // 错误绝不静默：收敛为短句给设置页展示（文案单一真源在本方法）。
-            print("[AppIconSwitcher] 换图标失败：\(error.localizedDescription)")
-            return "换图标失败（\(error.localizedDescription)），请稍后重试"
+            // 错误绝不静默：收敛为短句给设置页展示（文案单一真源在 failureMessage(for:)）。
+            let message = Self.failureMessage(for: error)
+            print("[AppIconSwitcher] 换图标失败：\(message)")
+            return message
         }
         // 系统成功后才落偏好，保证「UI 显示档位 == 设备实际图标」。
         // 走注入实例（与 currentChoice 同一个 store），否则幂等判定下次会
         // 读到陈旧值，判成「当前档 ≠ 目标档」而重复触发系统切换弹窗。
         preference.setChoice(choice)
         return nil
+    }
+
+    // MARK: - 文案单一真源（纯函数，可单测，不触碰 UIApplication）
+
+    /// 换图标失败的面向用户短句：**带上 NSError 的 domain + code**。
+    ///
+    /// 为什么必须带 domain/code：重签侧载的场景里 `localizedDescription`
+    /// 往往只是一句泛化的「操作无法完成」，看不出是「没找到备用图标
+    /// 资源」还是「不允许使用备用图标」；domain + code 是用户在截图里能直接
+    /// 提供给我们的唯一可判定信息。
+    ///
+    /// - Parameter error: 系统回传的错误（可为任意 Error，桥接为 NSError 取值）。
+    /// - Returns: 中文短句，形如「换图标失败（NSCocoaErrorDomain 4：xxx），请稍后重试」。
+    static func failureMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        let detail = "\(nsError.domain) \(nsError.code)：\(nsError.localizedDescription)"
+        return "换图标失败（\(detail)），请稍后重试"
+    }
+
+    /// 备用图标声明缺失时的说明文案（UI 展示的单一真源）。
+    ///
+    /// 成因多为：重签 / 侧载工具在改写 Info.plist 时裁掉了
+    /// `CFBundleIcons.CFBundleAlternateIcons`，导致本安装上
+    /// `UIApplication.supportsAlternateIcons` 为 false——**构建产物是好的，
+    /// 坏的是这一次安装**，故如实告诉用户去签名工具侧换图标。
+    static let declarationMissingHint: String =
+        "当前安装未保留备用图标声明（多为重签工具裁剪所致），App 内换图标在本安装上不可用；请在签名工具里换图标"
+
+    // MARK: - 运行期诊断（只读）
+
+    /// 本安装的备用图标事实摘要（给设置页展示，用户截图即可定案）。
+    ///
+    /// 读取的是**设备上的事实**而非构建产物的假设：`supportsAlternateIcons`
+    /// 直接决定 App 内能否换图标，`alternateIconName` 是系统记录的当前图标。
+    ///
+    /// - Returns: 形如「诊断：supportsAlternateIcons=是，当前=默认图标」。
+    func diagnosticsSummary() -> String {
+        let supported: String = supportsAlternateIcons() ? "是" : "否"
+        let current: String = UIApplication.shared.alternateIconName ?? "默认图标"
+        return "诊断：supportsAlternateIcons=\(supported)，当前=\(current)"
+    }
+
+    /// 本安装是否保留备用图标声明（UIKit 读取收口在此，视图层不直接摸 UIApplication）。
+    ///
+    /// - Returns: false 表示 `UIApplication.supportsAlternateIcons == false`，
+    ///   此时 App 内换图标**必然失败**（多为重签工具裁掉了 Info.plist 的声明）。
+    func supportsAlternateIcons() -> Bool {
+        UIApplication.shared.supportsAlternateIcons
     }
 }
