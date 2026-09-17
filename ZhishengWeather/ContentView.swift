@@ -62,10 +62,12 @@ struct ContentView: View {
                 case .settings:
                     // D-4：透传选中城市时区，设置页「最近更新」随城市时区显示。
                     // D-5：透传新鲜度窗口（复用主循环常量）供「数据状态」判定 正常/陈旧。
+                    // 雨伞提醒：透传 VM 持有的调度器（开关读写单一真源，App 本地偏好）。
                     SettingsView(lastUpdated: lastUpdatedDate,
                                  timeZone: viewModel.selectedTimeZone,
                                  freshnessWindow: viewModel.freshnessWindowInterval,
-                                 appearance: appearance)
+                                 appearance: appearance,
+                                 reminderScheduler: viewModel.reminderSchedulerForSettings)
                 }
             }
         }

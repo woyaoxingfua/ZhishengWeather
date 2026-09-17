@@ -34,12 +34,31 @@ struct SettingsView: View {
     /// 外观存储（由 ContentView 透传；本页「外观」行写入 → RootView 观察并重建视图树）。
     var appearance: AppearanceStore
 
+    /// 雨伞提醒调度器（开关读写单一真源；App 本地 UserDefaults，不进共享容器）。
+    let reminderScheduler: UmbrellaReminderScheduler
+
     @State private var appearanceSetting = AppearancePreference.appearance()
     @State private var temperatureUnit = UnitPreference.temperatureUnit()
     @State private var windSpeedUnit = UnitPreference.windSpeedUnit()
     @State private var pressureUnit = UnitPreference.pressureUnit()
+    /// 雨伞提醒开关（本页状态源；初值由调度器从 App 本地偏好读出，缺省为开）。
+    @State private var umbrellaReminderEnabled: Bool
     /// 数据链路健康快照（诊断用；进入页面时从记录器读取一次，进程内内存）。
     @State private var linkHealth: [LinkHealth] = []
+
+    init(lastUpdated: Date?,
+         timeZone: TimeZone = .current,
+         freshnessWindow: TimeInterval,
+         appearance: AppearanceStore,
+         reminderScheduler: UmbrellaReminderScheduler = UmbrellaReminderScheduler()) {
+        self.lastUpdated = lastUpdated
+        self.timeZone = timeZone
+        self.freshnessWindow = freshnessWindow
+        self.appearance = appearance
+        self.reminderScheduler = reminderScheduler
+        // @State 初值必须在 init 内赋（不能在属性默认值处触碰非隔离参数）。
+        _umbrellaReminderEnabled = State(initialValue: reminderScheduler.isEnabled)
+    }
 
     var body: some View {
         Form {

@@ -105,10 +105,20 @@ final class WeatherViewModel {
     /// 最近一次集合取数**尝试**时刻（配额守卫：本调用等价 4.0 次额度）。
     private var lastEnsembleFetchAt: Date? = nil
 
+    /// 雨伞提醒调度器（本地通知副链路；副作用出口，绝不触碰 `state`）。
+    /// 权限懒请求 / 开关读写 / 固定 id 替换全部内聚在调度器里（见其文件头）。
+    private let reminderScheduler: UmbrellaReminderScheduler
+
     /// 仅当集合结果归属当前选中城市时返回（防切城后旧城集合串号，P1-A 纪律平移）。
     var displayedEnsemble: EnsembleForecast? {
         guard let id = directory.selectedID, id == ensembleCityID else { return nil }
         return ensemble
+    }
+
+    /// 雨伞提醒调度器（设置页「提醒」区块的开关读写入口；只读透传，
+    /// 写路径全部收敛在调度器自身）。
+    var reminderSchedulerForSettings: UmbrellaReminderScheduler {
+        reminderScheduler
     }
 
     /// 防止并发重复刷新。
@@ -130,12 +140,16 @@ final class WeatherViewModel {
          store: AppGroupStore = AppGroupStore(),
          locationProvider: LocationProvider? = nil,
          airService: AirQualityProviding = AirQualityService(),
-         ensembleService: EnsembleProviding = EnsembleService()) {
+         ensembleService: EnsembleProviding = EnsembleService(),
+         reminderScheduler: UmbrellaReminderScheduler? = nil) {
         self.service = service
         self.store = store
         self.locationProvider = locationProvider ?? LocationProvider()
         self.airService = airService
         self.ensembleService = ensembleService
+        // ⚠️ 同 LocationProvider：@MainActor 隔离 init 不能作 default 参数
+        //（default 在调用方非隔离上下文求值），故 default 用 nil、体内创建。
+        self.reminderScheduler = reminderScheduler ?? UmbrellaReminderScheduler()
 
         // ── F-B：载入城市目录（AC-B1 / F-B-1）────────────────────────────
         // 三分支裁定（F-B 核验后补）：
@@ -262,6 +276,8 @@ final class WeatherViewModel {
             // 集合第三链路（独立 Task；内部自带 3h 慢节奏守卫，不随 15min 主循环刷新）。
             let ensembleCity = selectedCity
             Task { await loadEnsemble(for: ensembleCity) }
+            // 雨伞提醒副链路（本地通知；纯副作用，绝不触碰 state，失败静默降级）。
+            scheduleUmbrellaReminderIfNeeded(for: snapshot, city: selectedCity)
             // 过期丢弃（P1-A）：刷新期间用户若切换城市，当前结果已非选中城市，丢弃不应用，
             // 避免把旧城市的快照覆盖到新选中的界面。
             guard directory.selectedID == selectedCity.id else { return }
@@ -431,6 +447,36 @@ final class WeatherViewModel {
             let cached = store.loadSnapshot()
             state = .failed(cached: cached, message: Self.message(for: error))
         }
+    }
+
+    // MARK: - 雨伞提醒副链路（本地通知）
+
+    /// 依快照的短时降水序列调度（或替换）雨伞提醒。
+    ///
+    /// 失败隔离纪律（ARCH §3.2 同款）：本地通知是**副产物**，本方法**绝不**读写
+    /// `state` / `airQuality` / `ensemble`，内部全部静默降级（调度器吞错仅打印）。
+    /// 触发时机与 loadAir / loadEnsemble 一致：主链路成功落盘之后。
+    ///
+    /// 时刻口径：文案起始时刻按**选中城市时区**渲染（D-4，复用 WeatherTimeFormatter
+    /// 的格式器缓存，不新建第二套格式器）——与短时降水卡的口径完全一致。
+    ///
+    /// - Parameters:
+    ///   - snapshot: 主链路刚取回的快照（含 minutely15，可 nil）。
+    ///   - city: 本次取数目标城市（文案时区来源）。
+    private func scheduleUmbrellaReminderIfNeeded(for snapshot: WeatherSnapshot,
+                                                  city: City) {
+        let timeZone = WeatherTimeFormatter.timeZone(for: city)
+        let now = Date()
+        let decision = UmbrellaReminderEngine.decide(
+            minutely15: snapshot.minutely15,
+            now: now,
+            timeText: { date in
+                WeatherTimeFormatter.string(from: date, format: "HH:mm", timeZone: timeZone)
+            }
+        )
+        let onsetDelay = decision.onset.map { $0.timeIntervalSince(now) } ?? 0
+        // 独立 Task：调度含权限申请（可能挂起），绝不阻塞主刷新流收尾。
+        Task { await reminderScheduler.scheduleIfDecided(decision, onsetDelay: onsetDelay) }
     }
 
     // MARK: - 空气质量第二链路（A2-1）
