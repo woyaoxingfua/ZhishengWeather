@@ -2,7 +2,14 @@
 //  ZhishengWidgetBundle.swift
 //  ZhishengWeatherWidget（Widget target）
 //
-//  @main WidgetBundle 入口 + 天气小组件定义。
+//  @main WidgetBundle 入口 + 天气小组件定义 + 实时活动（Live Activity）定义。
+//
+//  本 Bundle 同时挂两类 WidgetConfiguration：
+//    - `ZhishengWeatherWidget`：桌面 / 锁屏小组件（`AppIntentConfiguration`）；
+//    - `WeatherLiveActivity`：实时活动的 UI（`ActivityConfiguration`）。
+//  后者是实时活动闭环的必要一半：系统启动活动后要到 **Widget Bundle** 里找
+//  与属性类型匹配的 `ActivityConfiguration`，缺它则活动「已启动、无 UI 可渲染」。
+//  两者**只增不减**：删掉任一项都会让系统移除用户已放置的实例 / 停止渲染活动。
 //  一个 widget 通过 supportedFamilies 支持 Small / Medium / Large 桌面三族
 //  （A1 后再追加 accessoryCircular / accessoryRectangular / accessoryInline
 //  锁屏三族，只增不减）；具体渲染由 `ZhishengWeatherWidgetEntryView`
@@ -30,6 +37,9 @@ import AppIntents
 struct ZhishengWidgetBundle: WidgetBundle {
     var body: some Widget {
         ZhishengWeatherWidget()
+        // 实时活动：与桌面小组件共存（只增不减），提供 `ActivityConfiguration`
+        // 让已启动的天气实时活动有 UI 可渲染。
+        WeatherLiveActivity()
     }
 }
 
