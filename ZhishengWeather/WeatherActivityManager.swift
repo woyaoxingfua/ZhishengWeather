@@ -21,6 +21,12 @@
 //  - **幂等**：同一城市重复启动 = 更新，不叠新活动；`end()` 后清空内部引用。
 //  - **字段可空**：拿不到的数据一律 nil，绝不填伪数据。
 //  - 仅 import ActivityKit + Foundation（不引 UIKit）。
+//  - **诊断留痕（本轮增量）**：启动 / 更新 / 结束都写一份诊断记录
+//    （`AppDiagnosticsStore`，App 本地 UserDefaults），设置页「实时活动」
+//    区随时可读最近一次结果。诊断是**旁路**：写失败只打印，绝不改变返回值。
+//  - ⚠️ **不伪造失败分支**：iOS 17 SDK 上 `Activity.end` / `Activity.update`
+//    是**非抛出**的 async 方法，没有 error 出口；故这两处**只记成功**，
+//    绝不为了「有失败留痕」编一个 catch 出来。
 //
 //  ⚠️ 已知的**本轮未完成接线**：实时活动的 UI（`ActivityConfiguration`）属于
 //  Widget 扩展，本轮未加。缺少它时 `Activity.request` 大概率会直接失败，
@@ -51,6 +57,15 @@ final class WeatherActivityManager {
     /// 尚未启动活动却收到更新请求时的短句（UI 12 号红色展示）。
     static let notRunningMessage: String = "实时活动尚未启动，请先开启开关"
 
+    /// 启动成功的记录文案（**只**进诊断记录；UI 上开关已变开，不再另给提示）。
+    static let startSucceededMessage: String = "实时活动已启动"
+
+    /// 更新成功的记录文案（**只**进诊断记录）。
+    static let updateSucceededMessage: String = "实时活动已更新"
+
+    /// 结束成功的记录文案（**只**进诊断记录）。
+    static let endSucceededMessage: String = "实时活动已结束"
+
     /// 启动/更新失败的面向用户短句：**带上 NSError 的 domain + code**。
     ///
     /// 为什么必须带 domain/code（与 `AppIconSwitcher.failureMessage(for:)`
@@ -71,15 +86,23 @@ final class WeatherActivityManager {
     /// 开关持久化（App 本地 UserDefaults；注入即读写同一 store）。
     private let settings: LiveActivitySettings
 
+    /// 诊断记录层（启动 / 更新 / 结束都留痕；**旁路**，绝不改变返回值）。
+    private let diagnostics: AppDiagnosticsStore
+
     /// 当前活动引用（进程内；`end()` 后清空）。
     ///
     /// ⚠️ 生命周期限制：App 被杀后本引用丢失。冷启动后若用户直接关开关，
     /// `end()` 会走「向系统查询本类型的在跑活动」的兜底路径补结束。
     private var currentActivity: Activity<WeatherActivityAttributes>?
 
-    /// - Parameter settings: 开关持久化（默认 App 本地 standard）。
-    init(settings: LiveActivitySettings = LiveActivitySettings()) {
+    /// - Parameters:
+    ///   - settings: 开关持久化（默认 App 本地 standard）。
+    ///   - diagnostics: 诊断记录层（nil = `AppDiagnosticsStore.shared`，
+    ///     同样是 App 本地 standard —— 与 `settings` 的默认 store 同源）。
+    init(settings: LiveActivitySettings = LiveActivitySettings(),
+         diagnostics: AppDiagnosticsStore? = nil) {
         self.settings = settings
+        self.diagnostics = diagnostics ?? AppDiagnosticsStore.shared
     }
 
     // MARK: - 能力探测（诚实，不假装可用）
@@ -115,12 +138,18 @@ final class WeatherActivityManager {
                conditionText: String?,
                temperatureText: String? = nil,
                updatedAtText: String? = nil) async -> String? {
+        let cityID = cityName ?? WeatherActivityAttributes.unknownCityID
         guard areActivitiesEnabled else {
             // 能力不可用：一个系统调用都不发，如实告诉 UI。
             print("[LiveActivity] 启动被拒：\(Self.unavailableHint)")
+            // 留痕（旁路）：「能力未开」是最需要在设置页长期可见的一条 ——
+            // 用户这次关掉设置页、下次再来看，仍然读得到为什么起不来。
+            diagnostics.record(source: .liveActivity,
+                               succeeded: false,
+                               target: cityID,
+                               message: Self.unavailableHint)
             return Self.unavailableHint
         }
-        let cityID = cityName ?? WeatherActivityAttributes.unknownCityID
         if let existing = currentActivity {
             if existing.attributes.cityID == cityID {
                 // 幂等：同一城市重复启动 → 退化为更新，绝不叠新活动。
@@ -152,11 +181,22 @@ final class WeatherActivityManager {
             currentActivity = activity
             // 系统接受后才落偏好，保证「开关显示已开」==「设备上真有活动」。
             settings.setEnabled(true)
+            // 成功同样留痕：与失败成对出现，才能判定「这次行 / 从来没行过」。
+            diagnostics.record(source: .liveActivity,
+                               succeeded: true,
+                               target: cityID,
+                               message: Self.startSucceededMessage)
             return nil
         } catch {
             // 错误绝不静默：打印 + 收敛短句给设置页展示。绝不重试。
             let message = Self.failureMessage(for: error)
             print("[LiveActivity] \(message)")
+            // 留痕（旁路）：domain + code 是侧载场景下唯一可判定的信息。
+            diagnostics.record(source: .liveActivity,
+                               succeeded: false,
+                               target: cityID,
+                               message: message,
+                               error: error)
             return message
         }
     }
@@ -177,6 +217,12 @@ final class WeatherActivityManager {
                 updatedAtText: String? = nil) async -> String? {
         guard let activity = currentActivity else {
             print("[LiveActivity] 更新跳过：\(Self.notRunningMessage)")
+            // 留痕（旁路）：「还没启动就点更新」是一次真实的失败尝试，
+            // 记下来才能解释设置页为什么曾出现过这条红字。
+            diagnostics.record(source: .liveActivity,
+                               succeeded: false,
+                               target: cityName ?? WeatherActivityAttributes.unknownCityID,
+                               message: Self.notRunningMessage)
             return Self.notRunningMessage
         }
         let state = Self.contentState(cityName: cityName,
@@ -184,6 +230,12 @@ final class WeatherActivityManager {
                                       conditionText: conditionText,
                                       updatedAtText: updatedAtText)
         await activity.update(using: state)
+        // `Activity.update` 在 iOS 17 SDK 上是**非抛出**的 async，没有 error
+        // 出口 —— 故这里只记成功，绝不伪造失败分支。
+        diagnostics.record(source: .liveActivity,
+                           succeeded: true,
+                           target: activity.attributes.cityID,
+                           message: Self.updateSucceededMessage)
         return nil
     }
 
@@ -195,6 +247,9 @@ final class WeatherActivityManager {
     /// 保证「开关关闭」与「设备上真的没有活动」一致 —— 否则用户关了开关，
     /// 锁屏上的活动还挂着，是最典型的「UI 与设备事实不一致」。
     func end() async {
+        // 先取城市标识：`endCurrentActivity()` 会清空 `currentActivity`，
+        // 之后就取不到了（诊断记录要写清「结束的是哪个城市」）。
+        let cityID = currentActivity?.attributes.cityID ?? WeatherActivityAttributes.unknownCityID
         // 只有「没有内存引用**且**偏好说开过」才查系统：从没开过就没有活动可结束，
         // 白查一次系统徒增不确定性（开关回滚时会走到这里）。
         if currentActivity == nil, settings.isEnabled {
@@ -207,6 +262,12 @@ final class WeatherActivityManager {
         }
         await endCurrentActivity()
         settings.setEnabled(false)
+        // `Activity.end` 同样**非抛出**（无 error 出口）→ 只记成功。
+        // 语义：本方法返回后设备上已无本类型的活动，这是「结束成功」的可判定事实。
+        diagnostics.record(source: .liveActivity,
+                           succeeded: true,
+                           target: cityID,
+                           message: Self.endSucceededMessage)
     }
 
     // MARK: - 内部

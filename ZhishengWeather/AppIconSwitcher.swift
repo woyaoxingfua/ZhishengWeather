@@ -21,6 +21,11 @@
 //    `IconChoicePreference`，`currentChoice()` 与 `apply(_:)` 走同一个 store。
 //    读注入、写 standard 会让单测隔离变假（且生产因两边都是 standard 而
 //    看不出来），属「注入缝只用了半条」，见 CI run 35206149080。
+//  - **诊断留痕（本轮增量）**：`apply(_:)` 的**成功与失败**都写一份诊断记录
+//    （`AppDiagnosticsStore`，App 本地 UserDefaults）。真机上失败提示「一闪
+//    而过」，落盘后设置页随时可读。诊断是**旁路**：写失败只打印，绝不改变
+//    `apply(_:)` 的返回值。诊断 store 默认绑定注入的 `defaults`，保持注入缝
+//    整条（单测独立 suite，不污染 standard）。
 //
 
 import UIKit
@@ -59,16 +64,22 @@ final class AppIconSwitcher {
     /// `defaults` 只影响读、写仍落 standard，注入缝只剩半条。
     private let preference: IconChoicePreference
 
+    /// 诊断记录层（成功与失败都落一份；**旁路**，绝不改变切换结果）。
+    private let diagnostics: AppDiagnosticsStore
+
     // MARK: - 初始化
 
     /// - Parameters:
     ///   - setter: 系统调用实现。
     ///   - defaults: 档位存储（**非** App Group 共享容器）；同一个实例
     ///     同时用于读与写。
+    ///   - diagnostics: 诊断记录层（nil = 绑定到 `defaults` 的新实例）。
     init(setter: AlternateIconSetting = SystemAlternateIconSetter(),
-         defaults: UserDefaults = .standard) {
+         defaults: UserDefaults = .standard,
+         diagnostics: AppDiagnosticsStore? = nil) {
         self.setter = setter
         self.preference = IconChoicePreference(defaults: defaults)
+        self.diagnostics = diagnostics ?? AppDiagnosticsStore(defaults: defaults)
     }
 
     // MARK: - 读取（设置页初值）
@@ -114,12 +125,23 @@ final class AppIconSwitcher {
             // 错误绝不静默：收敛为短句给设置页展示（文案单一真源在 failureMessage(for:)）。
             let message = Self.failureMessage(for: error)
             print("[AppIconSwitcher] 换图标失败：\(message)")
+            // 留痕（旁路）：真机上这句只「闪一下」，落盘后设置页随时可读。
+            diagnostics.record(source: .appIcon,
+                               succeeded: false,
+                               target: Self.targetText(for: choice),
+                               message: message,
+                               error: error)
             return message
         }
         // 系统成功后才落偏好，保证「UI 显示档位 == 设备实际图标」。
         // 走注入实例（与 currentChoice 同一个 store），否则幂等判定下次会
         // 读到陈旧值，判成「当前档 ≠ 目标档」而重复触发系统切换弹窗。
         preference.setChoice(choice)
+        // 成功同样留痕：失败与成功成对出现，才能判定「是这次不行还是从来没行过」。
+        diagnostics.record(source: .appIcon,
+                           succeeded: true,
+                           target: Self.targetText(for: choice),
+                           message: Self.successMessage(for: choice))
         return nil
     }
 
@@ -138,6 +160,26 @@ final class AppIconSwitcher {
         let nsError = error as NSError
         let detail = "\(nsError.domain) \(nsError.code)：\(nsError.localizedDescription)"
         return "换图标失败（\(detail)），请稍后重试"
+    }
+
+    /// 换图标成功的记录文案（**只**进诊断记录，不另弹提示 ——
+    /// 系统在切换成功时会弹自己的确认框，本侧绝不补第二个）。
+    ///
+    /// - Parameter choice: 已生效的档位。
+    /// - Returns: 形如「已切换为清冷翡翠」。
+    static func successMessage(for choice: IconChoice) -> String {
+        "已切换为\(choice.displayName)"
+    }
+
+    /// 诊断记录里的「目标图标」文本。
+    ///
+    /// 默认档的 `alternateIconName` 是 nil（这是**正确**的系统参数语义，不是
+    /// 缺数据），故记录里显式写成「默认图标」，免得看记录的人误判为漏传。
+    ///
+    /// - Parameter choice: 目标档位。
+    /// - Returns: 资源名（默认档为「默认图标」）。
+    private static func targetText(for choice: IconChoice) -> String {
+        choice.alternateIconName ?? "默认图标"
     }
 
     /// 备用图标声明缺失时的说明文案（UI 展示的单一真源）。
