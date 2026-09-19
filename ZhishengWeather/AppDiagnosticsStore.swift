@@ -65,6 +65,13 @@ struct AppDiagnosticEntry: Codable, Equatable, Sendable {
     let errorDomain: String?
     /// 失败时的错误码（成功为 nil）。
     let errorCode: Int?
+    /// 记录产生时的安装身份（`Bundle.main.bundleIdentifier`）。
+    ///
+    /// 用于「本安装不可用」判据：换 Bundle Identifier 后重签是 -54 的一种社区验证
+    /// 解法（SO 75370140），读到记录时比对身份，不一致即视为「无记录」→ 自动恢复
+    /// 可用——否则一条陈旧的 -54 会永久锁死功能。成功记录也带身份（无害）。
+    /// 可选：旧版日志无此字段，解码缺失即 nil（视为无身份、不比对、不锁死）。
+    let bundleIdentifier: String?
     /// 发生时刻（跨来源比较「最近一次」用）。
     let occurredAt: Date
     /// 发生时刻的 HH:mm:ss 文本（**落盘时**格式化一次，读取侧不再依赖时区与格式器）。
@@ -76,12 +83,15 @@ struct AppDiagnosticEntry: Codable, Equatable, Sendable {
     ///   - target: 操作对象（见同名属性的语义）。
     ///   - message: 完整描述（失败句由各调用方的文案单一真源给出）。
     ///   - error: 失败时的错误（桥接为 NSError 取 domain / code）；成功传 nil。
+    ///   - bundleIdentifier: 记录产生时的安装身份（`Bundle.main.bundleIdentifier`）；
+    ///     用于「本安装不可用」判据，默认 nil（旧调用方不传）。
     ///   - occurredAt: 发生时刻（默认当前时刻）。
     init(source: AppDiagnosticSource,
          succeeded: Bool,
          target: String,
          message: String,
          error: Error? = nil,
+         bundleIdentifier: String? = nil,
          occurredAt: Date = Date()) {
         let nsError: NSError? = error.map { $0 as NSError }
         self.source = source
@@ -90,6 +100,7 @@ struct AppDiagnosticEntry: Codable, Equatable, Sendable {
         self.message = message
         self.errorDomain = nsError?.domain
         self.errorCode = nsError?.code
+        self.bundleIdentifier = bundleIdentifier
         self.occurredAt = occurredAt
         self.timeText = Self.timeString(from: occurredAt)
     }
@@ -172,16 +183,20 @@ final class AppDiagnosticsStore {
     ///   - target: 操作对象。
     ///   - message: 完整描述（失败句请传各调用方文案单一真源产出的短句）。
     ///   - error: 失败时的错误（成功传 nil）。
+    ///   - bundleIdentifier: 记录产生时的安装身份（默认 nil；换图标失败调用方传入
+    ///     当前 `Bundle.main.bundleIdentifier` 以支撑「本安装不可用」判据）。
     func record(source: AppDiagnosticSource,
                 succeeded: Bool,
                 target: String,
                 message: String,
-                error: Error? = nil) {
+                error: Error? = nil,
+                bundleIdentifier: String? = nil) {
         let entry = AppDiagnosticEntry(source: source,
                                        succeeded: succeeded,
                                        target: target,
                                        message: message,
-                                       error: error)
+                                       error: error,
+                                       bundleIdentifier: bundleIdentifier)
         record(entry)
     }
 

@@ -126,11 +126,13 @@ final class AppIconSwitcher {
             let message = Self.failureMessage(for: error)
             print("[AppIconSwitcher] 换图标失败：\(message)")
             // 留痕（旁路）：真机上这句只「闪一下」，落盘后设置页随时可读。
+            // 带上本安装身份 bundleIdentifier，支撑「本安装不可用」判据（换 id 后自动恢复）。
             diagnostics.record(source: .appIcon,
                                succeeded: false,
                                target: Self.targetText(for: choice),
                                message: message,
-                               error: error)
+                               error: error,
+                               bundleIdentifier: Bundle.main.bundleIdentifier)
             return message
         }
         // 系统成功后才落偏好，保证「UI 显示档位 == 设备实际图标」。
@@ -138,14 +140,22 @@ final class AppIconSwitcher {
         // 读到陈旧值，判成「当前档 ≠ 目标档」而重复触发系统切换弹窗。
         preference.setChoice(choice)
         // 成功同样留痕：失败与成功成对出现，才能判定「是这次不行还是从来没行过」。
+        // 成功记录也带 bundleIdentifier（无害），覆盖旧的 -54 失败 → 自动解除不可用。
         diagnostics.record(source: .appIcon,
                            succeeded: true,
                            target: Self.targetText(for: choice),
-                           message: Self.successMessage(for: choice))
+                           message: Self.successMessage(for: choice),
+                           bundleIdentifier: Bundle.main.bundleIdentifier)
         return nil
     }
 
     // MARK: - 文案单一真源（纯函数，可单测，不触碰 UIApplication）
+
+    /// LaunchServices 拒绝换图标的错误域 / 码（「process may not map database」，
+    /// 出自 `_LSDIconClient setAlternateIconName`）。失败文案与「本安装不可用」
+    /// 判据共用同一组真值，避免两处各写一遍字符串字面量。
+    private static let launchServicesRejectionDomain = "NSOSStatusErrorDomain"
+    private static let launchServicesRejectionCode = -54
 
     /// 换图标失败的面向用户短句：**带上 NSError 的 domain + code**。
     ///
@@ -165,7 +175,7 @@ final class AppIconSwitcher {
         // 常见于重签 / 侧载安装（安装身份与图标数据库权限不匹配）。社区验证过
         // 有效的两个解法：① 重启手机；② 换 Bundle Identifier 后重签。
         // 如实告知，不承诺「重启就能好」，也不塞一句泛化的「请稍后重试」。
-        if nsError.domain == "NSOSStatusErrorDomain" && nsError.code == -54 {
+        if nsError.domain == Self.launchServicesRejectionDomain && nsError.code == Self.launchServicesRejectionCode {
             return "换图标失败：系统（LaunchServices）拒绝了本次请求，常见于重签安装。可先重启手机再试；若仍失败，请在签名工具里更换 Bundle Identifier 后重签"
         }
 
@@ -202,7 +212,35 @@ final class AppIconSwitcher {
     static let declarationMissingHint: String =
         "当前安装未保留备用图标声明（多为重签工具裁剪所致），App 内换图标在本安装上不可用；请在签名工具里换图标"
 
+    /// 本安装因 LaunchServices 拒绝（-54）而换图标不可用时的说明（设置页展示单一真源）。
+    ///
+    /// 定性说明，**不是**操作承诺：不写「重启手机就好」那种可选项（与这里
+    /// 「本安装不可用」的定性相混会误导用户以为点了还能好）；只指向两个真实可恢复
+    /// 路径——换用正规签名安装、或换 Bundle Identifier 后重签。判据见
+    /// `isUnavailableDueToLaunchServicesRejection()`。
+    static let unavailableDueToRejectionHint: String =
+        "本安装的换图标不可用：系统（LaunchServices）拒绝了请求，多为重签安装所致。换用正规签名安装、或换 Bundle Identifier 后重签，可恢复。"
+
     // MARK: - 运行期诊断（只读）
+
+    /// 本安装的换图标是否因 LaunchServices 拒绝（-54）而不可用。
+    ///
+    /// 判据**锚在「本安装身份」**上，而非历史失败记录本身：
+    /// 最近一次换图标尝试须是 `NSOSStatusErrorDomain` code `-54` 的失败，**且**记录里的
+    /// `bundleIdentifier` 与当前安装一致。换 Bundle Identifier 后重签是社区验证过的解法
+    /// （SO 75370140）——读到记录时身份不一致即视为「无记录」→ 自动恢复可用，绝不让
+    /// 一条陈旧的 -54 永久锁死功能；成功一次后记录被覆盖为成功 → 同样自动解除。
+    ///
+    /// - Returns: true = 本安装换图标不可用（设置页应禁用控件并展示 `unavailableDueToRejectionHint`）。
+    func isUnavailableDueToLaunchServicesRejection() -> Bool {
+        guard let entry = diagnostics.latest(for: .appIcon),
+              !entry.succeeded,
+              entry.errorDomain == Self.launchServicesRejectionDomain,
+              entry.errorCode == Self.launchServicesRejectionCode,
+              entry.bundleIdentifier == Bundle.main.bundleIdentifier
+        else { return false }
+        return true
+    }
 
     /// 本安装的备用图标事实摘要（给设置页展示，用户截图即可定案）。
     ///

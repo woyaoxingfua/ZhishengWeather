@@ -150,6 +150,79 @@ final class AppIconSwitcherTests: XCTestCase {
                       "其它错误仍走泛化重试文案：\(message)")
     }
 
+    // MARK: - 本安装不可用判据（锚 bundle id，非历史失败记录）
+
+    /// 无记录 → 可用（不锁死、按钮照常可点）。
+    func testUnavailableFalseWhenNoRecord() {
+        let store = AppDiagnosticsStore(defaults: defaults)
+        let switcher = AppIconSwitcher(setter: spy, defaults: defaults, diagnostics: store)
+        XCTAssertFalse(switcher.isUnavailableDueToLaunchServicesRejection())
+    }
+
+    /// 最近一次是 -54 失败且 bundle id 与当前安装一致 → 不可用（控件应置灰）。
+    func testUnavailableTrueForMinus54SameBundleID() {
+        let store = AppDiagnosticsStore(defaults: defaults)
+        let minus54 = NSError(domain: "NSOSStatusErrorDomain", code: -54,
+                              userInfo: [NSLocalizedDescriptionKey: "未能完成操作。(OSStatus 错误 -54.)"])
+        let entry = AppDiagnosticEntry(source: .appIcon,
+                                        succeeded: false,
+                                        target: "AppIcon-Jade",
+                                        message: "换图标失败：系统（LaunchServices）拒绝了本次请求，常见于重签安装。",
+                                        error: minus54,
+                                        bundleIdentifier: Bundle.main.bundleIdentifier)
+        store.record(entry)
+        let switcher = AppIconSwitcher(setter: spy, defaults: defaults, diagnostics: store)
+        XCTAssertTrue(switcher.isUnavailableDueToLaunchServicesRejection(),
+                      "同一安装下的 -54 失败应判为不可用")
+    }
+
+    /// 最近一次是 -54 失败但 bundle id 不同（换了 Bundle Identifier 后重签）
+    /// → 自动恢复可用，不永久锁死。
+    func testUnavailableFalseForMinus54DifferentBundleID() {
+        let store = AppDiagnosticsStore(defaults: defaults)
+        let minus54 = NSError(domain: "NSOSStatusErrorDomain", code: -54,
+                              userInfo: [NSLocalizedDescriptionKey: "未能完成操作。(OSStatus 错误 -54.)"])
+        let entry = AppDiagnosticEntry(source: .appIcon,
+                                        succeeded: false,
+                                        target: "AppIcon-Jade",
+                                        message: "换图标失败：系统（LaunchServices）拒绝了本次请求，常见于重签安装。",
+                                        error: minus54,
+                                        bundleIdentifier: "com.zhisheng.weather.otherinstall")
+        store.record(entry)
+        let switcher = AppIconSwitcher(setter: spy, defaults: defaults, diagnostics: store)
+        XCTAssertFalse(switcher.isUnavailableDueToLaunchServicesRejection(),
+                       "换了 Bundle ID 后重签必须自动恢复可用，陈旧 -54 不得永久锁死")
+    }
+
+    /// 最近一次是成功（含 bundle id）→ 可用（成功覆盖失败，自然解除不可用）。
+    func testUnavailableFalseAfterSuccess() {
+        let store = AppDiagnosticsStore(defaults: defaults)
+        let entry = AppDiagnosticEntry(source: .appIcon,
+                                        succeeded: true,
+                                        target: "AppIcon-Jade",
+                                        message: "已切换为清冷翡翠",
+                                        bundleIdentifier: Bundle.main.bundleIdentifier)
+        store.record(entry)
+        let switcher = AppIconSwitcher(setter: spy, defaults: defaults, diagnostics: store)
+        XCTAssertFalse(switcher.isUnavailableDueToLaunchServicesRejection())
+    }
+
+    /// 最近一次是其它错误码（非 -54）→ 可用（走泛化重试文案，不锁死）。
+    func testUnavailableFalseForOtherError() {
+        let store = AppDiagnosticsStore(defaults: defaults)
+        let other = NSError(domain: "NSCocoaErrorDomain", code: 4,
+                            userInfo: [NSLocalizedDescriptionKey: "操作无法完成"])
+        let entry = AppDiagnosticEntry(source: .appIcon,
+                                        succeeded: false,
+                                        target: "AppIcon-Jade",
+                                        message: "换图标失败（NSCocoaErrorDomain 4：操作无法完成），请稍后重试",
+                                        error: other,
+                                        bundleIdentifier: Bundle.main.bundleIdentifier)
+        store.record(entry)
+        let switcher = AppIconSwitcher(setter: spy, defaults: defaults, diagnostics: store)
+        XCTAssertFalse(switcher.isUnavailableDueToLaunchServicesRejection())
+    }
+
     // MARK: - currentChoice 优先级
 
     /// 系统事实（alternateIconName）优先于本地偏好。

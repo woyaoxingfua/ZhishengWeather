@@ -89,6 +89,14 @@ struct SettingsView: View {
     /// 小组件时间线重载的最近一次结果（**持久**记录）。
     @State private var widgetLastResult: AppDiagnosticEntry?
 
+    /// 本安装换图标是否因 LaunchServices 拒绝（-54）而不可用（判据单一真源在
+    /// `AppIconSwitcher.isUnavailableDueToLaunchServicesRejection()`；本页只读取）。
+    /// 命中 → 档位 Picker 置灰 + 显示如实说明；未命中（没试过 / 成功过 /
+    /// 换了 Bundle Identifier 重签）→ 与现在完全一致，按钮照常可点。
+    private var iconUnavailable: Bool {
+        iconSwitcher.isUnavailableDueToLaunchServicesRejection()
+    }
+
     /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），而
     /// UmbrellaReminderScheduler 是 @MainActor 隔离 init（CI 实测挂编译，
     /// 与 LocationProvider 同款陷阱）。故 default 用 nil，真正创建移到本
@@ -148,8 +156,16 @@ struct SettingsView: View {
                             .tag(choice)
                     }
                 }
+                // 本安装因 LaunchServices 拒绝（-54）而不可用时，与其让用户点了静默失败，
+                // 不如直接不给点 + 如实说明（文案单一真源在 AppIconSwitcher）。
+                .disabled(iconUnavailable)
                 .onChange(of: iconChoice) { _, newValue in
                     switchIcon(to: newValue)
+                }
+                if iconUnavailable {
+                    Text(AppIconSwitcher.unavailableDueToRejectionHint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
                 }
                 // 运行期诊断行（读设备事实，而非构建产物的假设）：用户截一张图
                 // 即可判定本安装是否保留备用图标声明——侧载重签裁 plist 时这里是「否」。
