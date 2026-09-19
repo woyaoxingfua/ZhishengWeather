@@ -158,6 +158,17 @@ final class AppIconSwitcher {
     /// - Returns: 中文短句，形如「换图标失败（NSCocoaErrorDomain 4：xxx），请稍后重试」。
     static func failureMessage(for error: Error) -> String {
         let nsError = error as NSError
+
+        // NSOSStatusErrorDomain -54 在 LaunchServices 栈里是
+        // 「process may not map database」——系统守护进程拒绝了本次图标变更，
+        // 发生在系统侧，不是 App 代码 / Info.plist 声明 / 资源的问题。
+        // 常见于重签 / 侧载安装（安装身份与图标数据库权限不匹配）。社区验证过
+        // 有效的两个解法：① 重启手机；② 换 Bundle Identifier 后重签。
+        // 如实告知，不承诺「重启就能好」，也不塞一句泛化的「请稍后重试」。
+        if nsError.domain == "NSOSStatusErrorDomain" && nsError.code == -54 {
+            return "换图标失败：系统（LaunchServices）拒绝了本次请求，常见于重签安装。可先重启手机再试；若仍失败，请在签名工具里更换 Bundle Identifier 后重签"
+        }
+
         let detail = "\(nsError.domain) \(nsError.code)：\(nsError.localizedDescription)"
         return "换图标失败（\(detail)），请稍后重试"
     }

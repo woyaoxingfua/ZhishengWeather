@@ -116,6 +116,40 @@ final class AppIconSwitcherTests: XCTestCase {
         XCTAssertEqual(switcher.currentChoice(), .phosphor)
     }
 
+    // MARK: - failureMessage 文案分支
+
+    /// NSOSStatusErrorDomain -54（LaunchServices 拒绝「process may not map
+    /// database」）：输出如实、可操作的短句，**不**走泛化的「请稍后重试」。
+    func testFailureMessageForMinus54LaunchServicesRejection() {
+        let error = NSError(domain: "NSOSStatusErrorDomain", code: -54,
+                            userInfo: [NSLocalizedDescriptionKey: "未能完成操作。(OSStatus 错误 -54.)"])
+        let message = AppIconSwitcher.failureMessage(for: error)
+        XCTAssertTrue(message.contains("LaunchServices"),
+                      "必须点明是系统 LaunchServices 拒绝，而非泛化措辞：\(message)")
+        XCTAssertTrue(message.contains("重签"),
+                      "必须提示常见于重签安装，指向可操作解法：\(message)")
+        XCTAssertTrue(message.contains("重启手机"),
+                      "必须给出『重启手机』这一解法：\(message)")
+        XCTAssertTrue(message.contains("Bundle Identifier"),
+                      "必须给出『换 Bundle Identifier 后重签』这一解法：\(message)")
+        XCTAssertFalse(message.contains("请稍后重试"),
+                       "不得套用泛化重试文案，以免误导用户以为代码可重试：\(message)")
+        // 如实：不承诺「重启就能好」。
+        XCTAssertFalse(message.contains("重启即可") && message.contains("一定"),
+                       "不得承诺重启必定修复：\(message)")
+    }
+
+    /// 其它错误码仍走泛化分支（带 domain/code + 「请稍后重试」）。
+    func testFailureMessageForOtherErrorKeepsGenericRetry() {
+        let error = NSError(domain: "NSCocoaErrorDomain", code: 4,
+                            userInfo: [NSLocalizedDescriptionKey: "操作无法完成"])
+        let message = AppIconSwitcher.failureMessage(for: error)
+        XCTAssertTrue(message.contains("NSCocoaErrorDomain 4"),
+                      "必须带 domain + code 供用户截图定案：\(message)")
+        XCTAssertTrue(message.contains("请稍后重试"),
+                      "其它错误仍走泛化重试文案：\(message)")
+    }
+
     // MARK: - currentChoice 优先级
 
     /// 系统事实（alternateIconName）优先于本地偏好。
