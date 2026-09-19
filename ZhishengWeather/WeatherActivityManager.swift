@@ -203,6 +203,38 @@ final class WeatherActivityManager {
 
     // MARK: - 更新
 
+    /// 取数成功后推送实时活动（**仅更新，不启动**）。
+    ///
+    /// 主 App 每取到一次天气，把最新真实数据推进正在进行的活动；
+    /// **没有在跑的活动就直接返回 `notRunningMessage`，绝不凭空 `start`**
+    /// —— 启动仍是用户手动/设置开关的语义，本轮不改（否则用户没开开关、
+    /// 取数成功却突然冒出一个活动，是越权副作用）。
+    /// 无数据字段即 nil，保持诚实空态，绝不造假。
+    ///
+    /// - Parameters:
+    ///   - snapshot: 取数成功的天气快照（温度/天气码/更新时刻来源）。
+    ///   - city: 本次取数目标城市（城市名 + 时区来源）。
+    ///   - unit: 单位偏好（默认 App Group 共享容器的生产实例，与主 App 展示一致）。
+    /// - Returns: 成功为 nil；未启动/失败为面向用户的中文短句。
+    @discardableResult
+    func update(from snapshot: WeatherSnapshot,
+                city: City,
+                unit: UnitPreference = UnitPreference()) async -> String? {
+        let timeZone = WeatherTimeFormatter.timeZone(for: city)
+        let content = WeatherActivityContentBuilder.buildContentState(
+            cityName: snapshot.location.name,
+            temperatureCelsius: snapshot.temperature,
+            weatherCode: snapshot.weatherCode,
+            isDay: snapshot.isDay,
+            updatedAt: snapshot.fetchedAt,
+            timeZone: timeZone,
+            unit: unit)
+        return await update(cityName: content.cityName,
+                           conditionText: content.conditionText,
+                           temperatureText: content.temperatureText,
+                           updatedAtText: content.updatedAtText)
+    }
+
     /// 更新当前实时活动的内容。
     ///
     /// 尚未启动时**不偷偷启动** —— 返回 `notRunningMessage` 让 UI 如实告知，

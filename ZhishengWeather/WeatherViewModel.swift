@@ -109,6 +109,11 @@ final class WeatherViewModel {
     /// 权限懒请求 / 开关读写 / 固定 id 替换全部内聚在调度器里（见其文件头）。
     private let reminderScheduler: UmbrellaReminderScheduler
 
+    /// 实时活动管理器（取数成功后推送最新数据进正在进行的活动；仅更新不启动）。
+    /// 副作用出口，与主链路隔离：更新失败由管理器自身诊断留痕，绝不触碰 `state`、
+    /// 绝不反噬天气刷新（与雨伞提醒副链路同款纪律）。
+    private let activityManager: WeatherActivityManager
+
     /// 仅当集合结果归属当前选中城市时返回（防切城后旧城集合串号，P1-A 纪律平移）。
     var displayedEnsemble: EnsembleForecast? {
         guard let id = directory.selectedID, id == ensembleCityID else { return nil }
@@ -141,7 +146,8 @@ final class WeatherViewModel {
          locationProvider: LocationProvider? = nil,
          airService: AirQualityProviding = AirQualityService(),
          ensembleService: EnsembleProviding = EnsembleService(),
-         reminderScheduler: UmbrellaReminderScheduler? = nil) {
+         reminderScheduler: UmbrellaReminderScheduler? = nil,
+         activityManager: WeatherActivityManager? = nil) {
         self.service = service
         self.store = store
         self.locationProvider = locationProvider ?? LocationProvider()
@@ -150,6 +156,9 @@ final class WeatherViewModel {
         // ⚠️ 同 LocationProvider：@MainActor 隔离 init 不能作 default 参数
         //（default 在调用方非隔离上下文求值），故 default 用 nil、体内创建。
         self.reminderScheduler = reminderScheduler ?? UmbrellaReminderScheduler()
+        // ⚠️ 同款陷阱：WeatherActivityManager 也是 @MainActor 隔离 init，
+        // default 用 nil、体内创建（否则 default 参数在非隔离上下文求值会挂编译）。
+        self.activityManager = activityManager ?? WeatherActivityManager()
 
         // ── F-B：载入城市目录（AC-B1 / F-B-1）────────────────────────────
         // 三分支裁定（F-B 核验后补）：
@@ -282,6 +291,9 @@ final class WeatherViewModel {
             // 避免把旧城市的快照覆盖到新选中的界面。
             guard directory.selectedID == selectedCity.id else { return }
             state = .loaded(snapshot)
+            // 取数成功 → 把真实数据推进正在进行的实时活动（仅更新，不启动）。
+            // 放在 selectedID 校验之后：只推送「选中城市」的最新数据，不把过期旧城结果塞进活动。
+            await pushLiveActivity(for: snapshot, city: selectedCity)
         } catch {
             await LinkHealthRecorder.shared.recordFailure(.forecast, at: Date(),
                                                           message: Self.message(for: error))
@@ -436,6 +448,8 @@ final class WeatherViewModel {
             // 否则丢弃，交由对应的 select/addAndSelect/remove 取数流程修正界面。
             guard directory.selectedID == city.id else { return }
             state = .loaded(snapshot)
+            // 取数成功 → 把真实数据推进正在进行的实时活动（仅更新，不启动）。
+            await pushLiveActivity(for: snapshot, city: city)
         } catch {
             await LinkHealthRecorder.shared.recordFailure(.forecast, at: Date(),
                                                           message: Self.message(for: error))
@@ -477,6 +491,23 @@ final class WeatherViewModel {
         let onsetDelay = decision.onset.map { $0.timeIntervalSince(now) } ?? 0
         // 独立 Task：调度含权限申请（可能挂起），绝不阻塞主刷新流收尾。
         Task { await reminderScheduler.scheduleIfDecided(decision, onsetDelay: onsetDelay) }
+    }
+
+    // MARK: - 实时活动副链路（取数成功 → 更新）
+
+    /// 取数成功后把最新真实数据推进入正在进行的实时活动（**仅更新，不启动**）。
+    ///
+    /// 失败隔离纪律（与伞提醒/空气/集合同款）：实时活动是**副产物**，本方法**绝不**
+    /// 读写 `state` / `airQuality` / `ensemble`，内部全部静默降级（失败由管理器诊断留痕）。
+    /// 只在用户已开启实时活动时才尝试（`isEnabled` 短路）：开关关着自然没有活动，
+    /// 不必每轮取数都去撞一次「尚未启动」的短句，也避免无谓的诊断留痕。
+    ///
+    /// - Parameters:
+    ///   - snapshot: 主链路刚取回的快照（温度/天气码/更新时刻来源）。
+    ///   - city: 本次取数目标城市（城市名 + 时区来源）。
+    private func pushLiveActivity(for snapshot: WeatherSnapshot, city: City) async {
+        guard activityManager.isEnabled else { return }
+        await activityManager.update(from: snapshot, city: city)
     }
 
     // MARK: - 空气质量第二链路（A2-1）
