@@ -20,17 +20,28 @@ final class WeatherActivityContentBuilderTests: XCTestCase {
     /// 上海时区（固定，确定性渲染）。
     private let shanghai = TimeZone(identifier: "Asia/Shanghai") ?? .current
 
+    // ⚠️ 逐用例唯一化 suite 名（带 UUID 后缀），避免并发用例互相踩；
+    // 名字串单独存一份——tearDown 清场要用的就是**这个带后缀的真实名字**，
+    // `UserDefaults` 实例在 iOS 上**没有** `persistentDomainName` 成员（那是 macOS 概念），
+    // 且 `removePersistentDomain(forName:)` 在 iOS 上是**类型方法**
+    // （`UserDefaults.standard.removePersistentDomain(forName:)`），不能往实例上调。
+    private var celsiusSuiteName: String!
+    private var fahrenheitSuiteName: String!
+
     override func setUp() {
         super.setUp()
-        celsiusSuite = UserDefaults(suiteName: "zs.test.liveactivity.builder.celsius.\(UUID().uuidString)")
-        fahrenheitSuite = UserDefaults(suiteName: "zs.test.liveactivity.builder.fahrenheit.\(UUID().uuidString)")
+        celsiusSuiteName = "zs.test.liveactivity.builder.celsius.\(UUID().uuidString)"
+        fahrenheitSuiteName = "zs.test.liveactivity.builder.fahrenheit.\(UUID().uuidString)"
+        celsiusSuite = UserDefaults(suiteName: celsiusSuiteName)
+        fahrenheitSuite = UserDefaults(suiteName: fahrenheitSuiteName)
         // fahrenheit 套显式写入，与 celsius 套形成对照。
         fahrenheitSuite.set("fahrenheit", forKey: UnitPreference.temperatureKey)
     }
 
     override func tearDown() {
-        celsiusSuite.removePersistentDomain(forName: celsiusSuite.persistentDomainName ?? "")
-        fahrenheitSuite.removePersistentDomain(forName: fahrenheitSuite.persistentDomainName ?? "")
+        // 用真实的 suite 名（带 UUID 后缀）清场；类型方法，挂在 UserDefaults.standard 上。
+        UserDefaults.standard.removePersistentDomain(forName: celsiusSuiteName)
+        UserDefaults.standard.removePersistentDomain(forName: fahrenheitSuiteName)
         super.tearDown()
     }
 
