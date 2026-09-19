@@ -25,6 +25,10 @@ struct ContentView: View {
     /// 外观存储（由 RootView 透传；设置页「外观」行写入，RootView 观察并重绘）。
     let appearance: AppearanceStore
 
+    /// 实时活动管理器（与 VM 同一实例，由 RootView 透传；注入设置页，
+    /// 保证设置页启动的活动与 VM 取数后更新的活动是同一个）。
+    let activityManager: WeatherActivityManager
+
     /// 编程式 push（AppRouter 触发跳转用）。
     @State private var navigation: NavigationPath = NavigationPath()
 
@@ -105,7 +109,8 @@ struct ContentView: View {
                                  timeZone: viewModel.selectedTimeZone,
                                  freshnessWindow: viewModel.freshnessWindowInterval,
                                  appearance: appearance,
-                                 reminderScheduler: viewModel.reminderSchedulerForSettings)
+                                 reminderScheduler: viewModel.reminderSchedulerForSettings,
+                                 activityManager: activityManager)
                 }
             }
         }

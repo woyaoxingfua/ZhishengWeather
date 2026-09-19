@@ -28,6 +28,9 @@ struct RootView: View {
     /// 外观存储（App 级单例）。
     let appearance: AppearanceStore
 
+    /// 实时活动管理器（与 VM 同一实例，透传给 ContentView → 设置页）。
+    let activityManager: WeatherActivityManager
+
     /// 系统深浅（仅在「跟随系统」档位下参与解析）。
     @Environment(\.colorScheme) private var systemScheme
 
@@ -50,7 +53,7 @@ struct RootView: View {
         // 保证所有视图读取到新 token。
         let id = paletteID
         let _ = Theme.activePalette = ThemePalette.palette(for: id)
-        ContentView(viewModel: viewModel, appearance: appearance)
+        ContentView(viewModel: viewModel, appearance: appearance, activityManager: activityManager)
             .preferredColorScheme(preferredScheme)
             .id(id)
     }

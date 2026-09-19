@@ -248,6 +248,11 @@ struct SettingsView: View {
                 }
                 .onChange(of: temperatureUnit) { _, newValue in
                     UnitPreference.setTemperatureUnit(newValue)
+                    // 切单位：用最新单位把当前缓存天气重推一次（℉/℃ 切换时灵动岛温度符号要跟着变）。
+                    Task {
+                        await activityManager.pushLatestIfRunning()
+                        liveActivityLastResult = diagnostics.latest(for: .liveActivity)
+                    }
                 }
 
                 Picker("风速", selection: $windSpeedUnit) {
@@ -256,6 +261,11 @@ struct SettingsView: View {
                 }
                 .onChange(of: windSpeedUnit) { _, newValue in
                     UnitPreference.setWindSpeedUnit(newValue)
+                    // 切单位：重推当前天气（温度符号随偏好变化，需刷新灵动岛展示）。
+                    Task {
+                        await activityManager.pushLatestIfRunning()
+                        liveActivityLastResult = diagnostics.latest(for: .liveActivity)
+                    }
                 }
 
                 // D-2：气压单位独立设置（原版「温度/风速/气压」三档独立；走共享容器，Widget 同步）。
@@ -266,6 +276,11 @@ struct SettingsView: View {
                 }
                 .onChange(of: pressureUnit) { _, newValue in
                     UnitPreference.setPressureUnit(newValue)
+                    // 切单位：重推当前天气（温度符号随偏好变化，需刷新灵动岛展示）。
+                    Task {
+                        await activityManager.pushLatestIfRunning()
+                        liveActivityLastResult = diagnostics.latest(for: .liveActivity)
+                    }
                 }
             }
 
@@ -406,8 +421,10 @@ struct SettingsView: View {
 
     /// 实时活动开关变更（副作用出口走注入的 WeatherActivityManager）。
     ///
-    /// 开启：城市名/天气文案本页拿不到（未接线），如实传 nil —— **绝不填伪数据**；
-    /// 更新时间取本页已有的 `lastUpdated`（真实数据，按选中城市时区格式化）。
+    /// 开启：先用空 ContentState 启动活动（本页拿不到城市/天气文案，如实传 nil，
+    /// **绝不填伪数据**；更新时间取本页已有的 `lastUpdated`）；启动成功后立刻调用
+    /// `pushLatestIfRunning` 把**已缓存的当前天气**补推进去 —— 这样「开了开关」这个
+    /// 动作本身就能拿到数据，而不是被动等下一次取数（否则灵动岛会一直空着）。
     /// 失败：开关回滚到设备事实（偏好未被写入）+ 展示红色短句；绝不重试。
     /// 关闭：结束活动并清空引用。
     ///
@@ -415,17 +432,25 @@ struct SettingsView: View {
     private func toggleLiveActivity(_ enabled: Bool) {
         Task { @MainActor in
             if enabled {
-                let message = await activityManager.start(cityName: nil,
-                                                          conditionText: nil,
-                                                          updatedAtText: updatedAtText())
-                liveActivityErrorMessage = message
+                let startMessage = await activityManager.start(cityName: nil,
+                                                              conditionText: nil,
+                                                              updatedAtText: updatedAtText())
+                if let startMessage {
+                    // 启动本身失败（能力未开 / 系统拒绝）：如实展示短句，开关回滚。
+                    liveActivityErrorMessage = startMessage
+                } else {
+                    // 启动成功：立刻把当前已缓存的天气推进去（若已有取数结果），
+                    // 否则灵动岛会一直空着。无数据则 pushLatestIfRunning 给出提示。
+                    let pushMessage = await activityManager.pushLatestIfRunning()
+                    liveActivityErrorMessage = pushMessage
+                }
                 // 设备事实优先：启动失败时回滚开关（管理器未写偏好）。
                 liveActivityEnabled = activityManager.isEnabled
             } else {
                 await activityManager.end()
                 liveActivityErrorMessage = nil
             }
-            // 刷新持久记录行（启动失败会带上 domain + code 留在这一行）。
+            // 刷新持久记录行（启动/更新结果会带上「字段非空 X/4」留在这一行）。
             liveActivityLastResult = diagnostics.latest(for: .liveActivity)
         }
     }

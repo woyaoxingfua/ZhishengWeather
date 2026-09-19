@@ -66,6 +66,12 @@ final class WeatherActivityManager {
     /// 结束成功的记录文案（**只**进诊断记录）。
     static let endSucceededMessage: String = "实时活动已结束"
 
+    /// 开关已开、但管理器尚未缓存到任何取数结果时，主动补推的提示文案。
+    ///
+    /// 成因：用户开了开关、App 却还没成功取过数（无网冷启动等）——此时活动
+    /// 已启动但没有任何真实数据可推，必须如实告知，而不是假装「已更新」。
+    static let noDataToPushMessage: String = "尚无天气数据，无法推送"
+
     /// 启动/更新失败的面向用户短句：**带上 NSError 的 domain + code**。
     ///
     /// 为什么必须带 domain/code（与 `AppIconSwitcher.failureMessage(for:)`
@@ -94,6 +100,14 @@ final class WeatherActivityManager {
     /// ⚠️ 生命周期限制：App 被杀后本引用丢失。冷启动后若用户直接关开关，
     /// `end()` 会走「向系统查询本类型的在跑活动」的兜底路径补结束。
     private var currentActivity: Activity<WeatherActivityAttributes>?
+
+    /// 最近一次取数结果（快照 + 城市），由 `update(from:city:)` 每次成功取数时缓存。
+    ///
+    /// 用途：开关打开 / 切单位 / 回到前台等时机，若已有在跑活动但还没有被
+    /// `update` 喂过数据，就用这份缓存把当前天气**主动补推**一次，避免活动长期空态
+    /// （灵动岛一直显示「— / 暂无数据」）。仅缓存、**绝不**在此处编造数据。
+    /// 与 `currentActivity` 同为进程内引用：App 被杀后清空，下次取数再填。
+    private var latestSnapshot: (snapshot: WeatherSnapshot, city: City)?
 
     /// - Parameters:
     ///   - settings: 开关持久化（默认 App 本地 standard）。
@@ -182,10 +196,16 @@ final class WeatherActivityManager {
             // 系统接受后才落偏好，保证「开关显示已开」==「设备上真有活动」。
             settings.setEnabled(true)
             // 成功同样留痕：与失败成对出现，才能判定「这次行 / 从来没行过」。
+            // 附「字段非空 X/4」：开关刚开时通常只带 updatedAtText，能一眼看出
+            // 「活动已起、但内容几乎为空」，定位「灵动岛一直空」的成因。
+            let startCount = Self.fieldCount(cityName: cityName,
+                                             conditionText: conditionText,
+                                             temperatureText: temperatureText,
+                                             updatedAtText: updatedAtText)
             diagnostics.record(source: .liveActivity,
                                succeeded: true,
                                target: cityID,
-                               message: Self.startSucceededMessage)
+                               message: Self.startSucceededMessage + Self.fieldSummary(startCount))
             return nil
         } catch {
             // 错误绝不静默：打印 + 收敛短句给设置页展示。绝不重试。
@@ -220,6 +240,9 @@ final class WeatherActivityManager {
     func update(from snapshot: WeatherSnapshot,
                 city: City,
                 unit: UnitPreference = UnitPreference()) async -> String? {
+        // 缓存最近一次取数结果：开关打开 / 切单位 / 回到前台时靠它主动补推，
+        // 避免活动长期空态（见 `pushLatestIfRunning`）。仅缓存真实数据。
+        latestSnapshot = (snapshot, city)
         let timeZone = WeatherTimeFormatter.timeZone(for: city)
         let content = WeatherActivityContentBuilder.buildContentState(
             cityName: snapshot.location.name,
@@ -239,6 +262,10 @@ final class WeatherActivityManager {
     ///
     /// 尚未启动时**不偷偷启动** —— 返回 `notRunningMessage` 让 UI 如实告知，
     /// 「用户只点了更新、系统却冒出一个新活动」属越权副作用。
+    /// 但「在跑的活动」来源做宽：优先用本实例的内存引用；若实例引用已丢失
+    /// （App 被杀冷启、或开关由另一处同类型管理器发起），向系统查询本类型的
+    /// 在跑活动兜底补上 —— 与 `end()` 的兜底同款，确保「取数成功 → 能推进
+    /// 已在跑的活动」不依赖「恰好是同一实例拿着引用」。
     ///
     /// - Parameters: 同 `start(cityName:conditionText:temperatureText:updatedAtText:)`。
     /// - Returns: 成功为 nil；失败/未启动为面向用户的中文短句。
@@ -247,28 +274,67 @@ final class WeatherActivityManager {
                 conditionText: String?,
                 temperatureText: String? = nil,
                 updatedAtText: String? = nil) async -> String? {
-        guard let activity = currentActivity else {
-            print("[LiveActivity] 更新跳过：\(Self.notRunningMessage)")
+        let count = Self.fieldCount(cityName: cityName,
+                                   conditionText: conditionText,
+                                   temperatureText: temperatureText,
+                                   updatedAtText: updatedAtText)
+        // 解析在跑活动：内存引用优先，否则查系统兜底。
+        var activity: Activity<WeatherActivityAttributes>? = currentActivity
+        if activity == nil, settings.isEnabled {
+            activity = await Activity<WeatherActivityAttributes>.activities.first
+        }
+        guard let activity else {
+            let message = Self.notRunningMessage + Self.fieldSummary(count)
+            print("[LiveActivity] 更新跳过：\(message)")
             // 留痕（旁路）：「还没启动就点更新」是一次真实的失败尝试，
-            // 记下来才能解释设置页为什么曾出现过这条红字。
+            // 记下来才能解释设置页为什么曾出现过这条红字。附字段非空数，
+            // 一眼看出「到底是没启动，还是启动了但没内容」。
             diagnostics.record(source: .liveActivity,
                                succeeded: false,
                                target: cityName ?? WeatherActivityAttributes.unknownCityID,
-                               message: Self.notRunningMessage)
+                               message: message)
             return Self.notRunningMessage
         }
+        // 兜底查到的活动回填内存引用：后续更新不必每次都查系统。
+        currentActivity = activity
         let state = Self.contentState(cityName: cityName,
                                       temperatureText: temperatureText,
                                       conditionText: conditionText,
                                       updatedAtText: updatedAtText)
         await activity.update(using: state)
         // `Activity.update` 在 iOS 17 SDK 上是**非抛出**的 async，没有 error
-        // 出口 —— 故这里只记成功，绝不伪造失败分支。
+        // 出口 —— 故这里只记成功，绝不伪造失败分支。附字段非空数。
         diagnostics.record(source: .liveActivity,
                            succeeded: true,
                            target: activity.attributes.cityID,
-                           message: Self.updateSucceededMessage)
+                           message: Self.updateSucceededMessage + Self.fieldSummary(count))
         return nil
+    }
+
+    /// 开关已开、已有缓存取数结果时，**主动补推**一次当前天气到在跑活动。
+    ///
+    /// 触发时机（解决「开了开关却一直空」）：① 用户在设置页打开开关（见
+    /// `SettingsView.toggleLiveActivity`）；② 切温度/风速/气压单位（同一次
+    /// 取数、不同单位展示，需重推）；③ App 回到前台（若活动在跑、有缓存则补推）。
+    /// 仅「开关开着且有缓存」才推；没开（无活动）或没缓存（从未取数）都
+    /// 如实留痕，绝不凭空 start、绝不造假数据。
+    ///
+    /// - Parameter unit: 单位偏好（切单位时传最新偏好；默认生产实例）。
+    /// - Returns: 成功为 nil；无活动/无缓存为面向用户的中文短句。
+    @discardableResult
+    func pushLatestIfRunning(unit: UnitPreference = UnitPreference()) async -> String? {
+        // 开关没开 = 没有活动，无需尝试也不留痕（不是一次有意义的推送尝试）。
+        guard settings.isEnabled else { return nil }
+        guard let (snapshot, city) = latestSnapshot else {
+            // 开关开着但还没取到过数：如实告知，并在诊断里标「字段非空 0/4」。
+            let message = Self.noDataToPushMessage + Self.fieldSummary(0)
+            diagnostics.record(source: .liveActivity,
+                               succeeded: false,
+                               target: WeatherActivityAttributes.unknownCityID,
+                               message: message)
+            return Self.noDataToPushMessage
+        }
+        return await update(from: snapshot, city: city, unit: unit)
     }
 
     // MARK: - 结束
@@ -309,6 +375,28 @@ final class WeatherActivityManager {
         guard let activity = currentActivity else { return }
         await activity.end(nil, dismissalPolicy: .immediate)
         currentActivity = nil
+    }
+
+    /// 统计四个动态字段里有几个非空（用于诊断文案「字段非空 X/4」）。
+    ///
+    /// 四个字段对应 `WeatherActivityAttributes.ContentState` 的全部字段：
+    /// 城市名 / 温度 / 天气描述 / 更新时间。空态（开开关但没推进数据）即 0~1/4，
+    /// 正常取数成功后即 4/4 —— 一眼能看出「活动在跑但内容到底有没有填上」。
+    private static func fieldCount(cityName: String?,
+                                  conditionText: String?,
+                                  temperatureText: String?,
+                                  updatedAtText: String?) -> Int {
+        var count = 0
+        if cityName != nil { count += 1 }
+        if temperatureText != nil { count += 1 }
+        if conditionText != nil { count += 1 }
+        if updatedAtText != nil { count += 1 }
+        return count
+    }
+
+    /// 诊断文案后缀「（字段非空 X/4）」。
+    private static func fieldSummary(_ count: Int) -> String {
+        "（字段非空 \(count)/4）"
     }
 
     /// 组装动态内容（纯函数；字段一律可空，无数据即 nil）。
