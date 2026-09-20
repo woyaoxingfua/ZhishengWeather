@@ -135,4 +135,30 @@ final class SourceHealthTrackerTests: XCTestCase {
         // 关键：读取路径绝不覆盖写，坏字节原样保留。
         XCTAssertEqual(d.data(forKey: SourceHealthLedger.storeKey), corrupt, "坏 JSON 读取不得覆盖写")
     }
+
+    /// **防"坏账本在下一次写入时被静默销毁"**（P2 复盘修复的中危缺陷）。
+    ///
+    /// `loadAll()` 只保证"读不写"，但损坏的账本一旦被**下一次任何源的写入整体覆盖**，
+    /// 其余源的历史健康数据就**静默消失**了 —— 读的时候好不容易保住了，写的时候又丢。
+    /// 现在 `saveAll` 在覆盖前把**不可解析**的现存字节留档到
+    /// `storeKey + quarantineKeySuffix`，让这次丢失**可追溯**而非无声发生。
+    func testCorruptLedgerIsQuarantinedBeforeOverwrite() throws {
+        let d = try XCTUnwrap(defaults)
+        let corrupt = Data("garbage".utf8)
+        d.set(corrupt, forKey: SourceHealthLedger.storeKey)
+
+        let ledger = SourceHealthLedger(defaults: d)
+        // 模拟某个源报了一次成功 → 触发一次全量保存。
+        ledger.saveAll([.sunriseSunset: SourceHealthLedger.Entry(lastSuccessAt: Date(),
+                                                                 consecutiveMissing: 0,
+                                                                 cooldownUntil: nil,
+                                                                 todayUsageCount: 1)])
+
+        let quarantineKey = SourceHealthLedger.storeKey + SourceHealthLedger.quarantineKeySuffix
+        XCTAssertEqual(d.data(forKey: quarantineKey), corrupt,
+                       "坏字节必须在被覆盖前留档，否则历史数据静默消失")
+        XCTAssertNotEqual(d.data(forKey: SourceHealthLedger.storeKey), corrupt,
+                          "主键应已写入新账本")
+        XCTAssertEqual(ledger.loadAll().count, 1, "新账本可正常读回一个源")
+    }
 }

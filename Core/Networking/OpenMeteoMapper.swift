@@ -96,6 +96,16 @@ enum OpenMeteoMapper {
                     time: Date(timeIntervalSince1970: TimeInterval(hourly.time[index])),
                     temperature: temperature,
                     weatherCode: weatherCode,
+                    // ⚠️ 哑火线修复（P2 复盘）：本行此前**漏传** `precipitationProbability`，
+                    // 而该属性有默认值 `nil`，于是**编译通过、静默失效**：
+                    //   · `HourlyStrip` 的逐时概率行恒显示 "--"（D-A1 整条形同虚设）；
+                    //   · `WeatherSummaryEngine.rainSummary` 的输入恒为 nil → 摘要永不触发。
+                    // 经 git 史核对：**P2 之前那版同样漏传**，故这不是 P2 的回归，
+                    // 而是 A2-2 上线时就存在的哑火线（字段/请求/模型都齐，唯独 mapper 没接）。
+                    // 纪律：新增可选字段时，**必须**核对 mapper 是否真的赋值 ——
+                    // 有默认值的属性不会因漏传而编译失败，只能靠"接线的单测"兜住。
+                    precipitationProbability: optionalDouble(hourly.precipitation_probability,
+                                                             at: index),
                     // P2 数据补全：逐时新增四字段均为可选，元素 null → nil，绝不补 0
                     //（0 是合法降水/风速值，原样保留；只有 null 才转 nil，AC-A5）。
                     precipitation: optionalDouble(hourly.precipitation, at: index),

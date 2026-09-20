@@ -47,25 +47,70 @@ enum SunriseSunsetMapper {
 
     // MARK: - Private
 
-    /// 把 "2026-09-19T21:58:29+00:00" 这类带偏移的 ISO 串，剥离偏移后以 UTC
-    /// 解释墙钟，得到绝对时刻（复用 ISOTimeStringDecoder，符合 AD-5 时间归一纪律）。
+    /// 把 "2026-09-19T21:58:29+00:00" 这类带偏移的 ISO 串解析为**绝对时刻**。
     ///
-    /// - Parameter string: ISO 时间串（末尾可能带 +HH:MM / -HH:MM / Z 偏移）。
-    /// - Returns: 解析出的绝对时刻；格式不符 → nil。
+    /// ⚠️ **P2 复盘修复（潜在的"静默差 5 小时"）**：原实现把**任意**偏移后缀剥掉后
+    /// 一律以 `utcOffsetSeconds: 0` 解释墙钟。这在 `+00:00`（本源实测形态）下正确，
+    /// 但若服务端改为返回 `-05:00`，得到的绝对时刻会**静默偏移 5 小时**——
+    /// 不报错、不崩、现有单测也不会红（因为期望值若也按同一错法推导就自证了）。
+    /// 现改为：**按串里真实的偏移解释**；偏移存在但解析不出来 → 返回 nil（**宁缺不猜**）。
+    ///
+    /// - Parameter string: ISO 时间串（末尾可能带 +HH:MM / -HH:MM / +HHMM / Z 偏移）。
+    /// - Returns: 解析出的绝对时刻；格式不符或偏移不可解析 → nil。
     private static func absoluteDate(from string: String) -> Date? {
         guard let tRange = string.range(of: "T") else { return nil }
         let afterT = string[tRange.upperBound...]
 
         // 偏移段在 T 之后（如 +00:00 / -05:00 / Z）；日期段的 '-' 在 T 之前，不受影响。
-        if let offsetIndex = afterT.firstIndex(where: { $0 == "+" || $0 == "-" || $0 == "Z" || $0 == "z" }) {
-            let timePart = String(afterT[..<offsetIndex])          // "21:58:29"
-            let datePart = String(string[..<tRange.lowerBound])     // "2026-09-19"
-            let wallClock = datePart + "T" + timePart               // "2026-09-19T21:58:29"
-            // sunrise-sunset.org 恒返回 UTC（tzid="UTC"）→ 以 utcOffsetSeconds:0 解释墙钟。
-            return ISOTimeStringDecoder.date(from: wallClock, utcOffsetSeconds: 0)
+        guard let offsetIndex = afterT.firstIndex(where: {
+            $0 == "+" || $0 == "-" || $0 == "Z" || $0 == "z"
+        }) else {
+            // 无偏移（纯 "2026-09-19T21:58:29"）→ 本源文档口径为 UTC，按 UTC 解释。
+            return ISOTimeStringDecoder.date(from: string, utcOffsetSeconds: 0)
         }
 
-        // 无偏移（纯 "2026-09-19T21:58:29"）→ 同样按 UTC 解释。
-        return ISOTimeStringDecoder.date(from: string, utcOffsetSeconds: 0)
+        let timePart = String(afterT[..<offsetIndex])          // "21:58:29"
+        let datePart = String(string[..<tRange.lowerBound])     // "2026-09-19"
+        let wallClock = datePart + "T" + timePart               // "2026-09-19T21:58:29"
+        let offsetText = String(afterT[offsetIndex...])         // "+00:00" / "Z" / "-05:00"
+
+        guard let offsetSeconds = parseOffsetSeconds(offsetText) else { return nil }
+        return ISOTimeStringDecoder.date(from: wallClock, utcOffsetSeconds: offsetSeconds)
+    }
+
+    /// 解析偏移串 → 秒。
+    ///
+    /// 接受 `Z` / `z`（= 0）、`+HH:MM`、`-HH:MM`、`+HHMM`、`+HH`。
+    /// **不可解析 → nil**（由调用方收敛为"该字段缺失"），绝不假定为 UTC。
+    private static func parseOffsetSeconds(_ text: String) -> Int? {
+        if text == "Z" || text == "z" { return 0 }
+        guard let sign = text.first, sign == "+" || sign == "-" else { return nil }
+        let body = text.dropFirst()
+        let parts = body.split(separator: ":", omittingEmptySubsequences: false)
+
+        var hours: Int?
+        var minutes: Int?
+        switch parts.count {
+        case 1:
+            let digits = String(parts[0])
+            if digits.count == 4 {
+                hours = Int(digits.prefix(2))
+                minutes = Int(digits.suffix(2))
+            } else if digits.count == 2 {
+                hours = Int(digits)
+                minutes = 0
+            } else {
+                return nil
+            }
+        case 2:
+            hours = Int(parts[0])
+            minutes = Int(parts[1])
+        default:
+            return nil
+        }
+
+        guard let h = hours, let m = minutes, h >= 0, h <= 14, m >= 0, m < 60 else { return nil }
+        let total = h * 3600 + m * 60
+        return sign == "-" ? -total : total
     }
 }

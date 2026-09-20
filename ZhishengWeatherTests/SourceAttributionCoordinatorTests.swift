@@ -80,15 +80,25 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
         XCTAssertFalse(c.attribution.hasFieldFallback, "主源有值则无字段级降级")
     }
 
-    /// 主源只给 sunrise、备源补齐 solarNoon → 标记字段级降级（L2 标注依据）。
+    /// 主源缺 `sunset`、备源真的把它补上 → 标记字段级降级（L2 标注依据）。
+    ///
+    /// ⚠️ 本用例的取数场景在 P2 复盘时**被改写过**：原版本的桩只提供
+    /// `sunrise` + `solarNoon`（不提供 `sunset`），却断言 `hasFieldFallback == true`。
+    /// 那是照着**有缺陷的语义**写的 —— 旧实现把"备源提供了主源从不提供的字段
+    /// （solarNoon / daylightDuration）"也算作降级，于是 `hasFieldFallback` **恒为 true**、
+    /// 页脚**恒定**谎称「主源不可用」。修正后：降级的判据是
+    /// "**主源本应提供却缺失**的字段由备源顶上"。
+    /// 因此本用例改成让备源**真的补上主源缺失的 `sunset`** —— 这才叫降级。
     @MainActor
     func testAuxiliaryFillsMissingFieldAndRecordsFallback() async {
         let (tracker, prefs, store) = makeHarness(suiteName: "coord.test.2")
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let pSun = Date(timeIntervalSince1970: 1_000_000)
+        let auxSet = Date(timeIntervalSince1970: 1_100_000)
         let auxNoon = Date(timeIntervalSince1970: 1_050_000)
         let stub = StubFieldSource(patch: FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
-                                                     sunrise: pSun, solarNoon: auxNoon))
+                                                     sunrise: pSun, sunset: auxSet,
+                                                     solarNoon: auxNoon))
         let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
                         timeZoneIdentifier: "Asia/Shanghai")
 
@@ -99,9 +109,48 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
                         now: now)
 
         XCTAssertEqual(c.solarOverlay?.sunrise, pSun, "主源 sunrise 保留")
+        XCTAssertEqual(c.solarOverlay?.sunset, auxSet, "备源补齐主源缺失的 sunset")
         XCTAssertEqual(c.solarOverlay?.solarNoon, auxNoon, "备源 solarNoon 补齐")
-        XCTAssertTrue(c.attribution.hasFieldFallback, "字段级降级应被标记")
+        XCTAssertTrue(c.attribution.hasFieldFallback, "主源本应提供却缺失的字段被顶上 → 判为降级")
         XCTAssertEqual(c.solarProvenance?[.solarNoon]?.kind, .fallback, "solarNoon 来源应为 fallback")
+    }
+
+    /// **防"谎称主源不可用"复发**（P2 复盘修复的屏幕级缺陷）。
+    ///
+    /// 旧实现下这条必红：`primaryPatch` 把 `solarNoon` / `daylightDuration` 写死 nil，
+    /// 而备源**永远**返回这两个字段 → `degradedFields` 恒非空 → `hasFieldFallback` 恒 true
+    /// → 页脚**恒定**显示「主源不可用，当前数据来自 sunrise-sunset.org（备源）」，
+    /// 即使主源一切正常。即 App 一直对用户**说假话**。
+    ///
+    /// 正确语义：`solarNoon` / `daylightDuration` 是主源**从不提供**的字段，
+    /// 由辅助源作为**指定提供方**给出 —— 那不是降级，**不得**触发 L2 文案。
+    @MainActor
+    func testAuxOnlyFieldsDoNotClaimPrimaryUnavailable() async {
+        let (tracker, prefs, store) = makeHarness(suiteName: "coord.test.4")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let pSun = Date(timeIntervalSince1970: 1_000_000)
+        let pSet = Date(timeIntervalSince1970: 1_100_000)
+        // 主源 sunrise / sunset **齐全**；备源只额外提供 solarNoon + daylightDuration。
+        let stub = StubFieldSource(patch: FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
+                                                     sunrise: pSun, sunset: pSet,
+                                                     solarNoon: Date(timeIntervalSince1970: 1_050_000),
+                                                     daylightDuration: 43_000))
+        let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
+                        timeZoneIdentifier: "Asia/Shanghai")
+
+        let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
+                        now: now)
+
+        XCTAssertFalse(c.attribution.hasFieldFallback,
+                       "主源 sunrise/sunset 齐全时，备源补 solarNoon/daylightDuration **不算降级**；"
+                       + "为 true 会让页脚谎称主源不可用")
+        XCTAssertEqual(c.solarOverlay?.sunrise, pSun, "主源值不变")
+        XCTAssertEqual(c.solarOverlay?.sunset, pSet, "主源值不变")
+        XCTAssertEqual(c.solarOverlay?.solarNoon, Date(timeIntervalSince1970: 1_050_000),
+                       "备源的指定字段仍然照常上屏")
     }
 
     /// 城市时区未知 → 不补值、不退回设备时区（诚实红线 §3.5）。

@@ -127,10 +127,21 @@ struct HistoricalWeatherView: View {
             }
             .frame(height: 6)
 
-            Text(temperatureText(day))
-                .font(.system(size: Theme.FontSize.caption, weight: .semibold))
-                .foregroundStyle(Theme.primaryText)
-                .frame(width: 76, alignment: .trailing)
+            // 温度 + 日降水合计（P2 补渲染）：模型 `HistoricalDay.precipitationSum` 与
+            // 请求面早就有值，但页面上从未有落点（本函数头部注释写了"降水量"却一直没画）。
+            // **竖排**而非再加一列：本行已有 日期(80) + 图标(16) + 条形(flex)，375pt 窄屏
+            // 再加固定列会挤压条形（AC-A3 同款布局纪律）。
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(temperatureText(day))
+                    .font(.system(size: Theme.FontSize.caption, weight: .semibold))
+                    .foregroundStyle(Theme.primaryText)
+                Text(precipitationText(day))
+                    .font(.system(size: Theme.FontSize.caption))
+                    .foregroundStyle(day.precipitationSum == nil
+                                     ? Theme.secondaryText
+                                     : Theme.accentSecondary)
+            }
+            .frame(width: 76, alignment: .trailing)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 12)
@@ -157,6 +168,15 @@ struct HistoricalWeatherView: View {
         let high = day.tempMax.map { Int($0.rounded()) }.map(String.init) ?? "--"
         let low = day.tempMin.map { Int($0.rounded()) }.map(String.init) ?? "--"
         return "\(high)° / \(low)°"
+    }
+
+    /// 日降水合计（mm）。走共享纯格式化器（同类量单一入口，避免又一份内联 `String(format:)`）。
+    ///
+    /// 诚实纪律：`nil` → `--`（**绝不显示 0**）；`0.0 mm` 是合法值（"那天没下雨"），
+    /// 由格式化器如实呈现，**不隐藏**、不冒充缺失。
+    private func precipitationText(_ day: HistoricalDay) -> String {
+        guard let sum = day.precipitationSum else { return "--" }
+        return PrecipitationFormatter.text(fromMillimeters: sum)
     }
 
     // MARK: - 加载

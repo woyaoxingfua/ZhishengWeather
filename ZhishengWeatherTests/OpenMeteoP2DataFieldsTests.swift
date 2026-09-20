@@ -207,6 +207,56 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
     /// 解码一份内联 JSON；hourly 数组元素可为 null（真机截断日形态）。
     /// - currentExtra：拼在 current 对象末尾的额外键值（带前导逗号），用于注入 P2 实况字段。
     /// - hourlyPrecipitation：注入 hourly.precipitation（末尾 null 容忍用例）。
+    // MARK: - 5. 接线守卫：请求面字段必须真的落到 HourlyPoint（防"哑火线"复发）
+
+    /// ⚠️ 本用例锚的是一类**编译器抓不到**的缺陷：`HourlyPoint` 的可选属性**有默认值 `nil`**，
+    /// 于是 mapper 里**漏传**某个实参时**照样编译通过、照样全绿**，只是那个字段永远为 nil。
+    ///
+    /// **真实事故（P2 复盘发现）**：`precipitationProbability` 自 A2-2 起**从未**被 mapper 赋值
+    /// （经 git 史核对，P2 之前那版同样漏传）。后果是双重的：
+    /// `HourlyStrip` 的逐时概率行恒显示 `--`、`WeatherSummaryEngine.rainSummary` 永不触发。
+    /// 而 DTO 测试与 mapper 测试**都发现不了** —— 前者只测解码、后者只测它自己断言的那几个字段。
+    /// 这正是本仓库"CI 全绿 ≠ 正确"的又一次实例。
+    ///
+    /// 因此本用例对**请求面里的每一个逐时可选字段**逐个断言"确实落到了点上"。
+    /// 将来新增逐时字段时**必须**同步往下面加一行断言 —— 漏加不会让本用例变红，
+    /// 但会让"字段已请求却不上屏"重新变得不可见，故请一并更新。
+    func testHourlyFieldsActuallyReachHourlyPoint() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": \(baseEpoch), "temperature_2m": 19.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 18.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 90.0, "is_day": 1 },
+          "hourly": { "time": [\(baseEpoch)],
+                      "temperature_2m": [20.0],
+                      "weather_code": [1],
+                      "precipitation_probability": [42.0],
+                      "precipitation": [1.5],
+                      "wind_speed_10m": [3.25],
+                      "wind_gusts_10m": [7.75],
+                      "apparent_temperature": [18.5] }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto,
+                                          location: .beijing,
+                                          now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
+        let point = try XCTUnwrap(snapshot.hourly.first)
+
+        XCTAssertEqual(try XCTUnwrap(point.precipitationProbability), 42.0, accuracy: 1e-9,
+                       "逐时降水概率必须由 mapper 赋值（历史上这条哑火过，见本用例注释）")
+        XCTAssertEqual(try XCTUnwrap(point.precipitation), 1.5, accuracy: 1e-9,
+                       "逐时降水量必须由 mapper 赋值")
+        XCTAssertEqual(try XCTUnwrap(point.windSpeed), 3.25, accuracy: 1e-9,
+                       "逐时风速必须由 mapper 赋值")
+        XCTAssertEqual(try XCTUnwrap(point.windGusts), 7.75, accuracy: 1e-9,
+                       "逐时阵风必须由 mapper 赋值")
+        XCTAssertEqual(try XCTUnwrap(point.apparentTemperature), 18.5, accuracy: 1e-9,
+                       "逐时体感必须由 mapper 赋值")
+    }
+
     private func decodeResponse(hourlyTimes: [Int],
                                 hourlyTemps: [Double?],
                                 hourlyCodes: [Int?],

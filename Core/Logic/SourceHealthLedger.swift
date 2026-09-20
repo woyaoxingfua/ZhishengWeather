@@ -21,7 +21,7 @@ import Foundation
 struct SourceHealthLedger: Sendable {
 
     /// 单源健康条目（可选字段 + 默认值，合成 Codable）。
-    struct Entry: Codable, Sendable {
+    struct Entry: Codable, Sendable, Equatable {
         var lastSuccessAt: Date? = nil
         var consecutiveMissing: Int = 0
         var cooldownUntil: Date? = nil
@@ -30,6 +30,16 @@ struct SourceHealthLedger: Sendable {
 
     /// 持久化键（internal，供单测写入坏字节验证「不覆盖写」）。
     static let storeKey = "zs.sourceHealthLedger.v1"
+
+    /// 坏账本留档键后缀。
+    ///
+    /// 为什么需要它：`loadAll()` 的契约是"坏 JSON → 空账本且**不写回**"，这条守住了
+    /// 「读取不销毁数据」。但**写入路径**仍然会踩同一个坑——一旦账本字节损坏，
+    /// 下一次任何源的 `recordSuccess` 都会用一个只含单个源的账本**整体覆盖**，
+    /// 于是其余源的历史健康数据被**静默销毁**（读取时明明保住了，写入时又丢）。
+    /// 因此 `saveAll` 在覆盖前先把不可解析的现存字节留档到此键，
+    /// 让"丢"这件事**可追溯**而不是无声发生。
+    static let quarantineKeySuffix = ".corrupt"
 
     private let defaults: UserDefaults
     private let key: String
@@ -59,12 +69,20 @@ struct SourceHealthLedger: Sendable {
     /// 全量保存。
     ///
     /// 编码失败（极少见）→ 静默忽略，不破坏既有账本。
+    ///
+    /// 覆盖写之前先把**不可解析**的现存字节留档到 `key + quarantineKeySuffix`：
+    /// `loadAll()` 只保证"读不写"，但损坏的账本一旦被下一次写入整体覆盖，
+    /// 其余源的历史就**静默消失**了。留档让这次丢失**可追溯**。
     func saveAll(_ ledger: [SourceID: Entry]) {
         var raw: [String: Entry] = [:]
         for (id, entry) in ledger {
             raw[id.rawValue] = entry
         }
         guard let data = try? JSONEncoder().encode(raw) else { return }
+        if let existing = defaults.data(forKey: key),
+           (try? JSONDecoder().decode([String: Entry].self, from: existing)) == nil {
+            defaults.set(existing, forKey: key + Self.quarantineKeySuffix)
+        }
         defaults.set(data, forKey: key)
     }
 }
