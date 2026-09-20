@@ -50,6 +50,14 @@ struct SolarDivergence: Equatable, Sendable {
 final class SourceAttributionCoordinator: ObservableObject {
 
     /// 合并后的 solar 字段覆盖层（只装辅助源真正补上的字段；缺失字段完全退回主快照值）。
+    ///
+    /// ⚠️ T10 后本属性**按能力泛化**：`handledCapabilities` 里的任何能力所产出的字段
+    /// 都会进这里（名字里的 "solar" 是历史遗留）。当前**唯一消费者**是 `DaylightCard`，
+    /// 它只读 solar 字段；MET Norway 的数值字段进来后**没有任何视图读取**。
+    /// 若将来要上屏 MET 的数值或做对比 UI：请把这个覆盖层按能力拆开（或改名），
+    /// 并同步收紧下面「只在辅助源真的贡献了字段时才发布」那条判据 ——
+    /// 否则纯数值源一旦成功，会把**调用当刻**的主源 solar 值一并发布出去，
+    /// 顶掉 `DaylightCard` 本可退回的**更新**快照值（跨日场景下这就是旧值锁定）。
     @Published private(set) var solarOverlay: FieldPatch?
     /// 逐字段来源图（L2 标注依据）。
     @Published private(set) var solarProvenance: FieldProvenanceMap?
@@ -90,13 +98,23 @@ final class SourceAttributionCoordinator: ObservableObject {
     /// 顶上时页脚会**漏标**降级。**不要**把它改成对某个源 id 的写死判断。
     static let primarySolarDeclaredFields: Set<WeatherFieldKey> = [.sunrise, .sunset]
 
-    /// 本协调器负责的能力面（当前仅 solar 覆盖层）。
+    /// 本协调器负责的能力面（取数 + 逐字段合并 + EV-1/EV-3 健康判定）。
     ///
     /// 源是否进入本协调器、以及向它请求哪些能力，都由此集合与
-    /// `source.capabilities` 求交**派生** —— 不再写死任何一个源 id。
-    /// 将来本类要覆盖第二个能力面（如空气质量 overlay）时，在此登记并接线渲染即可，
-    /// 声明了该能力的辅助源会**自动**被纳入取数与 EV-1 判定。
-    static let handledCapabilities: Set<SourceCapability> = [.solarEvents]
+    /// `source.capabilities` 求交**派生** —— 不写死任何一个源 id。
+    ///
+    /// ⚠️ **接入一个新辅助源时，必须把它的能力登记在这里**：漏登记 → 该源
+    /// **根本不会被拉取**（`for source in sources where !source.capabilities
+    /// .isDisjoint(with: Self.handledCapabilities)` 直接把它筛掉）→ 它的
+    /// `lastSuccessAt` / 今日用量永远为空、EV-1 永不触发，设置页却把它显示成
+    /// 一行"备用"的正常源 —— 这就是本仓库反复出现的**静默哑火**位置。
+    ///
+    /// 当前两项：
+    /// - `.solarEvents`：日出/日落覆盖层（`DaylightCard` 逐字段叠加，唯一有消费者的能力面）；
+    /// - `.basicNumericFields`：MET Norway 的温/压/湿/云/风。本轮**只**参与
+    ///   「逐字段降级链 + 多源管理状态行」，**没有**上屏消费者
+    ///   （对比/诊断 UI 属后续批次）—— 故这些值进入 overlay 后无任何视图读取。
+    static let handledCapabilities: Set<SourceCapability> = [.solarEvents, .basicNumericFields]
 
     /// 按城市拉取辅助源并逐字段合并（输入 = 坐标 + 主源 solar + 注入 now）。
     ///

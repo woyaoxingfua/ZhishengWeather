@@ -23,11 +23,11 @@ import Foundation
 /// 多源组装点。
 enum SourceComposition {
 
-    /// 本轮组装：一个能力型辅助源（sunrise-sunset）。
+    /// 本轮组装：两个能力型辅助源（solarEvents + basicNumericFields）。
     ///
     /// - Returns: 辅助源列表（装进注册表 / 协调器）。
     static func makeAuxiliarySources() -> [any FieldSupplying] {
-        [SunriseSunsetService()]
+        [SunriseSunsetService(), METNorwayService()]
     }
 
     /// 构造按能力查找的注册表（主源不在 FieldSupplying 体系，此处仅列辅助源）。

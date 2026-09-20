@@ -22,4 +22,9 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
     case ensemble
     case geocoding
     case solarEvents             // 日出/日落/昼长/太阳正午 ← 第二源只需这一项
+    case basicNumericFields      // 基础数值标量：温/压/湿/云量/风速/风向
+                                 // ← 第三源 MET Norway（compact）只声明这一项。
+                                 //   单列一个 case 而不复用 `.currentObservation`：
+                                 //   `.currentObservation` 隐含体感温度 / 天气码 / 降水等
+                                 //   本轮并不提供 → 复用会**虚报能力**（下游按能力寻址时会误信）。
 }

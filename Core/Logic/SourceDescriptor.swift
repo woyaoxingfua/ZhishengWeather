@@ -95,6 +95,23 @@ enum SourceDirectory {
                          capabilities: [.solarEvents],
                          requiredFields: [.sunrise, .sunset, .daylightDuration],
                          needsCredential: false,
+                         participatesInAutoExclusion: true),
+
+        // 第三源：MET Norway（api.met.no locationforecast compact）。
+        // 免 Key / 免账号，且是**与 Open-Meteo 不同的数值模式**。
+        // ⚠️ `requiredFields` 必须**恰好**等于 `METNorwayMapper` 会写入的字段集合：
+        //    · 多写一个 mapper 拿不到的字段（例如 `.windGust`，compact 端点无此字段）
+        //      → 本源连续 3 次被判缺字段 → **EV-1 误摘**（设置页显示成"对端故障"，
+        //      实际是本地声明写错，且完全静默）；
+        //    · 少写一个 mapper 真的写了的字段 → 该字段**永不参与 EV-1**（守卫哑火）。
+        //    两侧对齐由 `METNorwayTests.testFullResponseCoversEveryRequiredField` 钉住。
+        SourceDescriptor(id: .metNorwayForecast,
+                         displayName: "MET Norway",
+                         role: .auxiliary,
+                         capabilities: [.basicNumericFields],
+                         requiredFields: [.temperature, .pressure, .humidity,
+                                          .cloudCover, .windSpeed, .windDirection],
+                         needsCredential: false,
                          participatesInAutoExclusion: true)
     ]
 

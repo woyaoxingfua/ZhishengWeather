@@ -30,6 +30,10 @@ enum SourceID: String, CaseIterable, Sendable {
     case openMeteoAirQuality = "open-meteo-air-quality"
     /// 第二源：日出日落（仅补 solarEvents 能力字段）。
     case sunriseSunset = "sunrise-sunset"
+    /// 第三源：MET Norway（api.met.no locationforecast compact，免 Key）
+    /// —— 仅补**基础数值字段**（温 / 压 / 湿 / 云 / 风），且是**不同的数值模式**
+    /// （与 Open-Meteo 交叉校验才有意义）。
+    case metNorwayForecast = "met-norway-forecast"
 }
 
 // MARK: - Codable
