@@ -87,9 +87,16 @@ jobs:
             exit 0
           fi
           # 抽取编译错误与失败断言；每行一条注解（% 需转义为 %25）。
+          #
+          # ⚠️ 截断**必须**用 `awk 'NR<=40'`，**不能**用 `head -40`：
+          # 本 step 在 `set -o pipefail` 下运行，而 `head` 读满 40 行就关闭管道，
+          # 上游 `grep`/`sed` 随即收到 SIGPIPE、以 141 退出，pipefail 会把整条管道
+          # 判为失败 → **这个"报告失败"的步骤自己失败**，反而掩盖真正的测试失败。
+          # `awk 'NR<=40'` 会把输入读完、只打印前 40 行，因此不产生 SIGPIPE。
+          # 日志短时侥幸能过、日志一长就崩，是这类缺陷最典型的表现（QA 静态检查 SC-23）。
           grep -aE "error:|XCTAssert[A-Za-z]* failed|failed - |TEST FAILED" "$LOG" \
             | sed -e 's/\r$//' \
-            | head -40 \
+            | awk 'NR<=40' \
             | while IFS= read -r line; do
                 escaped=$(printf '%s' "$line" | sed 's/%/%25/g')
                 echo "::error::$escaped"
