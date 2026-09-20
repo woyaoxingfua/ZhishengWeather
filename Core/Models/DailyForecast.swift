@@ -65,4 +65,54 @@ struct DailyForecast: Codable, Equatable, Identifiable, Sendable {
 
     /// 以日期作为稳定标识（自然日唯一）。
     var id: Date { date }
+
+    // MARK: - P2 数据补全：展开详情的展示文案（纯函数，便于单测）
+
+    /// 日降水合计文案（mm）。nil → nil（对应段不渲染）。
+    /// `0 mm` 是合法值，原样显示；只有 nil 才返回 nil（UI 显示 "--"）。
+    var precipitationSumText: String? {
+        guard let sum = precipitationSum else { return nil }
+        return "降水 \(String(format: "%.1f", sum)) mm"
+    }
+
+    /// 风摘要文案：按可用值拼接「最大风 / 阵风 / 主导风向」，中间用 " · " 连接。
+    /// 三段全 nil → nil（对应段不渲染）。主导风向经 `WindDirectionFormatter`
+    /// 转为 8 方位中文（与实况风同向算法，单一真相源）。
+    var windSummaryText: String? {
+        var parts: [String] = []
+        if let max = windSpeedMax {
+            parts.append("最大风 \(String(format: "%.1f", max)) m/s")
+        }
+        if let gust = windGustsMax {
+            parts.append("阵风 \(String(format: "%.1f", gust)) m/s")
+        }
+        if let dir = windDirectionDominant {
+            parts.append("主导风向 \(WindDirectionFormatter.text(from: dir))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 体感高低温文案：与实测高低温分列显示，不合并成一个数字。
+    /// 至少一个非 nil 才出段（某一边 nil 只显示可用的一边的温度）。
+    var apparentSummaryText: String? {
+        var parts: [String] = []
+        if let max = apparentTemperatureMax { parts.append("\(Int(max.rounded()))°") }
+        if let min = apparentTemperatureMin { parts.append("\(Int(min.rounded()))°") }
+        guard !parts.isEmpty else { return nil }
+        return "体感 " + parts.joined(separator: " / ")
+    }
+
+    /// 昼长文案（秒 → 「X 小时 Y 分」）。nil → nil（对应段不渲染）。
+    /// 与 `sunshineText` 分标签：昼长 ≠ 日照时数。
+    var daylightText: String? {
+        guard let seconds = daylightDuration else { return nil }
+        return "昼长 " + DurationFormatter.hoursMinutesText(fromSeconds: seconds)
+    }
+
+    /// 日照时数文案（秒 → 「X 小时 Y 分」）。nil → nil（对应段不渲染）。
+    /// 与 `daylightText` 分标签：日照时数 ≠ 昼长。
+    var sunshineText: String? {
+        guard let seconds = sunshineDuration else { return nil }
+        return "日照 " + DurationFormatter.hoursMinutesText(fromSeconds: seconds)
+    }
 }

@@ -116,6 +116,26 @@ struct DailyForecastRow: View {
                 detailLine(icon: "sun.max.fill",
                            text: "紫外线峰值 \(Int(uv.rounded()))")
             }
+            // P2 数据补全：日降水合计（mm；0 mm 是合法值，原样显示，绝不隐成 "--"）。
+            if let text = day.precipitationSumText {
+                detailLine(icon: "cloud.rain.fill", text: text)
+            }
+            // P2 数据补全：风（最大风 / 阵风 / 主导风向，按可用值拼接；全 nil → 不渲染）。
+            if let text = day.windSummaryText {
+                detailLine(icon: "wind", text: text)
+            }
+            // P2 数据补全：昼长与日照（秒 → X 小时 Y 分）。二者分别标注、绝不共用标签
+            // （昼长 ≠ 日照时数）；各 nil → 各段隐藏。
+            if let text = day.daylightText {
+                detailLine(icon: "sunrise.fill", text: text)
+            }
+            if let text = day.sunshineText {
+                detailLine(icon: "sun.max.fill", text: text)
+            }
+            // P2 数据补全：体感高低温（与紧凑行实测高低温分列，不合并成一个数字）。
+            if let text = day.apparentSummaryText {
+                detailLine(icon: "thermometer.medium", text: text)
+            }
         }
         .padding(.leading, dateColumnWidth + 8)
     }

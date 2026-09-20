@@ -28,6 +28,10 @@ struct HourlyStrip: View {
     /// 时间渲染时区（D-4）。默认设备时区；App 侧由 ContentView 透传
     /// `viewModel.selectedTimeZone`，小组件侧沿用默认（widget 载荷无时区，本轮不涉及）。
     var timeZone: TimeZone = .current
+    /// 是否渲染「降水概率」行（P2 数据补全，已取到未展示的补渲染）。
+    /// 默认 `true`（主屏）。列宽固定 56pt、且小组件高度受限——若某调用点高度不够，
+    /// 可改为 `false` 隐藏该行。带默认值保证既有调用点不改也能编译。
+    var showsPrecipitationProbability: Bool = true
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -62,6 +66,23 @@ struct HourlyStrip: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.primaryText)
                 .lineLimit(1)
+
+            // P2 数据补全：已取到未展示的补渲染——逐时降水概率。
+            // nil（服务端未返回 / 元素 null / 旧缓存）→ 显示 "--"，绝不显示 0%；
+            // 概率 ≥ 50 用 accentSecondary 强调，否则 secondaryText（复用同一概率值，不另起数字）。
+            if showsPrecipitationProbability {
+                if let probability = point.precipitationProbability {
+                    Text("\(Int(probability.rounded()))%")
+                        .font(.system(size: 11))
+                        .foregroundStyle(probability >= 50 ? Theme.accentSecondary : Theme.secondaryText)
+                        .lineLimit(1)
+                } else {
+                    Text("--")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
         }
         .frame(width: columnWidth)
     }

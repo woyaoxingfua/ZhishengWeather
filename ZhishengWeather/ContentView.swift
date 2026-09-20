@@ -448,7 +448,7 @@ struct ContentView: View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                   spacing: 12) {
             MetricCell(icon: "wind",
-                       value: "\(String(format: "%.1f", UnitPreference.displayWindSpeed(ms: snapshot.windSpeed))) \(UnitPreference.windSpeedSymbol()) \(Self.windDirectionText(snapshot.windDirection))",
+                       value: "\(String(format: "%.1f", UnitPreference.displayWindSpeed(ms: snapshot.windSpeed))) \(UnitPreference.windSpeedSymbol()) \(WindDirectionFormatter.text(from: snapshot.windDirection))",
                        caption: "风速")
             MetricCell(icon: "humidity.fill",
                        value: "\(snapshot.humidity)%",
@@ -651,15 +651,6 @@ struct ContentView: View {
     private func timeText(_ date: Date) -> String {
         WeatherTimeFormatter.string(from: date, format: "HH:mm",
                                     timeZone: viewModel.selectedTimeZone)
-    }
-
-    /// 风向角度 → 8 方位中文。
-    private static func windDirectionText(_ degrees: Double) -> String {
-        let directions = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"]
-        let normalized = degrees.truncatingRemainder(dividingBy: 360)
-        let positive = normalized < 0 ? normalized + 360 : normalized
-        let index = Int((positive / 45).rounded()) % directions.count
-        return directions[index]
     }
 
     /// 气压文案：随单位偏好换算并输出符号；小数位 hPa=1 / mmHg=0 / inHg=2。
