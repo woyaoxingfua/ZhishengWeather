@@ -28,11 +28,15 @@ actor SunriseSunsetService: FieldSupplying {
     }
 
     // MARK: - DataFieldSource
+    //
+    // 四个声明面属性均为不可变 Sendable 值类型，语义上无需隔离；
+    // 加 `nonisolated` 以满足 FieldSupplying（nonisolated 协议要求），
+    // 否则 Swift 严格并发检查会拒绝「actor 隔离属性满足 nonisolated 要求」。
 
-    var id: SourceID { .sunriseSunset }
-    var displayName: String { "Sunrise-Sunset.org" }
-    var capabilities: Set<SourceCapability> { [.solarEvents] }
-    var requiredFields: Set<WeatherFieldKey> { [.sunrise, .sunset, .daylightDuration] }
+    nonisolated let id: SourceID = .sunriseSunset
+    nonisolated let displayName: String = "Sunrise-Sunset.org"
+    nonisolated let capabilities: Set<SourceCapability> = [.solarEvents]
+    nonisolated let requiredFields: Set<WeatherFieldKey> = [.sunrise, .sunset, .daylightDuration]
 
     // MARK: - FieldSupplying
 
