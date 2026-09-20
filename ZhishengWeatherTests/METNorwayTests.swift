@@ -402,4 +402,19 @@ final class METNorwayTests: XCTestCase {
         XCTAssertTrue(p.fields.isEmpty)
         XCTAssertEqual(requestCount(), 0, "未请求该能力时绝不应联网")
     }
+
+    /// MET Norway 只映射数值字段，**绝不**产出 solar 键（sunrise/sunset/solarNoon/daylightDuration）。
+    ///
+    /// 这是「overlay 不内嵌主源 solar 值」不变量的**源侧前提**：MET 作为非 solar 辅助源，
+    /// 若它意外开始产 solar 键，协调器按 provenance 过滤时这些键的 kind 会是 `.fallback`
+    /// （主源有 sunrise/sunset 时），从而把 MET 的 solar 值顶进 overlay —— 与本意相悖。
+    /// 钉死 MET 的补丁字段集恰好等于其数值 `requiredFields`，不含任何 solar 键。
+    func testMapperNeverEmitsSolarKeys() throws {
+        let p = try patch(Self.fullJSON)
+        let solarKeys: Set<WeatherFieldKey> = [.sunrise, .sunset, .solarNoon, .daylightDuration]
+        XCTAssertTrue(solarKeys.isDisjoint(with: Set(p.fields)),
+                      "MET 补丁不得含任何 solar 键，实际含：\(Set(p.fields).intersection(solarKeys))")
+        XCTAssertEqual(Set(p.fields), METNorwayService().requiredFields,
+                       "MET 补丁集必须恰好等于其数值 requiredFields")
+    }
 }

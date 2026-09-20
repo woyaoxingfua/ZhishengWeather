@@ -49,15 +49,19 @@ struct SolarDivergence: Equatable, Sendable {
 @MainActor
 final class SourceAttributionCoordinator: ObservableObject {
 
-    /// 合并后的 solar 字段覆盖层（只装辅助源真正补上的字段；缺失字段完全退回主快照值）。
+    /// 合并后的辅助源字段覆盖层（**只装辅助源真正补上的字段**，绝不内嵌主源快照值）。
     ///
-    /// ⚠️ T10 后本属性**按能力泛化**：`handledCapabilities` 里的任何能力所产出的字段
-    /// 都会进这里（名字里的 "solar" 是历史遗留）。当前**唯一消费者**是 `DaylightCard`，
-    /// 它只读 solar 字段；MET Norway 的数值字段进来后**没有任何视图读取**。
-    /// 若将来要上屏 MET 的数值或做对比 UI：请把这个覆盖层按能力拆开（或改名），
-    /// 并同步收紧下面「只在辅助源真的贡献了字段时才发布」那条判据 ——
-    /// 否则纯数值源一旦成功，会把**调用当刻**的主源 solar 值一并发布出去，
-    /// 顶掉 `DaylightCard` 本可退回的**更新**快照值（跨日场景下这就是旧值锁定）。
+    /// ⚠️ **不变量（强制）**：本属性**永不**包含 `provenance[kind] == .primary` 的字段。
+    /// 主源自带的 sunrise/sunset 之类，一律在发布前按 provenance 过滤剔除，只留辅助源
+    /// 真正贡献的字段（`kind == .fallback` / `.localEstimate`）。否则会把协调器**调用当刻**
+    /// 的主源值锁进 overlay，而协调器只由 `.task(id:城市id)` 驱动、随快照刷新**不重跑**，
+    /// 导致 `DaylightCard`（`overlay?.X ?? snapshot.X`）显示跨日陈旧值（旧值锁定）。
+    ///
+    /// T10 后本属性**按能力泛化**：`handledCapabilities` 里任何能力产出的字段都会进这里
+    /// （名字里的 "solar" 是历史遗留）。当前**唯一消费者**是 `DaylightCard`（只读 solar
+    /// 字段）；MET Norway 的数值字段进来后**没有任何视图读取** —— 这正是上述不变量的
+    /// 直接受益点：MET 成功也**不会**把主源 solar 值偷渡进 overlay。若将来要上屏 MET
+    /// 数值或做对比 UI：可把这个覆盖层按能力拆开（或改名），但**不变量不变**。
     @Published private(set) var solarOverlay: FieldPatch?
     /// 逐字段来源图（L2 标注依据）。
     @Published private(set) var solarProvenance: FieldProvenanceMap?
@@ -195,25 +199,34 @@ final class SourceAttributionCoordinator: ObservableObject {
         // 逐字段合并（纯函数：主源非 nil 绝不被覆盖、绝不平均）。
         let (merged, provenance) = FieldFallbackResolver.merge(primary: primaryPatch, auxiliary: auxiliary)
 
-        // ⚠️ 覆盖层只在**辅助源真的贡献了字段**时才发布（T10 复盘修复的陈旧回归）。
+        // ── 不变量：overlay 永不内嵌主源快照值 ──────────────────────────────
+        // `merged` 里凡 `provenance[key].kind == .primary` 的字段，都是协调器被调用当刻
+        // 从主快照取出的主源值。`DaylightCard` 的取值阶梯是 `overlay?.X ?? snapshot.X`，
+        // 而协调器只由 `ContentView` 的 `.task(id: 城市 id)` 驱动（同一城市后续快照刷新
+        // **不会**重跑它，例如跨日换了日出日落）。若把主源值塞进 overlay，它就会锁住
+        // **旧**的主源值，使 `DaylightCard` 显示过时的 sunrise/sunset（旧值锁定）。
         //
-        // 为什么不能无条件发布 `merged`：`merged` 里含**主源补丁**的 sunrise/sunset，
-        // 而主源补丁是**协调器被调用那一刻**从快照取的值。而协调器只由 `ContentView` 的
-        // `.task(id: 城市 id)` 驱动 —— **同一城市后续的快照刷新不会重跑它**
-        // （例如跨日换了日出日落）。于是 overlay 会锁住**旧的主源值**，
-        // 而 `DaylightCard` 的取值阶梯是 `overlay?.X ?? snapshot.X` → **显示旧值**。
-        // 旧实现（源全被跳过时 `overlay = nil`）没有这个问题，因为 nil 会退回**当前快照**。
+        // 故在发布前按 provenance 过滤：只保留 `kind != .primary` 的字段（即辅助源真正
+        // 补上的），主源自带项一律剔除。overlay 要么为空（→ nil，`DaylightCard` 退回
+        // **当前**快照取最新值），要么只含辅助源贡献，杜绝"假第二源"陈旧值锁定。
         //
-        // 故：辅助源一个字段都没贡献时**不发布 overlay**（置 nil），
-        // 让 `DaylightCard` 退回快照取到**当次最新**的值。阶梯等价，上屏语义不变。
-        // `auxiliary` 非空但补丁为空（例如源返回 status != OK 的空补丁）同样走此分支。
-        let auxiliaryContributed = auxiliary.contains { !$0.fields.isEmpty }
-        if auxiliaryContributed {
-            self.solarOverlay = merged
-            self.solarProvenance = provenance
-        } else {
+        // 这条过滤**统一了**原先「auxiliaryContributed 判据」与「不内嵌主源值」两处逻辑：
+        // 凡辅助源没贡献的字段（含主源自带项）都不进 overlay，无需两套判据互相打架。
+        var overlayPatch = FieldPatch(sourceID: primaryPatch.sourceID, capturedAt: now)
+        var overlayProvenance: [WeatherFieldKey: FieldProvenance] = [:]
+        for key in merged.fields {
+            guard let prov = provenance[key], prov.kind != .primary,
+                  let value = merged.value(key) else { continue }
+            overlayPatch.set(key, value)
+            overlayProvenance[key] = prov
+        }
+
+        if overlayPatch.fields.isEmpty {
             self.solarOverlay = nil
             self.solarProvenance = nil
+        } else {
+            self.solarOverlay = overlayPatch
+            self.solarProvenance = FieldProvenanceMap(map: overlayProvenance)
         }
 
         // 分歧量（主源报值 vs 辅助源报值，差异 > 60s 视为分歧，诊断用）。

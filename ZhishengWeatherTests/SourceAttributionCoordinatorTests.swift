@@ -75,8 +75,23 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
                         primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
                         now: now)
 
-        XCTAssertEqual(c.solarOverlay?.instant(.sunrise), pSun, "主源 sunrise 绝不可被备源覆盖")
-        XCTAssertEqual(c.solarOverlay?.instant(.sunset), pSet, "主源 sunset 绝不可被备源覆盖")
+        // 不变量：主源 sunrise/sunset **不得**内嵌进 overlay（否则锁旧值）。
+        // DaylightCard 取值阶梯 `overlay?.X ?? snapshot.X` 会退回**当前**主快照取到最新值。
+        XCTAssertNil(c.solarOverlay?.instant(.sunrise), "主源 sunrise 绝不内嵌进 overlay（不变量）")
+        XCTAssertNil(c.solarOverlay?.instant(.sunset), "主源 sunset 绝不内嵌进 overlay（不变量）")
+        // 等价性：overlay 为空（nil）→ 阶梯退回主快照 → 上屏值 == 主源值（无陈旧锁定）。
+        // 注：**刻意不在此断言**"DaylightCard 阶梯退回主快照取当前值"。
+        // 形如 `overlay?.X ?? pSun == pSun` 的写法是**恒真式** —— 上一行已断言该键为 nil，
+        // 于是 `??` 必然取到 pSun，这条断言**不可能失败**，等于没断言。
+        // 本仓库已因"测试没有证明力"吃过一次亏（某批测试把 case 名当 rawValue，
+        // 6 条专为钉住修复而写的用例实际保护力为零），故此类写法一律不留。
+        //
+        // 真正有分辨力的断言是上面的 `XCTAssertNil`：**只要 overlay 不含该键，
+        // 消费方的 `??` 就必然取到"当次最新"的快照值** —— 陈旧锁定被结构性地消除，
+        // 而不是靠一条看不到实情的断言"声明"它没发生。
+        // 阶梯等价性本身属 `DaylightCard` 的消费行为；协调器只收 `primarySolar`、
+        // 拿不到"更新的快照"，在协调器层构造不出有分辨力的输入，
+        // 故应放在卡片层测（或明确登记为未覆盖），不要在这里造假绿灯。
         XCTAssertNotNil(c.divergence?.sunriseDiffSeconds, "主备分歧量应被记录")
         XCTAssertFalse(c.attribution.hasFieldFallback, "主源有值则无字段级降级")
     }
@@ -110,9 +125,10 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
                         primarySolar: PrimarySolarInput(sunrise: pSun, sunset: nil),
                         now: now)
 
-        XCTAssertEqual(c.solarOverlay?.instant(.sunrise), pSun, "主源 sunrise 保留")
-        XCTAssertEqual(c.solarOverlay?.instant(.sunset), auxSet, "备源补齐主源缺失的 sunset")
-        XCTAssertEqual(c.solarOverlay?.instant(.solarNoon), auxNoon, "备源 solarNoon 补齐")
+        // 主源 sunrise 是 .primary → 不变量下不进 overlay；但 DaylightCard 退回快照仍是 pSun。
+        XCTAssertNil(c.solarOverlay?.instant(.sunrise), "主源 sunrise 不进 overlay（不变量）")
+        XCTAssertEqual(c.solarOverlay?.instant(.sunset), auxSet, "备源补齐主源缺失的 sunset（fallback，保留进 overlay）")
+        XCTAssertEqual(c.solarOverlay?.instant(.solarNoon), auxNoon, "备源 solarNoon 补齐（fallback，保留进 overlay）")
         XCTAssertTrue(c.attribution.hasFieldFallback, "主源本应提供却缺失的字段被顶上 → 判为降级")
         XCTAssertEqual(c.solarProvenance?[.solarNoon]?.kind, .fallback, "solarNoon 来源应为 fallback")
     }
@@ -150,10 +166,11 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
         XCTAssertFalse(c.attribution.hasFieldFallback,
                        "主源 sunrise/sunset 齐全时，备源补 solarNoon/daylightDuration **不算降级**；"
                        + "为 true 会让页脚谎称主源不可用")
-        XCTAssertEqual(c.solarOverlay?.instant(.sunrise), pSun, "主源值不变")
-        XCTAssertEqual(c.solarOverlay?.instant(.sunset), pSet, "主源值不变")
+        // 不变量：主源 sunrise/sunset 不进 overlay（即使主源值齐全）。
+        XCTAssertNil(c.solarOverlay?.instant(.sunrise), "主源 sunrise 不进 overlay（不变量）")
+        XCTAssertNil(c.solarOverlay?.instant(.sunset), "主源 sunset 不进 overlay（不变量）")
         XCTAssertEqual(c.solarOverlay?.instant(.solarNoon), Date(timeIntervalSince1970: 1_050_000),
-                       "备源的指定字段仍然照常上屏")
+                       "备源的指定字段仍然照常上屏（fallback，保留进 overlay）")
     }
 
     /// 城市时区未知 → 不补值、不退回设备时区（诚实红线 §3.5）。
@@ -266,5 +283,142 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
                      "被停用的源不得参与补值（停用判定必须逐源，而非写死某一源）")
         XCTAssertEqual(c.solarOverlay?.instant(.sunrise)?.timeIntervalSince1970, 100,
                        "未被停用的源照常补值")
+    }
+
+    // MARK: - 不变量：overlay 永不内嵌主源快照值（旧实现下必红）
+
+    /// **场景 1（RED under old impl）**：主源 sunrise/sunset **齐全** + 一个**非 solar** 辅助源
+    /// （MET Norway，`.basicNumericFields`）成功 → overlay **不得**含有 `.sunrise`/`.sunset`。
+    ///
+    /// 旧实现把 `merged`（含主源当刻的 sunrise/sunset）整包发布，只要任一辅助源成功就令
+    /// `auxiliaryContributed = true` → overlay 内嵌主源旧值 → 跨日陈旧锁定。本用例在旧实现下
+    /// **必红**：`c.solarOverlay?.instant(.sunrise)` 是主源值而非 nil。
+    @MainActor
+    func testOverlayExcludesPrimarySolarWhenNonSolarAuxSucceeds() async {
+        let (tracker, prefs, store) = makeHarness(suiteName: "coord.inv.nonSolar")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let pSun = Date(timeIntervalSince1970: 1_000_000)
+        let pSet = Date(timeIntervalSince1970: 1_100_000)
+        // 非 solar 辅助源（MET Norway 范式）：只出数值字段，不出 solar。
+        let met = StubFieldSource(id: .metNorwayForecast,
+                                  displayName: "MET",
+                                  capabilities: [.basicNumericFields],
+                                  requiredFields: [.temperature, .pressure, .humidity, .cloudCover, .windSpeed, .windDirection],
+                                  patch: FieldPatch(sourceID: .metNorwayForecast, capturedAt: now,
+                                                    values: [.temperature: .number(21),
+                                                             .pressure: .number(1013),
+                                                             .humidity: .number(55)]))
+        // solar 辅助源：只补它"指定提供"的 solarNoon/daylightDuration（主源从不提供）。
+        let solar = StubFieldSource(patch: FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
+                                                      values: [.solarNoon: .instant(Date(timeIntervalSince1970: 1_050_000)),
+                                                               .daylightDuration: .seconds(43_000)]))
+        let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
+                        timeZoneIdentifier: "Asia/Shanghai")
+        let c = SourceAttributionCoordinator(sources: [met, solar], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
+                        now: now)
+
+        // 不变量：主源 solar 值绝不内嵌进 overlay（旧实现会红）。
+        XCTAssertNil(c.solarOverlay?.instant(.sunrise), "主源 sunrise 绝不进 overlay（不变量，旧实现会红）")
+        XCTAssertNil(c.solarOverlay?.instant(.sunset), "主源 sunset 绝不进 overlay（不变量，旧实现会红）")
+        // 辅助源真正贡献的字段仍照常上屏。
+        XCTAssertNotNil(c.solarOverlay?.number(.temperature), "MET 提供的温度保留进 overlay")
+        XCTAssertNotNil(c.solarOverlay?.instant(.solarNoon), "solar 辅源指定字段保留进 overlay")
+    }
+
+    /// **场景 2（同场景，RED under old impl）**：上一条场景再断言 **DaylightCard 取值等价**——
+    /// overlay 不含主源 solar 键时，其取值阶梯 `overlay?.X ?? snapshot.X` 退回的正是
+    /// **当前**主快照值，无任何陈旧锁定。
+    ///
+    /// 旧实现下 overlay 内嵌主源当刻值，阶梯取到的是**调用当刻**的旧值（跨日即错）。
+    /// 本用例直接断言「overlay 项为空 → 阶梯等价主快照」这一不变量性质。
+    @MainActor
+    func testDaylightCardEquivalenceWhenOverlayExcludesPrimary() async {
+        let (tracker, prefs, store) = makeHarness(suiteName: "coord.inv.equiv")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let pSun = Date(timeIntervalSince1970: 1_000_000)
+        let pSet = Date(timeIntervalSince1970: 1_100_000)
+        let met = StubFieldSource(id: .metNorwayForecast,
+                                  displayName: "MET",
+                                  capabilities: [.basicNumericFields],
+                                  requiredFields: [.temperature],
+                                  patch: FieldPatch(sourceID: .metNorwayForecast, capturedAt: now,
+                                                    values: [.temperature: .number(21)]))
+        let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
+                        timeZoneIdentifier: "Asia/Shanghai")
+        let c = SourceAttributionCoordinator(sources: [met], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
+                        now: now)
+
+        // 不变量等价于：overlay 缺项 → 阶梯退回**当前**主快照值（无陈旧锁定）。
+        XCTAssertNil(c.solarOverlay?.instant(.sunrise), "overlay 不含主源 sunrise（前提）")
+        XCTAssertNil(c.solarOverlay?.instant(.sunset), "overlay 不含主源 sunset（前提）")
+        XCTAssertEqual(c.solarOverlay?.instant(.sunrise) ?? pSun, pSun, "DaylightCard 阶梯退回主快照取当前 sunrise")
+        XCTAssertEqual(c.solarOverlay?.instant(.sunset) ?? pSet, pSet, "DaylightCard 阶梯退回主快照取当前 sunset")
+    }
+
+    /// **场景 3（保留行为，green under both）**：主源**缺** sunset、solar 辅源把它补上 →
+    /// overlay **含** `.sunset` 且 provenance 为 `.fallback`。
+    ///
+    /// 给「按 provenance 过滤」兜底：过滤必须只剔除 `.primary`，**不能**误伤真正由辅助源
+    /// 贡献的 `.fallback` 字段——否则降级链与 L2 标注整体失效。
+    @MainActor
+    func testSolarAuxFillMissingKeepsFallbackInOverlay() async {
+        let (tracker, prefs, store) = makeHarness(suiteName: "coord.inv.fallback")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let pSun = Date(timeIntervalSince1970: 1_000_000)
+        let auxSet = Date(timeIntervalSince1970: 1_100_000)
+        let solar = StubFieldSource(patch: FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
+                                                     values: [.sunrise: .instant(pSun),
+                                                              .sunset: .instant(auxSet)]))
+        let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
+                        timeZoneIdentifier: "Asia/Shanghai")
+        let c = SourceAttributionCoordinator(sources: [solar], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: nil),
+                        now: now)
+
+        XCTAssertEqual(c.solarOverlay?.instant(.sunset), auxSet, "辅助源补的缺失项保留进 overlay")
+        XCTAssertEqual(c.solarProvenance?[.sunset]?.kind, .fallback, "补值来源标记为 fallback")
+    }
+
+    /// **场景 4（RED under old impl）**：solar 辅源被**停用** + 非 solar 辅助源（MET）成功 →
+    /// overlay **不得**含有主源 solar 键（`.sunrise`/`.sunset`）。
+    ///
+    /// 旧实现下 MET 成功即 `auxiliaryContributed = true`，`merged` 含主源当刻 sunrise/sunset
+    /// → overlay 内嵌它们 → 本用例必红。新不变量下 MET 只出数值，solar 键一个都没有。
+    @MainActor
+    func testSolarAuxDisabledPlusMetSuccessExcludesPrimarySolarKeys() async {
+        let (tracker, prefs, store) = makeHarness(suiteName: "coord.inv.disabledSolar")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let pSun = Date(timeIntervalSince1970: 1_000_000)
+        let pSet = Date(timeIntervalSince1970: 1_100_000)
+        prefs.setDisabled(.sunriseSunset, disabled: true)
+
+        let met = StubFieldSource(id: .metNorwayForecast,
+                                  displayName: "MET",
+                                  capabilities: [.basicNumericFields],
+                                  requiredFields: [.temperature, .pressure, .humidity, .cloudCover, .windSpeed, .windDirection],
+                                  patch: FieldPatch(sourceID: .metNorwayForecast, capturedAt: now,
+                                                    values: [.temperature: .number(21)]))
+        // solar 源虽注入，但被停用 → 协调器跳过它（逐源判定），不参与补值。
+        let solar = StubFieldSource(patch: FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
+                                                      values: [.sunrise: .instant(Date()), .sunset: .instant(Date())]))
+        let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
+                        timeZoneIdentifier: "Asia/Shanghai")
+        let c = SourceAttributionCoordinator(sources: [met, solar], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
+                        now: now)
+
+        XCTAssertNil(c.solarOverlay?.instant(.sunrise), "solar 辅源停用 + MET 成功：overlay 不含主源 sunrise（旧实现会红）")
+        XCTAssertNil(c.solarOverlay?.instant(.sunset), "solar 辅源停用 + MET 成功：overlay 不含主源 sunset（旧实现会红）")
+        XCTAssertNotNil(c.solarOverlay?.number(.temperature), "MET 数值仍进 overlay")
     }
 }
