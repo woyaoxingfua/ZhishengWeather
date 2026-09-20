@@ -17,10 +17,35 @@
 //    NO₂: 100.0 μg/m³    SO₂: 365.0 μg/m³    CO: 40000.0 μg/m³
 //  (*) O₃ 单位按 μg/m³ 直录，比例权重不影响"取最大"的相对排序。
 //
+//  P2 修订（D-C4 / D-B11）：新增 `hourly` 逐时趋势（见 `AqiHourlyPoint`），
+//  仅供主屏空气卡的 24 小时 AQI 趋势区使用；**不进** `WeatherSnapshot` /
+//  共享容器，小组件载荷契约零改动。
+//
 //  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
 //
 
 import Foundation
+
+/// 逐时 AQI 趋势点（P2 修订 D-C4 / D-B11，AC-C9 / AC-C10 的数据来源）。
+///
+/// 只承载数值，**不声明**精度来源。任一值字段为 nil = 服务端该小时未返回 /
+/// 元素为 null（**绝不补 0**：`0` 是合法读数，与"缺测"必须区分）。
+/// nil 在曲线上表现为**断开**（见 `AqiTrendLayout`），绝不连线跨越缺口 ——
+/// 跨越缺口会把"没有数据"画成"空气变好"或"持续平稳"（AC-C10）。
+struct AqiHourlyPoint: Codable, Equatable, Identifiable, Sendable {
+
+    /// 该小时整点时刻（由 epoch 秒解析而来，步长 3600s）。
+    var time: Date
+    /// 该小时美标 AQI（六档着色的数据源）。nil = 缺测。
+    var usAqi: Int?
+    /// 该小时 PM2.5（μg/m³）。nil = 缺测。`0` 原样保留为 0。
+    var pm25: Double?
+    /// 该小时 PM10（μg/m³）。nil = 缺测。`0` 原样保留为 0。
+    var pm10: Double?
+
+    /// 以时刻作为稳定标识（同一整点唯一）。
+    var id: Date { time }
+}
 
 /// 空气质量领域模型（独立于天气快照链路，ARCH-A2 §1.1①）。
 struct AirQuality: Codable, Equatable, Sendable {
@@ -41,6 +66,12 @@ struct AirQuality: Codable, Equatable, Sendable {
     var sulphurDioxide: Double?
     /// 臭氧 O₃（μg/m³）。
     var ozone: Double?
+    /// 逐时 AQI 趋势（P2 修订 D-C4 / D-B11）。
+    ///
+    /// nil（旧载荷 / 服务端未返回该块 / time 为空）与空数组同义：
+    /// 趋势区**整块隐藏**，不留空槽（AC-B24）。
+    /// 末位带默认值：既有构造点与既有 JSON 解码零改动。
+    var hourly: [AqiHourlyPoint]? = nil
 }
 
 // MARK: - AQI 六档（美标 us_aqi）

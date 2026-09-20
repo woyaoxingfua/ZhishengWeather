@@ -16,6 +16,15 @@
 //  - 时刻按**选中城市时区**渲染（D-4 一致，复用 `WeatherTimeFormatter` 的格式器缓存）。
 //  - 无新网络请求：数据来自既有单次 forecast 请求（B1-2）。
 //
+//  P2 修订（AC-A4 / AC-A5）：补渲染**逐柱降水概率**（`MinutelyPrecipitationPoint.probability`
+//  此前取到却全屏无落点）：
+//   - 有值 → 该柱下方显示 `X%`；
+//   - nil（服务端未返回 / 元素 null / 旧载荷）→ 该柱**不标概率**，**绝不显示 0%**
+//     冒充"无雨可能"（`0%` 是合法读数，与 nil 必须区分）；
+//   - 全部概率皆 nil → 该行整行不渲染（不留空槽）；
+//   - AC-B1-7 的**粒度诚实文案原样保留**（「15 分钟粒度 · 由逐小时插值，非实况外推」）——
+//     这是事实性标注，不得删改或弱化。
+//
 
 import SwiftUI
 
@@ -43,6 +52,7 @@ struct MinutelyPrecipitationCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             bars
+            probabilityRow
             axis
             footer
         }
@@ -107,6 +117,44 @@ struct MinutelyPrecipitationCard: View {
     private var barScalePeak: Double {
         max(MinutelyPrecipitationEngine.peakPrecipitation(points) ?? 0,
             MinutelyPrecipitationEngine.precipitationThreshold)
+    }
+
+    // MARK: - 逐柱降水概率（AC-A4 / AC-A5）
+
+    /// 每根柱下方的「概率 X%」（AC-A4）。
+    ///
+    /// 落点选择（AC-A4 允许"每根柱下方**或**峰值行"）：本卡窗口固定 8×15min
+    /// （`OpenMeteoMapper.maxMinutelyCount`），375pt 窄屏下单槽约 36pt，
+    /// 字号 9 的 `100%` 约占 22pt —— 一行放得下，故取"每根柱下方"，
+    /// 不做峰值行单点标注（那会丢掉逐柱的概率轮廓）。
+    ///
+    /// 与柱状区 / 时间轴共用同一套等宽槽位，故三行天然对齐。
+    /// 全部概率皆 nil → 整行不渲染（不留空槽）。
+    @ViewBuilder
+    private var probabilityRow: some View {
+        if points.contains(where: { $0.probability != nil }) {
+            HStack(spacing: 6) {
+                ForEach(points) { point in
+                    Text(Self.probabilityLabel(point.probability))
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    /// 概率文案（AC-A5）。
+    ///
+    /// - nil（服务端未返回 / 元素 null）→ 空串：**该柱不标概率**，绝不冒充 `0%`；
+    /// - `0` → `0%`：`0%` 是合法读数，必须与 nil 区分（两者都显示 0% 就是把"未知"说成"确定无雨"）。
+    ///
+    /// `nonisolated`：纯格式化、无共享状态，脱离类型级 `@MainActor` 以便直接单测
+    /// （沿用 `WeatherTimeFormatter.resolveTimeZone` 的既有做法）。
+    nonisolated static func probabilityLabel(_ probability: Double?) -> String {
+        guard let probability else { return "" }
+        return "\(Int(probability.rounded()))%"
     }
 
     // MARK: - 时间刻度（每 30 分钟一个，即隔点标注）
