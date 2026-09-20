@@ -48,6 +48,14 @@ struct SourceAttributionStore: Sendable {
     }
 
     /// 读取最近一次成功归属（无记录 → nil）。
+    ///
+    /// ⚠️ 同构残留（低，非阻塞，备查）：`SourceAttribution.primarySourceID: SourceID`
+    /// 是 enum 后**可失败**的 `init?(rawValue:)`。若磁盘上某条历史记录的 `primarySourceID`
+    /// 是一个当前版本不认识的 rawValue（删源 / 改 rawValue / 回退版本），**整个 struct**
+    /// 解码会 throw → 此函数返回 nil → 协调器回落到**默认 attribution**。
+    /// 影响面：仅冷启动页脚文案；单条记录、下次成功刷新自愈；且主源 id 本轮恒为常量
+    /// `open-meteo-forecast`，实际不可达。对称修法（逐字段容错 / `continue` 跳过）按需，
+    /// 但优先级低于 `SourcePreferences` / `SourceHealthLedger` 那两处。
     func load() -> SourceAttribution? {
         guard let data = defaults.data(forKey: key),
               let record = try? JSONDecoder().decode(SourceAttribution.self, from: data) else {
