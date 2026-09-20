@@ -236,7 +236,8 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
                       "precipitation": [1.5],
                       "wind_speed_10m": [3.25],
                       "wind_gusts_10m": [7.75],
-                      "apparent_temperature": [18.5] }
+                      "apparent_temperature": [18.5],
+                      "wind_direction_10m": [210.0] }
         }
         """
         let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
@@ -255,6 +256,64 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
                        "逐时阵风必须由 mapper 赋值")
         XCTAssertEqual(try XCTUnwrap(point.apparentTemperature), 18.5, accuracy: 1e-9,
                        "逐时体感必须由 mapper 赋值")
+        XCTAssertEqual(try XCTUnwrap(point.windDirection), 210.0, accuracy: 1e-9,
+                       "逐时风向必须由 mapper 赋值（AC-B17b；历史上同类字段哑火过）")
+    }
+
+    /// AC-C4c 红线：**绝不允许**用实况单值 `snapshot.windDirection` 去填充逐时点。
+    ///
+    /// 本用例构造"服务端**未返回** `hourly.wind_direction_10m`"的响应，
+    /// 断言逐时风向仍为 nil —— 即 mapper **没有**偷偷拿实况值兜底。
+    /// 拿一个时刻的值冒充整条时间序列就是**编造数据**，这是本项目的诚实红线。
+    func testHourlyWindDirectionNeverFilledFromCurrentSingleValue() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": \(baseEpoch), "temperature_2m": 19.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 18.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 123.0, "is_day": 1 },
+          "hourly": { "time": [\(baseEpoch)],
+                      "temperature_2m": [20.0],
+                      "weather_code": [1] }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto,
+                                          location: .beijing,
+                                          now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
+        let point = try XCTUnwrap(snapshot.hourly.first)
+
+        XCTAssertEqual(snapshot.windDirection, 123.0, accuracy: 1e-9,
+                       "实况风向本身照常解析（它是合法字段）")
+        XCTAssertNil(point.windDirection,
+                     "逐时风向缺失时必须为 nil —— 绝不可用实况单值（123.0）兜底（AC-C4c 红线）")
+    }
+
+    /// `0°` 与 `360°` 都是合法风向（正北），**不得**被规范化成 nil。
+    func testWindDirectionZeroAnd360ArePreserved() throws {
+        let json = """
+        {
+          "timezone": "Asia/Shanghai",
+          "utc_offset_seconds": 28800,
+          "current": { "time": \(baseEpoch), "temperature_2m": 19.0, "relative_humidity_2m": 50,
+                       "apparent_temperature": 18.0, "weather_code": 1, "wind_speed_10m": 1.0,
+                       "wind_direction_10m": 0.0, "is_day": 1 },
+          "hourly": { "time": [\(baseEpoch), \(baseEpoch + 3600), \(baseEpoch + 7200)],
+                      "temperature_2m": [20.0, 21.0, 22.0],
+                      "weather_code": [1, 1, 1],
+                      "wind_direction_10m": [0.0, 360.0, null] }
+        }
+        """
+        let dto = try JSONDecoder().decode(OpenMeteoResponse.self, from: Data(json.utf8))
+        let snapshot = OpenMeteoMapper.map(dto,
+                                          location: .beijing,
+                                          now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
+
+        XCTAssertEqual(snapshot.hourly.count, 3)
+        XCTAssertEqual(snapshot.hourly[0].windDirection, 0.0, "0° 是合法风向，不得转 nil")
+        XCTAssertEqual(snapshot.hourly[1].windDirection, 360.0, "360° 是合法风向，不得转 nil")
+        XCTAssertNil(snapshot.hourly[2].windDirection, "只有 null 才是 nil")
     }
 
     private func decodeResponse(hourlyTimes: [Int],

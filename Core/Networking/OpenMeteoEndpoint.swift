@@ -92,7 +92,17 @@ enum OpenMeteoEndpoint {
     // P2 数据补全：+precipitation（逐时降水 mm）/ wind_speed_10m（m/s）/
     //   wind_gusts_10m（m/s）/ apparent_temperature（℃体感）。四者均为可选元素数组，
     //   截断日尾段为 null（v1.6 纪律已在 DTO 落 `[Double?]?`），mapper 跳过不补 0。
-    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability", "precipitation", "wind_speed_10m", "wind_gusts_10m", "apparent_temperature"].joined(separator: ",")
+    //
+    // P2 · AC-B17b：再 +wind_direction_10m（逐时风向，度）。
+    //   补的是**结构性缺口**：`current.wind_direction_10m` 与
+    //   `daily.wind_direction_10m_dominant` 早已在请求面，唯独中间这一层 `hourly` 缺，
+    //   于是 `HourlyWindChart` 只能写「逐时风向暂未提供」的占位行。
+    //   **不新增 query、不新增 URL，配额仍 ×1**（R-Q2「加字段不加剧请求」）。
+    //   风向是角度，与 `wind_speed_unit=ms` 无关，**不引入任何单位换算面**。
+    //   实测探针（北京 39.9042,116.4074，forecast_days=2 + past_days=1，与本文件逐字相同参数）：
+    //     HTTP 200；`wind_direction_10m` 存在、72 条、**0 个 null**、取值 6~360（度）。
+    //     ⚠️ 360 是合法值（等同 0°，正北），方位映射必须容纳闭区间 [0,360]。
+    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability", "precipitation", "wind_speed_10m", "wind_gusts_10m", "apparent_temperature", "wind_direction_10m"].joined(separator: ",")
 
     /// 逐日字段（v1.1 新增高低温；F-A 追加天气码与最大降水概率；
     /// A1 追加 sunrise/sunset——run37 实测在 unixtime 下返回 epoch 整数，

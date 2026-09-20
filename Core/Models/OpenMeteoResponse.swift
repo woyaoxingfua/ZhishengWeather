@@ -122,6 +122,12 @@ struct OpenMeteoResponse: Codable, Sendable {
         var wind_gusts_10m: [Double?]? = nil
         /// P2 数据补全：逐时体感温度（℃）。整键/元素可选，语义同上。
         var apparent_temperature: [Double?]? = nil
+        /// P2 · AC-B17b：逐时风向（**度**，0–360）。
+        ///
+        /// 整键可选 + 元素可选（`[Double?]?`，v1.6 截断日 null 纪律）。
+        /// 实测探针（与 `OpenMeteoEndpoint` 逐字相同参数）：72 条、**0 个 null**、取值 6~360。
+        /// ⚠️ `360` 是合法值（等同 0°，正北），mapper/ui **不得**把它规范化成 nil。
+        var wind_direction_10m: [Double?]? = nil
     }
 
     /// 逐日序列（用于当日高/低温 + F-A 逐日预报）。

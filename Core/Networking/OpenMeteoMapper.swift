@@ -111,7 +111,11 @@ enum OpenMeteoMapper {
                     precipitation: optionalDouble(hourly.precipitation, at: index),
                     windSpeed: optionalDouble(hourly.wind_speed_10m, at: index),
                     windGusts: optionalDouble(hourly.wind_gusts_10m, at: index),
-                    apparentTemperature: optionalDouble(hourly.apparent_temperature, at: index)
+                    apparentTemperature: optionalDouble(hourly.apparent_temperature, at: index),
+                    // P2 · AC-B17b：逐时风向（度）。元素 null → nil（AC-C4b 要求该小时
+                    // 不画箭头）；但 **0 与 360 都是合法风向**，原样保留，绝不规范化成 nil。
+                    // 缺键/越界同样 → nil（`optionalDouble` 有边界守卫）。
+                    windDirection: optionalDouble(hourly.wind_direction_10m, at: index)
                 )
                 points.append(point)
             }
