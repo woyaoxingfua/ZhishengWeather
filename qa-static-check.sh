@@ -358,6 +358,62 @@ else
     bad SC-09 "Core/ 目录不存在"
 fi
 
+# SC-42 【凭据与骨架符号不得进扩展进程】—— 接入「需 API Key 的商业源」之前置防线
+#
+#        为什么必须现在就加：下一步要接入**需 Key 的商业数据源**（和风 QWeather 等）。
+#        硬约束是**凭据绝不进 Widget 扩展进程**（ARCH-P2 §12 / D6）。而这条靠
+#        「人记得别把文件放错目录」是**守不住**的，原因是本工程的一个结构事实：
+#            `Core/` 被 **App 与 Widget 两个 target 同时编译**（无独立 framework）。
+#        于是**只要把「读 Key」的代码放进 `Core/`，密钥读取路径就会同时被编进
+#        Widget 二进制** —— 编译期不报错、运行期看不出、CI 也全绿。
+#
+#        锚定在**性质**上（不锚文件名 —— 改名 / 拆分 / 搬迁后守卫必须照样命中）：
+#          SC-42a：`Core/` 内不得出现 Keychain API 或凭据存储类型。
+#                  → 凭据只能由 **App 侧**读取，再以**参数注入**给 Core 里的取数实现。
+#          SC-42b：widget 目录内不得出现 Keychain API、凭据类型、或骨架（可插拔数据源）类型。
+#
+#        与 SC-40 同族：SC-40 守「配置解析不许联网」，本项守「凭据与骨架不许进扩展」。
+#
+#        ⚠️ 反向防呆（SC-40 原版正是这样翻车的）：若 App 侧**不存在**任何凭据存储类型，
+#        说明本项**无靶可打**——此时报 WARN 而非 PASS，否则将来误删/改名后，
+#        守卫会静默退化为「永远通过」，而它要守的性质已经破了。
+KEYCHAIN_RE='\bSecItemCopyMatching\b|\bSecItemAdd\b|\bSecItemUpdate\b|\bSecItemDelete\b|\bkSecClassGenericPassword\b|\bkSecAttrAccessGroup\b'
+CREDSTORE_RE='\bSourceCredential\w*\b|\bCredentialStore\b'
+SKELETON_RE='\bFieldSupplying\b|\bFieldPatch\b|\bFieldSourceRegistry\b|\bSourceHealthTracker\b|\bSourceHealthLedger\b|\bSourcePreferences\b|\bFieldFallbackResolver\b|\bFieldProvenanceMap\b'
+CMT_FILTER=':[0-9]+:[[:space:]]*(//|\*|///)'
+
+if [ -d "$CORE_DIR" ]; then
+    hita=$(grep -rnE "$KEYCHAIN_RE|$CREDSTORE_RE" "$CORE_DIR" 2>/dev/null | grep -vE "$CMT_FILTER" || true)
+    if [ -z "$hita" ]; then
+        ok SC-42a "Core/ 内无凭据读取符号（Core 被双 target 编译，凭据须由 App 侧读取后注入）"
+    else
+        bad SC-42a "Core/ 出现凭据读取符号 —— 密钥会被同时编进 Widget 二进制：$(echo "$hita" | sed -n '1p')"
+    fi
+else
+    bad SC-42a "无法检查 Core/ 凭据符号：目录不存在"
+fi
+
+if [ -d "$WIDGET_DIR" ]; then
+    hitb=$(grep -rnE "$KEYCHAIN_RE|$CREDSTORE_RE|$SKELETON_RE" "$WIDGET_DIR" 2>/dev/null | grep -vE "$CMT_FILTER" || true)
+    if [ -z "$hitb" ]; then
+        ok SC-42b "widget 目录无凭据/骨架符号（凭据与可插拔骨架均不得进扩展进程）"
+    else
+        bad SC-42b "widget 目录出现凭据或骨架符号：$(echo "$hitb" | sed -n '1p')"
+    fi
+else
+    bad SC-42b "无法检查 widget 凭据/骨架符号：目录缺失"
+fi
+
+if [ -d "$APP_DIR" ]; then
+    if grep -rqE "$KEYCHAIN_RE|$CREDSTORE_RE" "$APP_DIR" 2>/dev/null; then
+        ok SC-42c "App 侧存在凭据存储实现（SC-42a 有有效靶子）"
+    else
+        warn SC-42c "App 侧尚无凭据存储实现 —— 若本轮仍不接入需 Key 的源可忽略；一旦接入，请确认 SC-42a 真的在扫有效靶子"
+    fi
+else
+    warn SC-42c "无法检查 App 侧凭据实现：目录不存在"
+fi
+
 # SC-10 全仓（源码，排除注释）禁止 try! / fatalError / as! 强制转换
 SRC_DIRS="$CORE_DIR $APP_DIR $WIDGET_DIR"
 if [ -d "$CORE_DIR" ]; then
