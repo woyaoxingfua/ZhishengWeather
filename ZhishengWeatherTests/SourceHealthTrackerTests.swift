@@ -9,6 +9,13 @@
 //
 //  所有时间经注入 now 判定（Core 禁 Date()）；隔离 UserDefaults suite。
 //
+//  ⚠️ 并发纪律（CI 修正，勿回退）：`XCTAssert*` 的实参是 **autoclosure，不支持并发** ——
+//  任何 `await` 写在断言实参里都会编译失败（"'await' in an autoclosure that does not
+//  support concurrency"），且 actor 隔离方法不能在同步非隔离上下文直接调用。
+//  **正确写法**：先把 `await` 求值到局部常量，再对常量断言。
+//  **禁止**用 `Task { }` / `XCTestExpectation` / 信号量绕过 —— 那会让断言在异步体执行前
+//  就通过，测试变成永远绿的假测试（本仓库最忌讳的失败模式）。
+//
 
 import XCTest
 @testable import ZhishengWeather
@@ -42,25 +49,33 @@ final class SourceHealthTrackerTests: XCTestCase {
 
     func testEV1ThreeConsecutiveMissingExcludes() async {
         let now = Date()
-        XCTAssertNil(await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now))
-        XCTAssertNil(await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now))
+        let first = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
+        XCTAssertNil(first)
+        let second = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
+        XCTAssertNil(second)
         let third = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
         XCTAssertEqual(third, .missingFields(consecutive: 3))
-        XCTAssertEqual(await tracker.exclusionReason(for: .sunriseSunset, now: now), .missingFields(consecutive: 3))
+        let reason = await tracker.exclusionReason(for: .sunriseSunset, now: now)
+        XCTAssertEqual(reason, .missingFields(consecutive: 3))
     }
 
     func testEV1OnlyTwoConsecutiveDoesNotExclude() async {
         let now = Date()
-        XCTAssertNil(await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now))
-        XCTAssertNil(await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now))
+        let first = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
+        XCTAssertNil(first)
+        let second = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
+        XCTAssertNil(second)
     }
 
     func testEV1PrimaryNotExcluded() async {
         // 自动摘除仅对辅助源生效（R-7）：主源连续缺字段也返回 nil。
         let now = Date()
-        XCTAssertNil(await tracker.recordMissingFields(.openMeteoForecast, missing: [.sunrise], at: now))
-        XCTAssertNil(await tracker.recordMissingFields(.openMeteoForecast, missing: [.sunrise], at: now))
-        XCTAssertNil(await tracker.recordMissingFields(.openMeteoForecast, missing: [.sunrise], at: now))
+        let first = await tracker.recordMissingFields(.openMeteoForecast, missing: [.sunrise], at: now)
+        XCTAssertNil(first)
+        let second = await tracker.recordMissingFields(.openMeteoForecast, missing: [.sunrise], at: now)
+        XCTAssertNil(second)
+        let third = await tracker.recordMissingFields(.openMeteoForecast, missing: [.sunrise], at: now)
+        XCTAssertNil(third)
     }
 
     func testSuccessResetsMissingCount() async {
@@ -69,7 +84,8 @@ final class SourceHealthTrackerTests: XCTestCase {
         _ = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
         await tracker.recordSuccess(.sunriseSunset, at: now) // 清零
         // 清零后再次缺失不触发摘除（需重新累计 3 次）。
-        XCTAssertNil(await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now))
+        let afterReset = await tracker.recordMissingFields(.sunriseSunset, missing: [.sunrise], at: now)
+        XCTAssertNil(afterReset)
     }
 
     // MARK: - EV-3
@@ -78,7 +94,8 @@ final class SourceHealthTrackerTests: XCTestCase {
         let now = Date()
         let reason = await tracker.recordHTTPStatus(.sunriseSunset, status: 401, at: now)
         XCTAssertEqual(reason, .auth)
-        XCTAssertEqual(await tracker.exclusionReason(for: .sunriseSunset, now: now), .auth)
+        let exclusion = await tracker.exclusionReason(for: .sunriseSunset, now: now)
+        XCTAssertEqual(exclusion, .auth)
 
         let reason2 = await tracker.recordHTTPStatus(.sunriseSunset, status: 403, at: now)
         XCTAssertEqual(reason2, .auth)
@@ -88,21 +105,28 @@ final class SourceHealthTrackerTests: XCTestCase {
         let now = Date()
         let rate = await tracker.recordHTTPStatus(.sunriseSunset, status: 429, at: now)
         XCTAssertEqual(rate, .rateLimit(until: now.addingTimeInterval(600)))
-        XCTAssertTrue(await tracker.isCoolingDown(.sunriseSunset, now: now))
-        XCTAssertTrue(await tracker.isCoolingDown(.sunriseSunset, now: now.addingTimeInterval(300)))
-        XCTAssertFalse(await tracker.isCoolingDown(.sunriseSunset, now: now.addingTimeInterval(700)))
+
+        let coolingNow = await tracker.isCoolingDown(.sunriseSunset, now: now)
+        XCTAssertTrue(coolingNow)
+        let coolingMidway = await tracker.isCoolingDown(.sunriseSunset,
+                                                        now: now.addingTimeInterval(300))
+        XCTAssertTrue(coolingMidway)
+        let coolingExpired = await tracker.isCoolingDown(.sunriseSunset,
+                                                         now: now.addingTimeInterval(700))
+        XCTAssertFalse(coolingExpired)
     }
 
-    func testUserDisabledExclusion() async {
+    func testUserDisabledExclusion() async throws {
         let now = Date()
-        SourcePreferences(defaults: try! XCTUnwrap(defaults)).setDisabled(.sunriseSunset, disabled: true)
-        XCTAssertEqual(await tracker.exclusionReason(for: .sunriseSunset, now: now), .userDisabled)
+        SourcePreferences(defaults: try XCTUnwrap(defaults)).setDisabled(.sunriseSunset, disabled: true)
+        let reason = await tracker.exclusionReason(for: .sunriseSunset, now: now)
+        XCTAssertEqual(reason, .userDisabled)
     }
 
     // MARK: - 账本鲁棒性
 
-    func testBadJSONLedgerReturnsEmptyAndDoesNotOverwrite() {
-        let d = try! XCTUnwrap(defaults)
+    func testBadJSONLedgerReturnsEmptyAndDoesNotOverwrite() throws {
+        let d = try XCTUnwrap(defaults)
         let corrupt = Data("garbage".utf8)
         d.set(corrupt, forKey: SourceHealthLedger.storeKey)
 

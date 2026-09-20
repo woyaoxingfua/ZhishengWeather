@@ -30,6 +30,10 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
     }
 
     /// 注入隔离 suite 的全套可注入依赖（不污染 .standard）。
+    ///
+    /// `@MainActor`：与 `SourceAttributionCoordinator` 同隔离域，避免把非 Sendable 的
+    /// 依赖对象跨隔离域传递（测试方法也标 `@MainActor`，见下）。
+    @MainActor
     private func makeHarness(suiteName: String) -> (tracker: SourceHealthTracker,
                                                     prefs: SourcePreferences,
                                                     store: SourceAttributionStore) {
@@ -43,6 +47,14 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
     }
 
     /// 主源有值 + 备源给不同值 → 上屏值必须 == 主源值；主备分歧量被记录。
+    ///
+    /// `@MainActor`（CI 修正）：`SourceAttributionCoordinator` 是 `@MainActor` 隔离类型，
+    /// 且 `refresh` 是 `async`。**不能**用 `MainActor.run { }` 承载——它的闭包形参是
+    /// **同步**的（`@Sendable () throws -> T`），装不下 `await c.refresh(...)`，
+    /// 会报 "cannot pass function of type '@Sendable () async -> ...' to parameter
+    /// expecting synchronous function type"。正确做法是把测试方法本身标 `@MainActor`，
+    /// 然后直接 `await`。
+    @MainActor
     func testPrimaryValueNotOverwrittenAndDivergenceRecorded() async {
         let (tracker, prefs, store) = makeHarness(suiteName: "coord.test.1")
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -56,22 +68,20 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
         let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
                         timeZoneIdentifier: "Asia/Shanghai")
 
-        let (overlay, divergence, attribution): (FieldPatch?, SolarDivergence?, SourceAttribution) = await MainActor.run {
-            let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
-                                                 preferences: prefs, attributionStore: store)
-            await c.refresh(for: city,
-                            primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
-                            now: now)
-            return (c.solarOverlay, c.divergence, c.attribution)
-        }
+        let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: pSet),
+                        now: now)
 
-        XCTAssertEqual(overlay?.sunrise, pSun, "主源 sunrise 绝不可被备源覆盖")
-        XCTAssertEqual(overlay?.sunset, pSet, "主源 sunset 绝不可被备源覆盖")
-        XCTAssertNotNil(divergence?.sunriseDiffSeconds, "主备分歧量应被记录")
-        XCTAssertFalse(attribution.hasFieldFallback, "主源有值则无字段级降级")
+        XCTAssertEqual(c.solarOverlay?.sunrise, pSun, "主源 sunrise 绝不可被备源覆盖")
+        XCTAssertEqual(c.solarOverlay?.sunset, pSet, "主源 sunset 绝不可被备源覆盖")
+        XCTAssertNotNil(c.divergence?.sunriseDiffSeconds, "主备分歧量应被记录")
+        XCTAssertFalse(c.attribution.hasFieldFallback, "主源有值则无字段级降级")
     }
 
     /// 主源只给 sunrise、备源补齐 solarNoon → 标记字段级降级（L2 标注依据）。
+    @MainActor
     func testAuxiliaryFillsMissingFieldAndRecordsFallback() async {
         let (tracker, prefs, store) = makeHarness(suiteName: "coord.test.2")
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -82,22 +92,20 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
         let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
                         timeZoneIdentifier: "Asia/Shanghai")
 
-        let (overlay, attribution, provenance): (FieldPatch?, SourceAttribution, FieldProvenanceMap?) = await MainActor.run {
-            let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
-                                                 preferences: prefs, attributionStore: store)
-            await c.refresh(for: city,
-                            primarySolar: PrimarySolarInput(sunrise: pSun, sunset: nil),
-                            now: now)
-            return (c.solarOverlay, c.attribution, c.solarProvenance)
-        }
+        let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: pSun, sunset: nil),
+                        now: now)
 
-        XCTAssertEqual(overlay?.sunrise, pSun, "主源 sunrise 保留")
-        XCTAssertEqual(overlay?.solarNoon, auxNoon, "备源 solarNoon 补齐")
-        XCTAssertTrue(attribution.hasFieldFallback, "字段级降级应被标记")
-        XCTAssertEqual(provenance?[.solarNoon]?.kind, .fallback, "solarNoon 来源应为 fallback")
+        XCTAssertEqual(c.solarOverlay?.sunrise, pSun, "主源 sunrise 保留")
+        XCTAssertEqual(c.solarOverlay?.solarNoon, auxNoon, "备源 solarNoon 补齐")
+        XCTAssertTrue(c.attribution.hasFieldFallback, "字段级降级应被标记")
+        XCTAssertEqual(c.solarProvenance?[.solarNoon]?.kind, .fallback, "solarNoon 来源应为 fallback")
     }
 
     /// 城市时区未知 → 不补值、不退回设备时区（诚实红线 §3.5）。
+    @MainActor
     func testTimeZoneUnknownProducesNoOverlay() async {
         let (tracker, prefs, store) = makeHarness(suiteName: "coord.test.3")
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -107,14 +115,11 @@ final class SourceAttributionCoordinatorTests: XCTestCase {
         let city = City(name: "测试", latitude: 39.9, longitude: 116.4, isCurrentLocation: false,
                         timeZoneIdentifier: nil)   // 时区未知
 
-        let overlay: FieldPatch? = await MainActor.run {
-            let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
-                                                 preferences: prefs, attributionStore: store)
-            await c.refresh(for: city,
-                            primarySolar: PrimarySolarInput(sunrise: Date(), sunset: Date()),
-                            now: now)
-            return c.solarOverlay
-        }
-        XCTAssertNil(overlay, "时区未知时不应补值")
+        let c = SourceAttributionCoordinator(sources: [stub], health: tracker,
+                                             preferences: prefs, attributionStore: store)
+        await c.refresh(for: city,
+                        primarySolar: PrimarySolarInput(sunrise: Date(), sunset: Date()),
+                        now: now)
+        XCTAssertNil(c.solarOverlay, "时区未知时不应补值")
     }
 }
