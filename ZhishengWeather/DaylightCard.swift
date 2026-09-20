@@ -42,7 +42,7 @@ struct DaylightCard: View {
 
     /// 主源快照（提供 daily[0] 昼长、sunrise/sunset 兜底）。
     let snapshot: WeatherSnapshot
-    /// 第二源覆盖层（4 个 solar 字段；非 nil 字段优先）。
+    /// 第二源覆盖层（稀疏字段补丁；已装载的字段优先，缺失字段退回主源）。
     let overlay: FieldPatch?
     /// 逐字段来源图（L2 标注依据）。
     let provenance: FieldProvenanceMap?
@@ -63,16 +63,16 @@ struct DaylightCard: View {
     // MARK: - 取值阶梯（overlay 优先，缺则退回主源/派生）
 
     /// overlay 优先于快照的日出。
-    private var effectiveSunrise: Date? { overlay?.sunrise ?? snapshot.sunrise }
+    private var effectiveSunrise: Date? { overlay?.instant(.sunrise) ?? snapshot.sunrise }
     /// overlay 优先于快照的日落。
-    private var effectiveSunset: Date? { overlay?.sunset ?? snapshot.sunset }
+    private var effectiveSunset: Date? { overlay?.instant(.sunset) ?? snapshot.sunset }
 
     /// 昼长（秒）+ 是否取自第二源（见文件头阶梯）。
     private var daylight: (seconds: Double, isFromSecondSource: Bool)? {
         if let seconds = snapshot.daily?.first?.daylightDuration {
             return (seconds, false)
         }
-        if let seconds = overlay?.daylightDuration {
+        if let seconds = overlay?.seconds(.daylightDuration) {
             return (seconds, true)
         }
         if let sunrise = effectiveSunrise, let sunset = effectiveSunset {

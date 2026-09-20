@@ -2,8 +2,10 @@
 //  FieldSourceRegistry.swift
 //  Core / Logic  [App + Widget 共用]
 //
-//  注册表：capability → 有序源列表（主源在前）。新源不改调用点，
-//  只改组装列表（SourceComposition）。
+//  注册表：capability → 有序源列表（主源在前）。
+//
+//  T10 起「接入一个新源」的改动面收敛为：新源四件套 + `SourceDirectory.all` 加一项声明
+//  + `SourceComposition` append 一行。本注册表的查找逻辑**无需改动**（按能力过滤）。
 //
 //  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
 //

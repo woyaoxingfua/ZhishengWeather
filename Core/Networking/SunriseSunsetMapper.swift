@@ -37,12 +37,14 @@ enum SunriseSunsetMapper {
         let solarNoon = results.solar_noon.flatMap { absoluteDate(from: $0) }
         let daylightDuration: TimeInterval? = results.day_length.map { TimeInterval($0) }
 
-        return FieldPatch(sourceID: .sunriseSunset,
-                          capturedAt: now,
-                          sunrise: sunrise,
-                          sunset: sunset,
-                          solarNoon: solarNoon,
-                          daylightDuration: daylightDuration)
+        // T10 泛化：补丁是稀疏值容器，逐字段写入 —— 未命中的字段保持「缺失」，
+        // 与「值是 0」严格区分（`.seconds(0)` 是有效值，不是缺失）。
+        var patch = FieldPatch(sourceID: .sunriseSunset, capturedAt: now)
+        if let sunrise { patch.set(.sunrise, .instant(sunrise)) }
+        if let sunset { patch.set(.sunset, .instant(sunset)) }
+        if let solarNoon { patch.set(.solarNoon, .instant(solarNoon)) }
+        if let daylightDuration { patch.set(.daylightDuration, .seconds(daylightDuration)) }
+        return patch
     }
 
     // MARK: - Private

@@ -72,8 +72,12 @@ struct SettingsView: View {
     @State private var linkHealth: [LinkHealth] = []
     /// 多源管理面板数据（进入页面时从健康跟踪器读取一次）。
     @State private var sourceStatusRows: [SourceStatusRow] = []
-    /// Sunrise-Sunset.org 手动停用状态（与 SourcePreferences 同真源）。
-    @State private var sunriseSunsetDisabled: Bool = false
+    /// 已被手动停用的源集合（与 `SourcePreferences` 同真源）。
+    ///
+    /// ⚠️ **不写死任何源 id**（T10 §E9）：早先是 `if row.id == .sunriseSunset` +
+    /// 一个专属于该源的 `@State`，于是**新接入的辅助源没有停用入口**（静默）。
+    /// 现在按 `SourceID.allCases` 全量读一次，开关按行的描述符逐行生成。
+    @State private var disabledSourceIDs: Set<SourceID> = []
 
     /// 应用图标档位（本页状态源；初值 = 设备事实 + 本地偏好归一化）。
     @State private var iconChoice: IconChoice = .phosphor
@@ -355,13 +359,19 @@ struct SettingsView: View {
                                 .foregroundStyle(Theme.secondaryText)
                         }
                         .font(.system(size: 12))
-                        if row.id == .sunriseSunset {
-                            // 手动停用：开关 = 启用；停用只影响该源降级参与，不换城市。
+                        // 手动停用入口：对**每个参与自动摘除的源**生成（按描述符派生，
+                        // 不写死任何源 id）。停用只影响该源的降级参与，不换城市、
+                        // 不影响其余源。新增辅助源**自动**获得该入口（T10 §E9）。
+                        if Self.participatesInAutoExclusion(row.id) {
                             Toggle("启用该数据源", isOn: Binding(
-                                get: { !sunriseSunsetDisabled },
-                                set: { newValue in
-                                    sunriseSunsetDisabled = !newValue
-                                    SourcePreferences.shared.setDisabled(.sunriseSunset, disabled: !newValue)
+                                get: { !disabledSourceIDs.contains(row.id) },
+                                set: { enabled in
+                                    if enabled {
+                                        disabledSourceIDs.remove(row.id)
+                                    } else {
+                                        disabledSourceIDs.insert(row.id)
+                                    }
+                                    SourcePreferences.shared.setDisabled(row.id, disabled: !enabled)
                                 }))
                         }
                     }
@@ -578,7 +588,16 @@ struct SettingsView: View {
     /// 读取多源管理面板数据（源级健康快照 + 手动停用状态）。
     private func loadSourceStatus() async {
         sourceStatusRows = await SourceHealthTracker.shared.snapshot(now: Date())
-        sunriseSunsetDisabled = SourcePreferences.shared.isDisabled(.sunriseSunset)
+        // 按**全部已声明源**读一次停用偏好（不写死某个源 id）。
+        disabledSourceIDs = Set(SourceID.allCases.filter { SourcePreferences.shared.isDisabled($0) })
+    }
+
+    /// 该源是否参与自动摘除（= 是否给它「手动停用」入口）。
+    ///
+    /// 判据的单一真源在源描述符（`SourceDirectory`）；未登记的源一律 false
+    /// （与 `SourceHealthTracker.isAuxiliary` 同一判据，避免两处漂移）。
+    private static func participatesInAutoExclusion(_ id: SourceID) -> Bool {
+        SourceDirectory.descriptor(for: id)?.participatesInAutoExclusion ?? false
     }
 
     /// 多源状态 → 文案（单一真源在 ExclusionReason.displayText）。

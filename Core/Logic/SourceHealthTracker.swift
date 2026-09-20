@@ -5,8 +5,9 @@
 //  源级健康与摘除判定（运行期 actor）。纯判定 + 可注入持久化；
 //  **不联网、不进 App Group**（ARCH §4.2）。
 //
-//  自动摘除**只对辅助源生效**：主源只记录、不自动摘；主源失败仍走既有
-//  `.failed(cached:)` 路径（ARCH R-7 / H-8）。
+//  自动摘除**只对「参与自动摘除」的源生效**（判据来自源描述符的
+//  `participatesInAutoExclusion`，T10 §3.4）：主源只记录、不自动摘；
+//  主源失败仍走既有 `.failed(cached:)` 路径（ARCH R-7 / H-8）。
 //
 //  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
 //  actor 隔离：所有状态经 actor 串行访问，避免竞态。
@@ -36,9 +37,13 @@ actor SourceHealthTracker {
         self.preferences = preferences
     }
 
-    /// 该源是否为辅助源（仅辅助源参与自动摘除）。
+    /// 该源是否参与自动摘除（仅参与自动摘除的源会被 EV-1 / EV-3 摘掉）。
+    ///
+    /// T10 §3.4：行为来源改为描述符的**显式布尔** `participatesInAutoExclusion`，
+    /// 不再借 `role`（展示标记）表达 —— 「改展示文案的人顺手改了摘除行为」这种错位被消除。
+    /// 未登记的源一律 `false`（fail-closed：认不出来的源绝不自动摘除）。
     private func isAuxiliary(_ id: SourceID) -> Bool {
-        SourceCatalog.all.first { $0.id == id }?.role == .auxiliary
+        SourceDirectory.descriptor(for: id)?.participatesInAutoExclusion ?? false
     }
 
     /// 记录一次成功（清零连续缺失、累计今日用量、解除会话摘除）。

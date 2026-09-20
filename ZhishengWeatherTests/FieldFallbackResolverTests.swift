@@ -6,6 +6,10 @@
 //  ① 主源非 nil 绝不被辅助源覆盖（结果 == 主源值、kind == .primary）；
 //  ② 绝无平均路径；③ 主源 nil 时采用辅助源且 kind == .fallback；④ 全 nil → nil。
 //
+//  ⚠️ T10 泛化后，**穷举性质**（对 `WeatherFieldKey.allCases` 全枚举）在
+//  `FieldFallbackResolverGeneralityTests.swift` —— 那份才是「加字段自动被覆盖」的守卫。
+//  本文件保留的是**具体 solar 场景**的端到端锚点（可读的用例叙事）。
+//
 //  不联网、不读真实时钟（now 由测试注入）。
 //
 
@@ -19,15 +23,15 @@ final class FieldFallbackResolverTests: XCTestCase {
     /// 主源 sunrise/sunset 非 nil，辅助源给不同值 → 必须保留主源值（绝不覆盖）。
     func testPrimaryNonNilNotOverwritten() {
         let primary = FieldPatch(sourceID: .openMeteoForecast, capturedAt: now,
-                                 sunrise: Date(timeIntervalSince1970: 100),
-                                 sunset: Date(timeIntervalSince1970: 200))
+                                 values: [.sunrise: .instant(Date(timeIntervalSince1970: 100)),
+                                          .sunset: .instant(Date(timeIntervalSince1970: 200))])
         let aux = FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
-                             sunrise: Date(timeIntervalSince1970: 999),
-                             sunset: Date(timeIntervalSince1970: 888))
+                             values: [.sunrise: .instant(Date(timeIntervalSince1970: 999)),
+                                      .sunset: .instant(Date(timeIntervalSince1970: 888))])
         let (merged, provenance) = FieldFallbackResolver.merge(primary: primary, auxiliary: [aux])
 
-        XCTAssertEqual(merged.sunrise?.timeIntervalSince1970, 100, "主源非nil必须保留主源值")
-        XCTAssertEqual(merged.sunset?.timeIntervalSince1970, 200)
+        XCTAssertEqual(merged.instant(.sunrise)?.timeIntervalSince1970, 100, "主源非nil必须保留主源值")
+        XCTAssertEqual(merged.instant(.sunset)?.timeIntervalSince1970, 200)
         XCTAssertEqual(provenance[.sunrise]?.kind, ProvenanceKind.primary)
         XCTAssertEqual(provenance[.sunset]?.kind, ProvenanceKind.primary)
     }
@@ -35,23 +39,23 @@ final class FieldFallbackResolverTests: XCTestCase {
     /// 同上：结果必须 == 主源值，绝非 (100+999)/2 之类的平均。
     func testNoAveraging() {
         let primary = FieldPatch(sourceID: .openMeteoForecast, capturedAt: now,
-                                 sunrise: Date(timeIntervalSince1970: 100))
+                                 values: [.sunrise: .instant(Date(timeIntervalSince1970: 100))])
         let aux = FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
-                             sunrise: Date(timeIntervalSince1970: 999))
+                             values: [.sunrise: .instant(Date(timeIntervalSince1970: 999))])
         let (merged, _) = FieldFallbackResolver.merge(primary: primary, auxiliary: [aux])
 
-        XCTAssertEqual(merged.sunrise?.timeIntervalSince1970, 100, "绝不平均")
-        XCTAssertNotEqual(merged.sunrise?.timeIntervalSince1970, (100 + 999) / 2)
+        XCTAssertEqual(merged.instant(.sunrise)?.timeIntervalSince1970, 100, "绝不平均")
+        XCTAssertNotEqual(merged.instant(.sunrise)?.timeIntervalSince1970, (100 + 999) / 2)
     }
 
     /// 主源 nil + 辅助源有值 → 采用辅助源且 kind == .fallback。
     func testPrimaryNilAuxFallback() {
         let primary = FieldPatch(sourceID: .openMeteoForecast, capturedAt: now)
         let aux = FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
-                             sunrise: Date(timeIntervalSince1970: 999))
+                             values: [.sunrise: .instant(Date(timeIntervalSince1970: 999))])
         let (merged, provenance) = FieldFallbackResolver.merge(primary: primary, auxiliary: [aux])
 
-        XCTAssertEqual(merged.sunrise?.timeIntervalSince1970, 999)
+        XCTAssertEqual(merged.instant(.sunrise)?.timeIntervalSince1970, 999)
         XCTAssertEqual(provenance[.sunrise]?.kind, ProvenanceKind.fallback)
         XCTAssertEqual(provenance[.sunrise]?.sourceID, SourceID.sunriseSunset)
     }
@@ -62,10 +66,10 @@ final class FieldFallbackResolverTests: XCTestCase {
         let aux = FieldPatch(sourceID: .sunriseSunset, capturedAt: now)
         let (merged, provenance) = FieldFallbackResolver.merge(primary: primary, auxiliary: [aux])
 
-        XCTAssertNil(merged.sunrise)
-        XCTAssertNil(merged.sunset)
-        XCTAssertNil(merged.solarNoon)
-        XCTAssertNil(merged.daylightDuration)
+        XCTAssertNil(merged.instant(.sunrise))
+        XCTAssertNil(merged.instant(.sunset))
+        XCTAssertNil(merged.instant(.solarNoon))
+        XCTAssertNil(merged.seconds(.daylightDuration))
         XCTAssertTrue(provenance.degradedFields.isEmpty)
     }
 
@@ -73,12 +77,12 @@ final class FieldFallbackResolverTests: XCTestCase {
     func testSolarNoonOnlyFromAux() {
         let primary = FieldPatch(sourceID: .openMeteoForecast, capturedAt: now)
         let aux = FieldPatch(sourceID: .sunriseSunset, capturedAt: now,
-                            solarNoon: Date(timeIntervalSince1970: 555),
-                            daylightDuration: 44329)
+                             values: [.solarNoon: .instant(Date(timeIntervalSince1970: 555)),
+                                      .daylightDuration: .seconds(44329)])
         let (merged, provenance) = FieldFallbackResolver.merge(primary: primary, auxiliary: [aux])
 
-        XCTAssertEqual(merged.solarNoon?.timeIntervalSince1970, 555)
-        XCTAssertEqual(merged.daylightDuration, 44329.0)
+        XCTAssertEqual(merged.instant(.solarNoon)?.timeIntervalSince1970, 555)
+        XCTAssertEqual(merged.seconds(.daylightDuration), 44329.0)
         XCTAssertEqual(provenance[.solarNoon]?.kind, ProvenanceKind.fallback)
         XCTAssertEqual(provenance[.daylightDuration]?.kind, ProvenanceKind.fallback)
     }

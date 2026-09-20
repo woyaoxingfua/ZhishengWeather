@@ -61,7 +61,12 @@ struct SourceHealthLedger: Sendable {
         }
         var result: [SourceID: Entry] = [:]
         for (rawKey, entry) in raw {
-            result[SourceID(rawValue: rawKey)] = entry
+            // `SourceID` 转 enum 后 `init?(rawValue:)` 是**可失败**的：
+            // 未知 rawValue（旧版本登记过、现已删除的源）→ **跳过该项**，
+            // 绝不造一个假 id 混进账本。副作用是该项在下一次 `saveAll` 时
+            // 随之消失 —— 这正是「该源已不存在」应有的行为。
+            guard let id = SourceID(rawValue: rawKey) else { continue }
+            result[id] = entry
         }
         return result
     }
