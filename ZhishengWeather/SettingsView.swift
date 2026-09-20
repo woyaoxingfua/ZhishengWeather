@@ -29,8 +29,10 @@ struct SettingsView: View {
     /// 最近一次取数时刻（主屏透传，AC-A3-9）。
     let lastUpdated: Date?
 
-    /// 数据源名称（当前恒为 Open-Meteo）。
-    let dataSourceName: String = "Open-Meteo"
+    /// 主数据源展示名（动态派生，不再写死常量，ARCH §5 L3）。
+    private var primarySourceDisplayName: String {
+        SourceCatalog.all.first { $0.role == .primary }?.displayName ?? "Open-Meteo"
+    }
 
     /// 时间渲染时区（D-4）。默认设备时区；App 侧由 ContentView 透传
     /// `viewModel.selectedTimeZone`。声明为**默认参数**，既有调用点保持源码兼容。
@@ -68,6 +70,10 @@ struct SettingsView: View {
     @State private var umbrellaReminderEnabled: Bool
     /// 数据链路健康快照（诊断用；进入页面时从记录器读取一次，进程内内存）。
     @State private var linkHealth: [LinkHealth] = []
+    /// 多源管理面板数据（进入页面时从健康跟踪器读取一次）。
+    @State private var sourceStatusRows: [SourceStatusRow] = []
+    /// Sunrise-Sunset.org 手动停用状态（与 SourcePreferences 同真源）。
+    @State private var sunriseSunsetDisabled: Bool = false
 
     /// 应用图标档位（本页状态源；初值 = 设备事实 + 本地偏好归一化）。
     @State private var iconChoice: IconChoice = .phosphor
@@ -288,7 +294,7 @@ struct SettingsView: View {
                 HStack {
                     Text("天气数据")
                     Spacer(minLength: 8)
-                    Text(dataSourceName)
+                    Text(primarySourceDisplayName)
                         .foregroundStyle(Theme.secondaryText)
                 }
                 if let lastUpdated {
@@ -309,6 +315,56 @@ struct SettingsView: View {
             Section("数据状态") {
                 ForEach(linkHealth) { record in
                     linkHealthRow(record)
+                }
+            }
+
+            // D-C5：多源管理（ARCH §4.3 / §5 L3）。
+            // 逐源显示状态（在用 / 备用 / 已摘除·原因 EV-n / 未配置）+ 最近成功 + 今日用量，
+            // 并支持手动停用某源（停用只影响该源降级参与，不影响其余源、绝不换城市）。
+            Section("多源管理") {
+                if sourceStatusRows.isEmpty {
+                    Text("尚未尝试任何辅助数据源")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                ForEach(sourceStatusRows) { row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(row.displayName)
+                            Spacer(minLength: 8)
+                            Text(Self.sourceStatusText(row.state))
+                                .foregroundStyle(Self.sourceStatusColor(row.state))
+                        }
+                        if let success = row.lastSuccessAt {
+                            HStack {
+                                Text("最近成功")
+                                    .foregroundStyle(Theme.secondaryText)
+                                Spacer(minLength: 8)
+                                Text(WeatherTimeFormatter.string(from: success,
+                                                                 format: "MM-dd HH:mm",
+                                                                 timeZone: timeZone))
+                                    .foregroundStyle(Theme.secondaryText)
+                            }
+                            .font(.system(size: 12))
+                        }
+                        HStack {
+                            Text("今日用量")
+                                .foregroundStyle(Theme.secondaryText)
+                            Spacer(minLength: 8)
+                            Text("\(row.todayUsage)")
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                        .font(.system(size: 12))
+                        if row.id == .sunriseSunset {
+                            // 手动停用：开关 = 启用；停用只影响该源降级参与，不换城市。
+                            Toggle("启用该数据源", isOn: Binding(
+                                get: { !sunriseSunsetDisabled },
+                                set: { newValue in
+                                    sunriseSunsetDisabled = !newValue
+                                    SourcePreferences.shared.setDisabled(.sunriseSunset, disabled: !newValue)
+                                }))
+                        }
+                    }
                 }
             }
 
@@ -335,6 +391,7 @@ struct SettingsView: View {
         .task {
             await loadLinkHealth()
             reloadDiagnosticResults()
+            await loadSourceStatus()
         }
     }
 
@@ -516,6 +573,32 @@ struct SettingsView: View {
     /// 读取链路健康快照（进程内内存；无网络、无落盘、无配额）。
     private func loadLinkHealth() async {
         linkHealth = await LinkHealthRecorder.shared.snapshot()
+    }
+
+    /// 读取多源管理面板数据（源级健康快照 + 手动停用状态）。
+    private func loadSourceStatus() async {
+        sourceStatusRows = await SourceHealthTracker.shared.snapshot(now: Date())
+        sunriseSunsetDisabled = SourcePreferences.shared.isDisabled(.sunriseSunset)
+    }
+
+    /// 多源状态 → 文案（单一真源在 ExclusionReason.displayText）。
+    private static func sourceStatusText(_ state: SourceStatusState) -> String {
+        switch state {
+        case .primaryActive: return "在用"
+        case .standby: return "备用"
+        case .excluded(let reason): return reason.displayText
+        case .notConfigured: return "未配置"
+        }
+    }
+
+    /// 多源状态 → 颜色（仅诊断用；不引入新配色常量）。
+    private static func sourceStatusColor(_ state: SourceStatusState) -> Color {
+        switch state {
+        case .primaryActive: return .green
+        case .standby: return Theme.secondaryText
+        case .excluded: return .orange
+        case .notConfigured: return Theme.secondaryText
+        }
     }
 
     /// 诊断记录里「时间线重载」的操作对象名（用方法名，便于一眼对上代码）。

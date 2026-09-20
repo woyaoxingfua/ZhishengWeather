@@ -32,6 +32,10 @@ struct ContentView: View {
     /// 编程式 push（AppRouter 触发跳转用）。
     @State private var navigation: NavigationPath = NavigationPath()
 
+    /// 来源标注协调器（接线点 (b)：拉辅助源 + 逐字段合并 + 写归属）。
+    /// 由下方 `.task(id: 城市 id)` 驱动，复用既有刷新节拍，不引入第二刷新生命周期。
+    @StateObject private var attributionCoordinator = SourceAttributionCoordinator()
+
     var body: some View {
         // Handoff / Siri 建议：先把「当前城市」取成**局部值**再交给下面的
         // userActivity 闭包 —— 该闭包是 @escaping 且非主 actor 隔离，若直接
@@ -95,6 +99,19 @@ struct ContentView: View {
             }
             .onChange(of: spotlightSignature) { _, _ in
                 Task { await indexCitiesForSpotlight() }
+            }
+            // 来源标注协调器（接线点 b，ARCH §12.3.2）：随城市切换触发，
+            // 复用既有刷新节拍，**不引入第二个刷新生命周期**（硬约束⑦）；
+            // App 不打开则不跑（已知限制，非遗漏，硬约束⑤）。
+            .task(id: viewModel.directory.selectedCity?.id) {
+                guard let city = viewModel.directory.selectedCity else { return }
+                let primary: PrimarySolarInput
+                if case .loaded(let snapshot) = viewModel.state {
+                    primary = PrimarySolarInput(sunrise: snapshot.sunrise, sunset: snapshot.sunset)
+                } else {
+                    primary = PrimarySolarInput()
+                }
+                await attributionCoordinator.refresh(for: city, primarySolar: primary, now: Date())
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
             .navigationDestination(for: CityRoute.self) { route in
@@ -525,6 +542,15 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
 
+            // D-C3：日照与昼夜卡（第二源 overlay 逐字段叠加 + L2 来源标注）。
+            // 协调器持有的 overlay 非 nil 字段优先显示；其 provenance 标记 .fallback
+            // 时，行尾标注「来自 sunrise-sunset.org」（诚实红线，绝不静默换源）。
+            DaylightCard(snapshot: snapshot,
+                         overlay: attributionCoordinator.solarOverlay,
+                         provenance: attributionCoordinator.solarProvenance,
+                         timeZone: viewModel.selectedTimeZone,
+                         now: Date())
+
             // A2-4：月出月落行（本地近似，±10min）。任一存在才渲染；
             // 全 nil（极地/无事件日）→ "今日无月出"式文案（AC-A2-14）。
             if let moonText = moonRiseSetText(snapshot) {
@@ -570,11 +596,26 @@ struct ContentView: View {
     // MARK: - ⑥ 页脚
 
     private func footerSection(_ text: String, highlighted: Bool) -> some View {
-        Text(text)
-            .font(.system(size: Theme.FontSize.footnote))
-            .foregroundStyle(highlighted ? Theme.accentSecondary : Theme.secondaryText)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 4)
+        VStack(alignment: .center, spacing: 2) {
+            Text(text)
+                .font(.system(size: Theme.FontSize.footnote))
+                .foregroundStyle(highlighted ? Theme.accentSecondary : Theme.secondaryText)
+            // L1 来源归属（ARCH §5）：读 App 本地 SourceAttributionStore 最近一次成功记录，
+            // 冷启动 / 缓存态也诚实（不静默换源、不静默换城市）。
+            Text(Self.sourceAttributionText(attributionCoordinator.attribution))
+                .font(.system(size: Theme.FontSize.footnote))
+                .foregroundStyle(highlighted ? Theme.accentSecondary : Theme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.top, 4)
+    }
+
+    /// L1 页脚归属文案（诚实红线）。
+    private static func sourceAttributionText(_ attribution: SourceAttribution) -> String {
+        if attribution.hasFieldFallback {
+            return "主源不可用，当前数据来自 sunrise-sunset.org（备源）"
+        }
+        return "数据来自 Open-Meteo"
     }
 
     // MARK: - 本轮新增：单行弱提示（链路失败 / 定位 / 共享容器统一外观）
