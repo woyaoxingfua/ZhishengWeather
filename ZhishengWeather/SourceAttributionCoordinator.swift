@@ -176,8 +176,27 @@ final class SourceAttributionCoordinator: ObservableObject {
 
         // 逐字段合并（纯函数：主源非 nil 绝不被覆盖、绝不平均）。
         let (merged, provenance) = FieldFallbackResolver.merge(primary: primaryPatch, auxiliary: auxiliary)
-        self.solarOverlay = merged
-        self.solarProvenance = provenance
+
+        // ⚠️ 覆盖层只在**辅助源真的贡献了字段**时才发布（T10 复盘修复的陈旧回归）。
+        //
+        // 为什么不能无条件发布 `merged`：`merged` 里含**主源补丁**的 sunrise/sunset，
+        // 而主源补丁是**协调器被调用那一刻**从快照取的值。而协调器只由 `ContentView` 的
+        // `.task(id: 城市 id)` 驱动 —— **同一城市后续的快照刷新不会重跑它**
+        // （例如跨日换了日出日落）。于是 overlay 会锁住**旧的主源值**，
+        // 而 `DaylightCard` 的取值阶梯是 `overlay?.X ?? snapshot.X` → **显示旧值**。
+        // 旧实现（源全被跳过时 `overlay = nil`）没有这个问题，因为 nil 会退回**当前快照**。
+        //
+        // 故：辅助源一个字段都没贡献时**不发布 overlay**（置 nil），
+        // 让 `DaylightCard` 退回快照取到**当次最新**的值。阶梯等价，上屏语义不变。
+        // `auxiliary` 非空但补丁为空（例如源返回 status != OK 的空补丁）同样走此分支。
+        let auxiliaryContributed = auxiliary.contains { !$0.fields.isEmpty }
+        if auxiliaryContributed {
+            self.solarOverlay = merged
+            self.solarProvenance = provenance
+        } else {
+            self.solarOverlay = nil
+            self.solarProvenance = nil
+        }
 
         // 分歧量（主源报值 vs 辅助源报值，差异 > 60s 视为分歧，诊断用）。
         self.divergence = Self.computeDivergence(primary: primarySolar, auxiliary: auxiliary)
