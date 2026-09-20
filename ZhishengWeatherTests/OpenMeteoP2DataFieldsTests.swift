@@ -71,21 +71,21 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
 
         // 解码层：长度仍为 6，尾段 null 如实为 nil，非末尾 0 保留。
         let hourly = dto.hourly
-        XCTAssertEqual(hourly.precipitation?.count, 6, "null 元素不计为缺项，长度仍为 6")
-        XCTAssertEqual(hourly.precipitation?[0], 0.0, accuracy: 1e-9, "下标 0 为 0，是合法值")
+        XCTAssertEqual(try XCTUnwrap(hourly.precipitation?.count), 6, "null 元素不计为缺项，长度仍为 6")
+        XCTAssertEqual(try XCTUnwrap(hourly.precipitation?[0]), 0.0, accuracy: 1e-9, "下标 0 为 0，是合法值")
         XCTAssertNil(hourly.precipitation?[3], "下标 3 为 null → nil")
         XCTAssertNil(hourly.precipitation?[4], "下标 4 为 null → nil")
-        XCTAssertEqual(hourly.precipitation?[5], 0.0, accuracy: 1e-9, "末尾 0 仍是 0，不是 null")
+        XCTAssertEqual(try XCTUnwrap(hourly.precipitation?[5]), 0.0, accuracy: 1e-9, "末尾 0 仍是 0，不是 null")
 
         let snapshot = OpenMeteoMapper.map(dto,
                                           location: .beijing,
                                           now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
         XCTAssertEqual(snapshot.hourly.count, 6, "温度/现象码齐全 → 6 行全保留")
-        XCTAssertEqual(snapshot.hourly[0].precipitation, 0.0, accuracy: 1e-9, "0 不能转 nil")
-        XCTAssertEqual(snapshot.hourly[1].precipitation, 1.5, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(snapshot.hourly[0].precipitation), 0.0, accuracy: 1e-9, "0 不能转 nil")
+        XCTAssertEqual(try XCTUnwrap(snapshot.hourly[1].precipitation), 1.5, accuracy: 1e-9)
         XCTAssertNil(snapshot.hourly[3].precipitation, "null 元素 → 该点该字段 nil")
         XCTAssertNil(snapshot.hourly[4].precipitation)
-        XCTAssertEqual(snapshot.hourly[5].precipitation, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(snapshot.hourly[5].precipitation), 0.0, accuracy: 1e-9)
     }
 
     /// daily 新增数组字段末行 null：解码成功、末行对应字段为 nil、非末行 0 保留。
@@ -109,18 +109,18 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
         XCTAssertNil(daily.precipitation_sum?[2], "末行 null → nil")
         XCTAssertNil(daily.wind_speed_10m_max?[2])
         XCTAssertNil(daily.daylight_duration?[2])
-        XCTAssertEqual(daily.precipitation_sum?[0], 0.0, accuracy: 1e-9, "非末行 0 保留")
-        XCTAssertEqual(daily.daylight_duration?[0], 43200.0, accuracy: 1e-9, "秒原值透传")
+        XCTAssertEqual(try XCTUnwrap(daily.precipitation_sum?[0]), 0.0, accuracy: 1e-9, "非末行 0 保留")
+        XCTAssertEqual(try XCTUnwrap(daily.daylight_duration?[0]), 43200.0, accuracy: 1e-9, "秒原值透传")
 
         let snapshot = OpenMeteoMapper.map(dto,
                                           location: .beijing,
                                           now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
         let list = try XCTUnwrap(snapshot.daily)
         XCTAssertEqual(list.count, 3, "末行必需字段齐全 → 不丢弃，只是新字段为 nil")
-        XCTAssertEqual(list[0].precipitationSum, 0.0, accuracy: 1e-9, "0 mm 合法值")
-        XCTAssertEqual(list[1].precipitationSum, 5.5, accuracy: 1e-9)
-        XCTAssertEqual(list[1].windSpeedMax, 4.0, accuracy: 1e-9)
-        XCTAssertEqual(list[0].daylightDuration, 43200.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(list[0].precipitationSum), 0.0, accuracy: 1e-9, "0 mm 合法值")
+        XCTAssertEqual(try XCTUnwrap(list[1].precipitationSum), 5.5, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(list[1].windSpeedMax), 4.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(list[0].daylightDuration), 43200.0, accuracy: 1e-9)
         XCTAssertNil(list[2].precipitationSum, "末行 null → 该字段 nil")
         XCTAssertNil(list[2].windSpeedMax)
         XCTAssertNil(list[2].daylightDuration)
@@ -136,11 +136,11 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
         let snapshot = OpenMeteoMapper.map(dto,
                                           location: .beijing,
                                           now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
-        XCTAssertEqual(snapshot.precipitation, 0.0, accuracy: 1e-9, "0 mm 是合法值，不是 nil")
-        XCTAssertEqual(snapshot.rain, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(snapshot.showers, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(snapshot.snowfall, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(snapshot.uvIndex, 3.5, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(snapshot.precipitation), 0.0, accuracy: 1e-9, "0 mm 是合法值，不是 nil")
+        XCTAssertEqual(try XCTUnwrap(snapshot.rain), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(snapshot.showers), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(snapshot.snowfall), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(snapshot.uvIndex), 3.5, accuracy: 1e-9)
     }
 
     func testCurrentPrecipitationNilWhenAbsent() throws {
