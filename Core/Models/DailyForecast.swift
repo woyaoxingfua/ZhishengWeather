@@ -70,9 +70,19 @@ struct DailyForecast: Codable, Equatable, Identifiable, Sendable {
 
     /// 日降水合计文案（mm）。nil → nil（对应段不渲染）。
     /// `0 mm` 是合法值，原样显示；只有 nil 才返回 nil（UI 显示 "--"）。
+    /// 单位 mm 由 `PrecipitationFormatter` 锁定（换算责任层），此处只负责前缀与 nil 隐藏。
     var precipitationSumText: String? {
         guard let sum = precipitationSum else { return nil }
-        return "降水 \(String(format: "%.1f", sum)) mm"
+        return "降水 " + PrecipitationFormatter.text(fromMillimeters: sum)
+    }
+
+    /// 日降雪合计文案（**cm**，Open-Meteo 原值）。nil → nil（对应段不渲染）。
+    /// `0 cm` 是合法值，原样显示；只有 nil 才返回 nil。
+    /// 单位 cm 由 `SnowfallFormatter` 锁定（换算责任层，禁止改为 mm），
+    /// 此处只负责前缀与 nil 隐藏。
+    var snowfallSumText: String? {
+        guard let sum = snowfallSum else { return nil }
+        return "降雪 " + SnowfallFormatter.text(fromCentimeters: sum)
     }
 
     /// 风摘要文案：按可用值拼接「最大风 / 阵风 / 主导风向」，中间用 " · " 连接。

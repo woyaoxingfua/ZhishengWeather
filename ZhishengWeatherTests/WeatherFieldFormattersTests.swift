@@ -66,9 +66,45 @@ final class WeatherFieldFormattersTests: XCTestCase {
         XCTAssertEqual(DurationFormatter.hoursMinutesText(fromSeconds: .nan), "--")
     }
 
+    // MARK: - PrecipitationFormatter（换算责任层：单位恒为 mm）
+
+    func testPrecipitationFormatterMillimetersLabel() {
+        XCTAssertEqual(PrecipitationFormatter.text(fromMillimeters: 12.5), "12.5 mm", "单位锁定 mm")
+    }
+
+    func testPrecipitationFormatterZeroIsDisplayed() {
+        XCTAssertEqual(PrecipitationFormatter.text(fromMillimeters: 0), "0.0 mm", "0 mm 合法值，原样显示非 --")
+    }
+
+    func testPrecipitationFormatterNonFiniteDefensive() {
+        XCTAssertEqual(PrecipitationFormatter.text(fromMillimeters: .infinity), "--")
+        XCTAssertEqual(PrecipitationFormatter.text(fromMillimeters: .nan), "--")
+    }
+
+    // MARK: - SnowfallFormatter（换算责任层：单位恒为 cm，禁止改 mm）
+
+    func testSnowfallFormatterCentimetersLabel() {
+        // 机械锁核心：雪量单位是 cm，绝不是 mm（Open-Meteo 原值即 cm）。
+        XCTAssertEqual(SnowfallFormatter.text(fromCentimeters: 5.0), "5.0 cm", "单位锁定 cm")
+    }
+
+    func testSnowfallFormatterZeroIsDisplayed() {
+        XCTAssertEqual(SnowfallFormatter.text(fromCentimeters: 0), "0.0 cm", "0 cm 合法值原样显示")
+    }
+
+    func testSnowfallFormatterPositiveDecimal() {
+        XCTAssertEqual(SnowfallFormatter.text(fromCentimeters: 2.4), "2.4 cm")
+    }
+
+    func testSnowfallFormatterNonFiniteDefensive() {
+        XCTAssertEqual(SnowfallFormatter.text(fromCentimeters: .infinity), "--")
+        XCTAssertEqual(SnowfallFormatter.text(fromCentimeters: .nan), "--")
+    }
+
     // MARK: - DailyForecast 展示文案（0 与 nil 区分 / 整段隐藏）
 
     private func day(precipitationSum: Double? = nil,
+                     snowfallSum: Double? = nil,
                      windSpeedMax: Double? = nil,
                      windGustsMax: Double? = nil,
                      windDirectionDominant: Double? = nil,
@@ -86,7 +122,7 @@ final class WeatherFieldFormattersTests: XCTestCase {
                       uvIndexMax: nil,
                       precipitationSum: precipitationSum,
                       rainSum: nil,
-                      snowfallSum: nil,
+                      snowfallSum: snowfallSum,
                       windSpeedMax: windSpeedMax,
                       windGustsMax: windGustsMax,
                       windDirectionDominant: windDirectionDominant,
@@ -109,6 +145,21 @@ final class WeatherFieldFormattersTests: XCTestCase {
     func testPrecipitationSumPositive() {
         let d = day(precipitationSum: 12.5)
         XCTAssertEqual(d.precipitationSumText, "降水 12.5 mm")
+    }
+
+    func testSnowfallSumZeroIsDisplayedNotHidden() {
+        let d = day(snowfallSum: 0.0)
+        XCTAssertEqual(d.snowfallSumText, "降雪 0.0 cm", "0 cm 合法值，原样显示（单位 cm）")
+    }
+
+    func testSnowfallSumNilHidesSegment() {
+        let d = day(snowfallSum: nil)
+        XCTAssertNil(d.snowfallSumText, "nil → 段隐藏")
+    }
+
+    func testSnowfallSumPositive() {
+        let d = day(snowfallSum: 2.4)
+        XCTAssertEqual(d.snowfallSumText, "降雪 2.4 cm", "单位 cm，由 SnowfallFormatter 锁定")
     }
 
     func testWindSummaryAllNilHides() {
