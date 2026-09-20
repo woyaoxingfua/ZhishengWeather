@@ -459,9 +459,28 @@ struct ContentView: View {
     // MARK: - ③ 指标格
 
     /// 指标格（A1 后 3 格 + B1 遥测补全 4 格 = 7 格：风速 / 湿度 / 气压 /
-    /// 能见度 / 露点 / 云量 / 阵风）。
+    /// 能见度 / 露点 / 云量 / 阵风）+ D-C2 逐时风力图。
     /// LazyVGrid 2 列布局下自动换行，iPhone SE 375pt 无溢出风险。
+    ///
+    /// **D-C2 挂载点说明**：风力图挂在 `.metrics` 区块内（而不是新开一个
+    /// `HomeSection` case）—— ① 指标格里已经有「风速 / 阵风」两格，逐时趋势紧贴其上
+    /// 是同量相邻；② 新开 case 会让**老用户**的持久化顺序把新块"补齐到尾部"
+    /// （`HomeSectionOrder.current()` 的既有行为），屏幕上它就跑到最底下；
+    /// ③ 挂进既有区块即自动随该区块参与排序/隐藏（`HomeSection` 机制未被绕过）。
+    /// 数据全 nil → 卡内整块 `EmptyView`，不留空槽。
     private func metricsSection(snapshot: WeatherSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            metricsGrid(snapshot: snapshot)
+            // D-C2：逐时平均风速（实心）/ 阵风（空心）同尺并列（AC-C6）。
+            // ⚠️ 逐时风向未请求（`OpenMeteoEndpoint.hourlyFields` 无 `wind_direction_10m`）
+            // → 不画风向，卡内如实说明（AC-C4 属数据面缺口，见卡片文件头）。
+            HourlyWindChart(points: snapshot.hourly,
+                            timeZone: viewModel.selectedTimeZone)
+        }
+    }
+
+    /// 指标格本体（7 格）。
+    private func metricsGrid(snapshot: WeatherSnapshot) -> some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                   spacing: 12) {
             MetricCell(icon: "wind",
@@ -500,6 +519,12 @@ struct ContentView: View {
             // D-4：透传选中城市时区，逐小时条时刻按城市时区渲染。
             HourlyStrip(points: snapshot.hourly,
                         timeZone: viewModel.selectedTimeZone)
+            // D-C1：逐时降水图（柱＝mm / 折线＝%），按 ARCH §2 挂在**逐小时条下方**。
+            // 数据不足（hourly 空 / 降水量全 nil / 有效点不足）→ 卡内整块 `EmptyView`，
+            // 不留空槽（AC-C3）；挂在 `.hourly` 区块内 = 自动随该区块参与排序/隐藏。
+            // 数据来自既有 `snapshot.hourly`，**无新增网络请求**。
+            HourlyPrecipitationChart(points: snapshot.hourly,
+                                     timeZone: viewModel.selectedTimeZone)
         }
     }
 
@@ -534,22 +559,29 @@ struct ContentView: View {
                     .stroke(Theme.divider, lineWidth: 0.5)
             )
 
-            // A1-4：日出日落行。任一存在才渲染；各自 nil → 对应段隐藏。
-            if snapshot.sunrise != nil || snapshot.sunset != nil {
-                Text(sunText(snapshot))
-                    .font(.system(size: Theme.FontSize.caption))
-                    .foregroundStyle(Theme.secondaryText)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
+            // ⚠️ AC-A1-12（月相区日出日落）的渲染落点**已由下方的 `DaylightCard` 承接**。
+            //
+            // 这里原本有一行 `Text(sunText(snapshot))`，与紧随其后的 `DaylightCard`
+            // **显示完全相同的两个值**（相邻两行重复），是用户直接可见的界面缺陷。
+            // 去重时保留 `DaylightCard` 的版本，理由有两条：
+            //   1. 它带 L2 来源标注（`provenanceLabel(for:)`），降级时会如实写出来源，
+            //      而原来那行是无标注的裸文本 —— 保留更诚实的那一版；
+            //   2. 它额外承载昼长与「距日落」倒计时，信息量严格更大。
+            // **日出/日落仍在渲染，只是搬到了下方卡内** —— 不是被砍掉。
+            // `DaylightCard.body` 无条件渲染，`riseSetRow` 在 `effectiveSunrise` /
+            // `effectiveSunset` 非 nil 时分别输出「日出 HH:mm」「日落 HH:mm」，
+            // 故删除本行**不存在"日出日落彻底不显示"的空窗**。
+            // 对应的 `sunText(...)` 函数已随本行删除（避免留下死代码）。
 
             // D-C3：日照与昼夜卡（第二源 overlay 逐字段叠加 + L2 来源标注）。
             // 协调器持有的 overlay 非 nil 字段优先显示；其 provenance 标记 .fallback
             // 时，行尾标注「来自 sunrise-sunset.org」（诚实红线，绝不静默换源）。
+            // 时钟：卡内 `TimelineView(.everyMinute)` 自己驱动「距日落」倒计时，
+            // 故这里**不再注入 now**（两套时钟会漂移；卡片文件头有说明）。
             DaylightCard(snapshot: snapshot,
                          overlay: attributionCoordinator.solarOverlay,
                          provenance: attributionCoordinator.solarProvenance,
-                         timeZone: viewModel.selectedTimeZone,
-                         now: Date())
+                         timeZone: viewModel.selectedTimeZone)
 
             // A2-4：月出月落行（本地近似，±10min）。任一存在才渲染；
             // 全 nil（极地/无事件日）→ "今日无月出"式文案（AC-A2-14）。
@@ -581,17 +613,14 @@ struct ContentView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// 「日出 05:53 · 日落 18:22」；单侧缺失时只显示存在的一侧（AC-A1-12 降级面）。
-    private func sunText(_ snapshot: WeatherSnapshot) -> String {
-        var parts: [String] = []
-        if let sunrise = snapshot.sunrise {
-            parts.append("日出 \(timeText(sunrise))")
-        }
-        if let sunset = snapshot.sunset {
-            parts.append("日落 \(timeText(sunset))")
-        }
-        return parts.joined(separator: " · ")
-    }
+    /// ⚠️ 原来的 `sunText(_:)`（「日出 05:53 · 日落 18:22」，AC-A1-12 降级面）
+    /// **已随重复行一并删除**：它唯一的调用点与下面的 `DaylightCard` 显示同一对值（相邻重复）。
+    ///
+    /// AC-A1-12 的渲染现由 `DaylightCard.riseSetRow` 承接 —— 那里同样按
+    /// `effectiveSunrise` / `effectiveSunset` 的单侧存在性分别输出，即**保留了
+    /// 「单侧缺失时只显示存在的一侧」这条降级语义**，并额外带上 L2 来源标注。
+    /// 若将来要把 AC-A1-12 挪回月相区，**请先删掉 `DaylightCard` 的 `riseSetRow`**，
+    /// 不要两处并存（那正是本次去重要修掉的缺陷）。
 
     // MARK: - ⑥ 页脚
 
