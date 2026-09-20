@@ -37,6 +37,19 @@
 //    纪律沿用既有 AC-A5「元素可选」（precipitation_probability_max 早已是
 //    `[Int?]?`）：缺失就是缺失，mapper 侧跳过，绝不编造 0 / 晴。
 //
+//  v1.7 修订（P2 数据补全，用户诉求"补全数据吧"）：追加实况 / 逐时 / 逐日本体字段，
+//  全部经真实 curl 探针（北京 39.9042,116.4074，与本仓库 `OpenMeteoEndpoint`
+//  逐字相同的参数）验证返回 HTTP 200 且键存在。纪律（与 v1.6 同款，最高静默回归风险）：
+//    · 每一个**新增数组字段**一律 `[T?]?`（整键可选 + **元素可选**），
+//      因为 forecast_days=16 的截断日尾段元素实测为 null（本轮探针：hourly.wind_gusts_10m
+//      末 3 元素 null、daily.wind_gusts_10m_max 末 1 行 null）；写成 `[Double]` 会让合成
+//      解码器抛 DecodingError，整包解码失败 → 主屏与 Widget 同时无数据（Core 共用）。
+//    · 每一个**新增标量字段**一律 `T?` + `var ... = nil`（保持合成逐成员初始化器
+//      把参数放末位且带默认值，既有测试构造点零改动）。
+//    · 禁止手写 `init(from:)`、禁止 `payloadVersion`、禁止把既有非可选字段改可选。
+//  单位事实：snowfall / snowfall_sum 实测为 cm（Open-Meteo 原值，mapper 透传）；
+//    daylight_duration / sunshine_duration 单位为**秒**（透传，换算归 UI）。
+//
 
 import Foundation
 
@@ -69,6 +82,19 @@ struct OpenMeteoResponse: Codable, Sendable {
         var cloud_cover: Double? = nil
         /// B1 遥测补全：10m 阵风（m/s，随 wind_speed_unit=ms）。可选 + 默认 nil。
         var wind_gusts_10m: Double? = nil
+        /// P2 数据补全：此刻降水量（mm）。可选 + 默认 nil：
+        /// 服务端整组省略（四降水键同进同退）→ nil；UI 整格隐藏，绝不合成 0。
+        var precipitation: Double? = nil
+        /// P2 数据补全：此刻液态降水量（mm）。可选 + 默认 nil（语义同上）。
+        var rain: Double? = nil
+        /// P2 数据补全：此刻阵雨降水量（mm）。可选 + 默认 nil（语义同上）。
+        var showers: Double? = nil
+        /// P2 数据补全：此刻降雪量（**cm**，Open-Meteo 原值；mapper 透传，换算归 UI）。
+        /// 可选 + 默认 nil（语义同上）。
+        var snowfall: Double? = nil
+        /// P2 数据补全：此刻 UV 指数（实况值）。可选 + 默认 nil。注意与
+        /// `Daily.uv_index_max`（当日峰值）语义不同，UI 不许共用一个标签。
+        var uv_index: Double? = nil
     }
 
     /// 逐小时序列。
@@ -87,6 +113,15 @@ struct OpenMeteoResponse: Codable, Sendable {
         /// A2-2 新增。逐时降水概率（%），元素/整键均可选（Open-Meteo 可能返回 null 元素）。
         /// 默认 nil：旧测试/旧调用零改动（Codable 解码不受默认值影响）。
         var precipitation_probability: [Double?]? = nil
+        /// P2 数据补全：逐时降水量（mm）。整键可选 + 元素可选（`[Double?]?`，
+        /// v1.6 截断日 null 纪律）：元素 null → mapper 留 nil，绝不补 0（0 是合法值）。
+        var precipitation: [Double?]? = nil
+        /// P2 数据补全：逐时风速（m/s，随 wind_speed_unit=ms）。整键/元素可选，语义同上。
+        var wind_speed_10m: [Double?]? = nil
+        /// P2 数据补全：逐时阵风（m/s）。整键/元素可选，语义同上。
+        var wind_gusts_10m: [Double?]? = nil
+        /// P2 数据补全：逐时体感温度（℃）。整键/元素可选，语义同上。
+        var apparent_temperature: [Double?]? = nil
     }
 
     /// 逐日序列（用于当日高/低温 + F-A 逐日预报）。
@@ -116,6 +151,30 @@ struct OpenMeteoResponse: Codable, Sendable {
         let sunset: [FlexibleTime?]?
         /// A2-2 新增。逐日 UV 指数峰值，元素/整键均可选。默认 nil（旧调用零改动）。
         var uv_index_max: [Double?]? = nil
+        /// P2 数据补全：当日降水合计（mm）。整键/元素可选（`[Double?]?`，截断日末行 null）。
+        /// `0 mm` 是合法值，**必须**原样保留为 0.0，只有 null 才转 nil（UI 区分 "0 mm" / "--"）。
+        var precipitation_sum: [Double?]? = nil
+        /// P2 数据补全：当日液态降水合计（mm）。整键/元素可选，语义同上。
+        var rain_sum: [Double?]? = nil
+        /// P2 数据补全：当日降雪合计（**cm**，Open-Meteo 原值；mapper 透传，换算归 UI）。
+        /// 整键/元素可选，语义同上。
+        var snowfall_sum: [Double?]? = nil
+        /// P2 数据补全：当日最大风速（m/s）。整键/元素可选，语义同上。
+        var wind_speed_10m_max: [Double?]? = nil
+        /// P2 数据补全：当日最大阵风（m/s）。整键/元素可选，语义同上（截断日末行实测 null）。
+        var wind_gusts_10m_max: [Double?]? = nil
+        /// P2 数据补全：当日主导风向（度，0=北，顺时针）。整键/元素可选，语义同上。
+        var wind_direction_10m_dominant: [Double?]? = nil
+        /// P2 数据补全：当日昼长（**秒**，Open-Meteo 原值；mapper 透传，换算归 UI）。
+        /// 整键/元素可选，语义同上。注意：昼长 ≠ 日照时数，二者 UI 不许共用一个标签。
+        var daylight_duration: [Double?]? = nil
+        /// P2 数据补全：当日日照时数（**秒**，Open-Meteo 原值；mapper 透传，换算归 UI）。
+        /// 整键/元素可选，语义同上。注意：日照时数 ≠ 昼长（见 `daylight_duration` 注释）。
+        var sunshine_duration: [Double?]? = nil
+        /// P2 数据补全：当日体感高温（℃）。整键/元素可选，语义同上。
+        var apparent_temperature_max: [Double?]? = nil
+        /// P2 数据补全：当日体感低温（℃）。整键/元素可选，语义同上。
+        var apparent_temperature_min: [Double?]? = nil
     }
 
     /// 短时降水序列（B1-2，15 分钟粒度）。

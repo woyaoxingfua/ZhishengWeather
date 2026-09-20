@@ -24,6 +24,14 @@
 //  （默认 nil，置于 `fetchedAt` 之后），承载未来约 2 小时的 15 分钟粒度降水序列。
 //  可选 + 合成 Codable，旧缓存缺键 → nil、解码不失败（R3；禁手写 init(from:)/payloadVersion）。
 //
+//  v1.5 修订（P2 数据补全，用户诉求"补全数据吧"）：新增 5 个实况可选字段
+//  （`precipitation` / `rain` / `showers` / `snowfall` / `uvIndex`），**插在 `fetchedAt`
+//  之后**（沿用 `minutely15` 的既有范式），保证合成逐成员初始化器把本组参数放末位且带
+//  默认值，全仓既有 `WeatherSnapshot(...)` 调用点零改动即可编译。四降水键（precipitation /
+//  rain / showers / snowfall）整组缺失 → 全 nil，UI 整格隐藏，绝不合成 0.0（AC-A5）；
+//  `uvIndex` 为实况值，与 `DailyForecast.uvIndexMax`（当日峰值）语义不同，UI 分标签。
+//  snowfall 单位实测为 cm（Open-Meteo 原值，透传，换算归 UI）。
+//
 
 import Foundation
 
@@ -105,6 +113,26 @@ struct WeatherSnapshot: Codable, Equatable, Sendable {
 
     /// 本次取数时间。
     var fetchedAt: Date
+
+    /// P2 数据补全：此刻降水量（mm）。可选 + 默认 nil（置于 `fetchedAt` 之后，
+    /// 与 `minutely15` 的既有范式一致：合成逐成员初始化器把本参数放末位且带默认值，
+    /// 全仓既有 `WeatherSnapshot(...)` 调用点零改动即可编译）。
+    /// nil = 服务端四降水键整组省略 / 旧缓存无此键 → UI 整格隐藏，绝不合成 0。
+    var precipitation: Double? = nil
+
+    /// P2 数据补全：此刻液态降水量（mm）。可选 + 默认 nil（语义同 `precipitation`）。
+    var rain: Double? = nil
+
+    /// P2 数据补全：此刻阵雨降水量（mm）。可选 + 默认 nil（语义同 `precipitation`）。
+    var showers: Double? = nil
+
+    /// P2 数据补全：此刻降雪量（**cm**，Open-Meteo 原值；UI 换算归展示层）。
+    /// 可选 + 默认 nil（语义同 `precipitation`）。
+    var snowfall: Double? = nil
+
+    /// P2 数据补全：此刻 UV 指数（实况值）。可选 + 默认 nil。
+    /// ⚠️ 与 `DailyForecast.uvIndexMax`（当日峰值）语义不同，UI 不许共用一个标签。
+    var uvIndex: Double? = nil
 
     /// B1-2 短时降水（15 分钟粒度，可选）。
     ///

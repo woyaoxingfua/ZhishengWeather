@@ -32,6 +32,19 @@
 //    背景（真机，北京，forecast_days=16 + past_days=1）：hourly 下标 399..407
 //    与 daily 下标 16 为 null —— 这是 Open-Meteo 允许的截断日空值，不是接口变更。
 //
+//  v1.7 修订（P2 数据补全，用户诉求"补全数据吧"）：把新增的实况 / 逐时 / 逐日本体字段
+//  从 DTO 映射到领域模型（映射纪律同 v1.6「缺值就跳过、绝不编造」）：
+//    - 实况 four 降水键 + uv_index → WeatherSnapshot 对应可选字段；四降水键全 nil 时
+//      各自为 nil，UI 整格隐藏，绝不合成 0.0；
+//    - 逐时 precipitation / wind_speed_10m / wind_gusts_10m / apparent_temperature →
+//      经既有 `optionalDouble(_:at:)` 安全下标（nil / 越界 / 元素 null 一律 nil），
+//      元素为 0 的合法值原样保留、不转 nil；
+//    - 逐日 10 个新增字段 → DailyForecast（昨日在 `yesterdayForecast` 同款搬运）；
+//    - daylight_duration / sunshine_duration 原值是**秒**，本层原样透传（换算归 UI）；
+//      snowfall / snowfall_sum 单位 cm，同样透传。
+//  所有换算遵守既有风格；Core 层纪律：仅 import Foundation，禁 UIKit / 禁 Date() 直取 /
+//  禁 try! / 禁 fatalError。
+//
 //  约束（跨层纪律 §7.3 / 团队硬约束 ⑤）：
 //  - 禁止内部调用 `Date()`；`now` 必须由参数传入，保证可测。
 //    （注：ARCH §3.1 的签名未含 `now`，与 §7.3「now 注入」冲突；
@@ -82,7 +95,13 @@ enum OpenMeteoMapper {
                 let point = HourlyPoint(
                     time: Date(timeIntervalSince1970: TimeInterval(hourly.time[index])),
                     temperature: temperature,
-                    weatherCode: weatherCode
+                    weatherCode: weatherCode,
+                    // P2 数据补全：逐时新增四字段均为可选，元素 null → nil，绝不补 0
+                    //（0 是合法降水/风速值，原样保留；只有 null 才转 nil，AC-A5）。
+                    precipitation: optionalDouble(hourly.precipitation, at: index),
+                    windSpeed: optionalDouble(hourly.wind_speed_10m, at: index),
+                    windGusts: optionalDouble(hourly.wind_gusts_10m, at: index),
+                    apparentTemperature: optionalDouble(hourly.apparent_temperature, at: index)
                 )
                 points.append(point)
             }
@@ -178,6 +197,15 @@ enum OpenMeteoMapper {
             cloudCover: current.cloud_cover,
             windGusts: current.wind_gusts_10m,
             fetchedAt: now,
+            // P2 数据补全：实况降水本体 + UV。四降水键（precipitation / rain / showers /
+            // snowfall）任一为 nil 时各自为 nil；四者全 nil → UI 整格隐藏，绝不合成 0.0。
+            // `uvIndex` 为实况值，与 `DailyForecast.uvIndexMax`（当日峰值）分标签（见模型注释）。
+            // snowfall 单位为 cm（Open-Meteo 原值，透传，换算归 UI）。
+            precipitation: current.precipitation,
+            rain: current.rain,
+            showers: current.showers,
+            snowfall: current.snowfall,
+            uvIndex: current.uv_index,
             minutely15: minutely
         )
     }
@@ -360,7 +388,21 @@ enum OpenMeteoMapper {
                 precipitationProbability: precipitation,
                 sunrise: decodedSunTime(from: daily.sunrise, at: index, utcOffsetSeconds: utcOffsetSeconds),
                 sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds),
-                uvIndexMax: optionalDouble(daily.uv_index_max, at: index)
+                uvIndexMax: optionalDouble(daily.uv_index_max, at: index),
+                // P2 数据补全：逐日新增本体字段，全部可选、元素 null → nil，绝不补 0
+                //（`precipitation_sum = 0` 必须保留为 0.0，UI 显示 "0 mm"；只有 null 才 "--"）。
+                // daylight_duration / sunshine_duration 单位为**秒**，原样透传（换算归 UI）。
+                // snowfall_sum 单位为 cm（Open-Meteo 原值，透传）。
+                precipitationSum: optionalDouble(daily.precipitation_sum, at: index),
+                rainSum: optionalDouble(daily.rain_sum, at: index),
+                snowfallSum: optionalDouble(daily.snowfall_sum, at: index),
+                windSpeedMax: optionalDouble(daily.wind_speed_10m_max, at: index),
+                windGustsMax: optionalDouble(daily.wind_gusts_10m_max, at: index),
+                windDirectionDominant: optionalDouble(daily.wind_direction_10m_dominant, at: index),
+                daylightDuration: optionalDouble(daily.daylight_duration, at: index),
+                sunshineDuration: optionalDouble(daily.sunshine_duration, at: index),
+                apparentTemperatureMax: optionalDouble(daily.apparent_temperature_max, at: index),
+                apparentTemperatureMin: optionalDouble(daily.apparent_temperature_min, at: index)
             ))
         }
         return Array(forecasts.prefix(maxDailyCount))
@@ -406,7 +448,18 @@ enum OpenMeteoMapper {
             precipitationProbability: precipitation,
             sunrise: decodedSunTime(from: daily.sunrise, at: index, utcOffsetSeconds: utcOffsetSeconds),
             sunset: decodedSunTime(from: daily.sunset, at: index, utcOffsetSeconds: utcOffsetSeconds),
-            uvIndexMax: optionalDouble(daily.uv_index_max, at: index)
+            uvIndexMax: optionalDouble(daily.uv_index_max, at: index),
+            // P2 数据补全：昨日行同样搬运逐日本体字段（可选 + 元素 null → nil）。
+            precipitationSum: optionalDouble(daily.precipitation_sum, at: index),
+            rainSum: optionalDouble(daily.rain_sum, at: index),
+            snowfallSum: optionalDouble(daily.snowfall_sum, at: index),
+            windSpeedMax: optionalDouble(daily.wind_speed_10m_max, at: index),
+            windGustsMax: optionalDouble(daily.wind_gusts_10m_max, at: index),
+            windDirectionDominant: optionalDouble(daily.wind_direction_10m_dominant, at: index),
+            daylightDuration: optionalDouble(daily.daylight_duration, at: index),
+            sunshineDuration: optionalDouble(daily.sunshine_duration, at: index),
+            apparentTemperatureMax: optionalDouble(daily.apparent_temperature_max, at: index),
+            apparentTemperatureMin: optionalDouble(daily.apparent_temperature_min, at: index)
         )
     }
 

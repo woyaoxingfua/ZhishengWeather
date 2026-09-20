@@ -38,6 +38,30 @@ struct DailyForecast: Codable, Equatable, Identifiable, Sendable {
     /// 当日 UV 指数峰值（A2 新增，可选）。
     /// nil = 服务端未返回 / 元素 null / 旧缓存无此键（A2-5 逐日展开直接复用）。
     var uvIndexMax: Double? = nil
+    /// P2 数据补全：当日降水合计（mm）。可选：
+    /// nil = 服务端未返回 / 元素 null / 旧缓存无此键。`0 mm` 是合法值（UI 原样显示），
+    /// 只有 nil 才显示 "--"（与 precipitation_sum = 0 必须区分）。
+    var precipitationSum: Double? = nil
+    /// P2 数据补全：当日液态降水合计（mm）。可选，nil 语义同上。
+    var rainSum: Double? = nil
+    /// P2 数据补全：当日降雪合计（**cm**，Open-Meteo 原值；UI 换算归展示层）。可选，nil 语义同上。
+    var snowfallSum: Double? = nil
+    /// P2 数据补全：当日最大风速（m/s）。可选，nil 语义同上。
+    var windSpeedMax: Double? = nil
+    /// P2 数据补全：当日最大阵风（m/s）。可选，nil 语义同上。
+    var windGustsMax: Double? = nil
+    /// P2 数据补全：当日主导风向（度，0=北顺时针；Open-Meteo 原值）。可选，nil 语义同上。
+    var windDirectionDominant: Double? = nil
+    /// P2 数据补全：当日昼长（**秒**，Open-Meteo 原值；UI 换算为「X 小时 Y 分」）。
+    /// 可选，nil 语义同上。⚠️ **昼长 ≠ 日照时数**，二者语义不同，UI 不许共用一个标签。
+    var daylightDuration: Double? = nil
+    /// P2 数据补全：当日日照时数（**秒**，Open-Meteo 原值；UI 换算为「X 小时 Y 分」）。
+    /// 可选，nil 语义同上。⚠️ **日照时数 ≠ 昼长**（见 `daylightDuration`），UI 不许共用一个标签。
+    var sunshineDuration: Double? = nil
+    /// P2 数据补全：当日体感高温（℃）。可选，nil 语义同上。
+    var apparentTemperatureMax: Double? = nil
+    /// P2 数据补全：当日体感低温（℃）。可选，nil 语义同上。
+    var apparentTemperatureMin: Double? = nil
 
     /// 以日期作为稳定标识（自然日唯一）。
     var id: Date { date }

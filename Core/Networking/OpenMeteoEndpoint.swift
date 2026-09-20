@@ -25,6 +25,19 @@
 //    - 新增 past_days=1（A1-5）——⚠️ 触发 daily[0] 由「今天」变「昨天」，
 //      mapper 侧 todayIndex 定位配套（OpenMeteoMapper，最高静默回归风险点）。
 //  wind_speed_unit=ms 与 timezone=auto / timeformat=unixtime 逐字不动（v1.2 裁定）。
+//  v1.6 修订（P2 数据补全，用户诉求"补全数据吧…先把天气做好吧"）：
+//    在**既有单次 /v1/forecast 请求**内追加实况 / 逐时 / 逐日本体字段，
+//    **不新增任何 query 参数**（仍是单请求，Open-Meteo 配额计数 ×1，R-Q2 纪律——
+//    与 B1-2 的"加字段不加剧请求"同款约束）。追加：
+//    - current：precipitation / rain / showers / snowfall / uv_index；
+//    - hourly：precipitation / wind_speed_10m / wind_gusts_10m / apparent_temperature；
+//    - daily：precipitation_sum / rain_sum / snowfall_sum / wind_speed_10m_max /
+//      wind_gusts_10m_max / wind_direction_10m_dominant / daylight_duration /
+//      sunshine_duration / apparent_temperature_max / apparent_temperature_min。
+//    全部字段名经真实 curl 探针（北京 39.9042,116.4074，与本枚举逐字相同的参数）
+//    逐个验证返回 HTTP 200 且键存在。单位事实：snowfall / snowfall_sum 实测为
+//    cm（Open-Meteo 原值，mapper 原样透传，单位换算归 UI）；daylight_duration /
+//    sunshine_duration 单位为**秒**（同透传）。wind_speed_unit=ms 等既有参数逐字不动。
 //  v1.5 修订（B1-2 短时降水，PRD §4.3 R-Q2「加字段不加剧请求」）：
 //    在**既有单次 forecast 请求**内追加 minutely_15=precipitation,precipitation_probability
 //    （不新增第二个端点/请求）；并**必须**显式声明 forecast_minutely_15=8 —— 把返回条目
@@ -45,7 +58,7 @@ enum OpenMeteoEndpoint {
     /// 基础地址。
     static let baseURLString = "https://api.open-meteo.com/v1/forecast"
 
-    /// 实况字段（A1 后 9 字段；B1 遥测补全 +4 = 13 字段）。
+    /// 实况字段（A1 后 9 字段；B1 遥测补全 +4 = 13 字段；P2 数据补全 +5 = 18 字段）。
     static let currentFields = [
         "temperature_2m",
         "relative_humidity_2m",
@@ -63,12 +76,23 @@ enum OpenMeteoEndpoint {
         "visibility",
         "dew_point_2m",
         "cloud_cover",
-        "wind_gusts_10m"
+        "wind_gusts_10m",
+        // P2 数据补全：实况降水本体（precipitation / rain / showers / snowfall）
+        // 与实况 UV 指数。snowfall 单位实测为 cm（Open-Meteo 原值，mapper 透传）；
+        // 四降水键任一缺失服务端即整组省略，mapper 侧四键全 nil → UI 整格隐藏。
+        "precipitation",
+        "rain",
+        "showers",
+        "snowfall",
+        "uv_index"
     ].joined(separator: ",")
 
     /// 逐小时字段。
     // A2-2：+precipitation_probability（逐时降水概率，摘要引擎输入）
-    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability"].joined(separator: ",")
+    // P2 数据补全：+precipitation（逐时降水 mm）/ wind_speed_10m（m/s）/
+    //   wind_gusts_10m（m/s）/ apparent_temperature（℃体感）。四者均为可选元素数组，
+    //   截断日尾段为 null（v1.6 纪律已在 DTO 落 `[Double?]?`），mapper 跳过不补 0。
+    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability", "precipitation", "wind_speed_10m", "wind_gusts_10m", "apparent_temperature"].joined(separator: ",")
 
     /// 逐日字段（v1.1 新增高低温；F-A 追加天气码与最大降水概率；
     /// A1 追加 sunrise/sunset——run37 实测在 unixtime 下返回 epoch 整数，
@@ -82,7 +106,21 @@ enum OpenMeteoEndpoint {
         "sunrise",
         "sunset",
         // A2-2：UV 指数峰值（摘要引擎 UV 规则 + A2-5 逐日展开预埋）。
-        "uv_index_max"
+        "uv_index_max",
+        // P2 数据补全：逐日本体字段。precipitation_sum / rain_sum / snowfall_sum 单位
+        //   mm（snowfall_sum 实测 cm）；wind_speed_10m_max / wind_gusts_10m_max 单位 m/s；
+        //   wind_direction_10m_dominant 单位度；daylight_duration / sunshine_duration 单位
+        //   **秒**；apparent_temperature_max / _min 单位 ℃。全部 `[Double?]?`（截断日末行 null）。
+        "precipitation_sum",
+        "rain_sum",
+        "snowfall_sum",
+        "wind_speed_10m_max",
+        "wind_gusts_10m_max",
+        "wind_direction_10m_dominant",
+        "daylight_duration",
+        "sunshine_duration",
+        "apparent_temperature_max",
+        "apparent_temperature_min"
     ].joined(separator: ",")
 
     /// 短时降水字段（B1-2，15 分钟粒度）。
