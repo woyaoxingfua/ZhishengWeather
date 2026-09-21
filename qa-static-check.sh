@@ -659,6 +659,57 @@ fi
 
 # ============================================================================
 printf '\n============================================================\n'
+# SC-43 【逐日档位末端承诺】接口取 16 天，UI 只承诺 15 天（AC-A10 的"钉死"分支）
+#
+#        背景：Open-Meteo 在 `forecast_days=16` 时，最后一天（第 16 天）**只填充到下午**，
+#        其余为 `null` —— 那是服务端**明文允许**的"截断日"，不是接口异常。
+#        AC-A10 走的是「**UI 承诺 15 天 + 在文档中钉死**」这条分支，故需要两件事同时成立：
+#          ① 代码侧：逐日档位的**末端值恒为 15**，不得出现 16 档；
+#          ② 文档侧：README 同时写明 15 / 16 / 截断日三件事。
+#
+#        锚定在**性质**上（不锚文件名、不锚行号、不锚整句措辞）：
+#        措辞会改、事实不会，故文档侧只查"三个事实是否都在"。
+#
+#        ⚠️ 代码侧必须**先排除注释**再查 16：该文件里 `AC-A2-16`、以及注释里
+#        「数组不足 16 按实际渲染」都会命中裸 16；而 `116.4074`（经度字面量）
+#        因 `\b` 词边界**不会**命中。不排除注释就会误报。
+DAILY_SECTION="$APP_DIR/DailyForecastSection.swift"
+if [ -f "$DAILY_SECTION" ]; then
+    # ⚠️ 注释过滤的锚点必须是 `^[0-9]+:`（**不是** `:[0-9]+:`）：
+    # 这里是**单文件** `grep -n`，输出是「行号:内容」，**不带文件名**，
+    # 故 `:[0-9]+:` 永不匹配、过滤形同虚设 → 会把注释里的 16 当成代码里的 16 误报。
+    # （首版就踩了这个坑；脚本内 SC-40b 早已写明这条，见其注释。）
+    hit16=$(grep -nE '\b16\b' "$DAILY_SECTION" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*(//|\*|///)' || true)
+    if [ -z "$hit16" ]; then
+        ok SC-43a "逐日档位无 16 档（UI 只承诺 15 天）"
+    else
+        bad SC-43a "逐日档位出现 16（超出 UI 承诺的 15 天）：$(echo "$hit16" | sed -n '1p')"
+    fi
+    # 与 43a 配对：若把 15 档也一并删掉，"无 16"会假通过。
+    if grep -qE 'append\(15\)|\b15\b' "$DAILY_SECTION" 2>/dev/null; then
+        ok SC-43b "15 天档位存在（与 SC-43a 共同构成『末端 = 15』）"
+    else
+        bad SC-43b "未找到 15 天档位 —— 档位定义可能已被改动"
+    fi
+else
+    bad SC-43a "无法检查逐日档位：DailyForecastSection.swift 缺失"
+fi
+
+README_FILE="$ROOT/README.md"
+if [ -f "$README_FILE" ]; then
+    miss=""
+    for kw in "15 天" "16 天" "截断日"; do
+        grep -q "$kw" "$README_FILE" || miss="$miss $kw"
+    done
+    if [ -z "$miss" ]; then
+        ok SC-43c "README 写明『接口取 16 天 / UI 承诺 15 天 / 第 16 天为截断日』"
+    else
+        bad SC-43c "README 缺少承诺要点：$miss（AC-A10 要求文档钉死）"
+    fi
+else
+    warn SC-43c "无法检查 README 承诺：README.md 缺失"
+fi
+
 printf ' 汇总：总计 %d 项，PASS %d，FAIL %d，WARN %d（另 INFO %d 条）\n' \
     "$((PASS_N+FAIL_N+WARN_N))" "$PASS_N" "$FAIL_N" "$WARN_N" "$INFO_N"
 printf '============================================================\n'
