@@ -205,6 +205,56 @@ widget kind 字符串逐字不变（防存量组件失效）。
 
 ---
 
+## 9. 小组件的空态链路（2026-09-23 真机反馈后查明）
+
+### 真机事实
+
+用户用 **Feather + 购买的证书**重签安装。现象：**小组件能被添加到桌面，但一直显示「暂无数据」**。
+
+CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包无问题：
+`Payload/ZhishengWeather.app/PlugIns/ZhishengWeatherWidget.appex` 存在，可执行文件
+758,312 字节（真实 Mach-O），`NSExtensionPointIdentifier = com.apple.widgetkit-extension`。
+**「能添加」本身就是证据**——extension 的打包、重签、系统注册三步都已通过，
+问题只可能在数据链路，不在安装侧。
+
+定性：当前处在 `.noCity` 空态。购买证书**并不**带来 App Group——容器要靠 profile 里
+登记 `com.apple.security.application-groups` 才存在，共享/购买的企业 profile 里
+不会有我们自己的 `group.com.zhisheng.weather`（那是本仓库持有的 App Group）。
+
+### 「选了具体城市」这条路是通的（已核验到符号级）
+
+- 持久化：`WidgetCityIntent.swift:195` 是 `@Parameter var city`，由系统按实例存取，
+  **零共享容器写入** → 不存在"选了也白选"。
+- 解析：`WidgetCityResolver.swift:137` 的固定城市分支在 `builtIn`（`WidgetBuiltInCities`
+  34 城）命中，**不读 `containerAvailable`**，容器不可用完全不影响。
+- 取数：一路到 `OpenMeteoEndpoint.url`，除 `store.loadResult()`（已容忍失败）外
+  **无任何 AppGroupStore 引用**。预算 `fetchBudget = 10` / `requestTimeout = 8`，非零。
+
+### 已发现的三处内部缺陷（不阻断，但应登记）
+
+1. **回显与解析的语义不一致**（违反 P-13 同源纪律）：
+   `WidgetCityIntent.entities(for:)` 对无法解析的 id 兜底 `return .followApp`（:173），
+   而 `WidgetCityResolver` 对同类输入给 `.needsConfiguration`（:159）。
+   后果：编辑界面回显「跟随 App」，实际解析为「未配置」。
+2. **`sharedContainerDown` 结构性不可达**：
+   `AppGroupStore.swift:48` 在 `UserDefaults(suiteName:)` 返回 nil 时回落 `.standard`
+   → 小组件恒读自己进程内的私有 suite，`loadResult()` 永远 `.missing`。
+   后果：`WidgetPayloadStatus` 承诺的「corrupt → 如实说共享数据不可用」在侧载渠道上
+   **永远不会出现**（既得利益：不会出现假警报；代价：这条状态失去意义）。
+3. **编辑预览不联网导致的误判窗口**：编辑界面走 `allowNetwork == false` 的快照路径，
+   选完城市后短暂显示「稍候将自动获取」/「共享数据不可用」，要等 timeline 刷新才出数。
+   会自愈，但用户极易误判为「选了也没用」——这条已写进 README 提醒用户等几秒。
+
+### 教训（写给我们自己）
+
+这次排查里我（lead）犯过一次方向性错误，值得记下来：**按 `emptyReason` 字面 grep 后
+发现"没有 View 消费"，就差点定性为" View 层忘了接文案"**——实际上 View 是通过
+`entry.resolution` 传给 `WidgetCopy.conditionText/hintText` **间接**消费的，
+文案和接都没问题。**按符号字面 grep 不到 ≠ 逻辑上没有这条链路。**
+推演静态 bool 时必须追到实际调用点，否则会把正确的代码冤枉成 bug。
+
+---
+
 ## 8. 其他遗留限制（偏实现的那些）
 
 - **MET Norway 的数值目前不上屏**：只作为逐字段降级链的第二环存在，
