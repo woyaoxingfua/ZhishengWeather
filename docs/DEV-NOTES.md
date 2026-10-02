@@ -223,10 +223,12 @@ CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包
 
 ### 「选了具体城市」这条路是通的（已核验到符号级）
 
-- 持久化：`Core/Logic/WidgetCityIntent.swift:257` 是 `@Parameter var city`，由系统按实例
-  存取，**零共享容器写入** → 不存在"选了也白选"。
-- 解析：`WidgetCityResolver.swift:137` 的固定城市分支在 `builtIn`（`WidgetBuiltInCities`
-  34 城）命中，**不读 `containerAvailable`**，容器不可用完全不影响。
+- 持久化：`WidgetCitySelectionIntent.city`（`Core/Logic/WidgetCityIntent.swift` 内
+  那个**非可选、无 `default:`** 的 `@Parameter`）由系统按实例存取，
+  **零共享容器写入** → 不存在"选了也白选"。
+- 解析：`WidgetCityResolver.resolveOutcome` 的 `.fixed(let cityID:)` 分支在
+  `builtIn`（`WidgetBuiltInCities` 34 城）命中，**不读 `containerAvailable`**，
+  容器不可用完全不影响。
 - 取数：一路到 `OpenMeteoEndpoint.url`，除 `store.loadResult()`（已容忍失败）外
   **无任何 AppGroupStore 引用**。预算 `fetchBudget = 10` / `requestTimeout = 8`，非零。
 
@@ -252,32 +254,29 @@ CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包
 ### 已发现的三处内部缺陷（不阻断，但应登记）
 
 1. **回显与解析的语义不一致**（违反 P-13 同源纪律）：
-   `WidgetCityIntent.entities(for:)` 对无法解析的 id 兜底 `return .followApp`
-   （`Core/Logic/WidgetCityIntent.swift:235`），而 `WidgetCityResolver` 对同类输入给
-   `.needsConfiguration`（`WidgetCityResolver.swift:159`）。
-   后果不止「显示错」：**系统反序列化 per-instance 配置时会拿`entities(for:)`
+   `WidgetCityQuery.entities(for:)` 末尾对无法解析的 id 兜底 `return .followApp`
+   （`Core/Logic/WidgetCityIntent.swift`），而 `WidgetCityResolver.resolveOutcome`
+   对同类输入给 `.needsConfiguration`。
+   后果不止「显示错」：**系统反序列化 per-instance 配置时会拿 `entities(for:)`
    的返回值回写配置**，故该兜底一旦触发，等于**用哨兵静默改写用户的选择**
-   （改写配置，不是界面错显）。已核实**当前不触发** —— 但**理由不是「id 必规范」**
-   （`City.id` 是 `var`，且 `City: Codable` 的合成 `init(from:)` 会从 JSON **直接解 id**、
-   不经 `makeID`，故容器里一份 id 写成 `"30.250,120.170"` 的 JSON 就能产出非规范 id）。
+   （改写配置，不是界面错显）。
+   已核实**当前不触发** —— 但**理由不是「id 必规范」**（`City.id` 是 `var`，且
+   `City: Codable` 的合成 `init(from:)` 会从 JSON **直接解 id**、不经 `makeID`，
+   故容器里一份 id 写成 `"30.250,120.170"` 的 JSON 就能产出非规范 id）。
    真正成立的理由是**侧载渠道上容器恒空**：容器不可用 → `AppGroupStore.loadCities()`
-   返 `.missing`（`AppGroupStore.swift:137`）→ `WidgetCityCatalog.rawCities` 给 `[]`
+   返 `.missing`（`Core/Storage/AppGroupStore.swift`，`loadCities()` 首个 guard
+   的 `else` 分支）→ `WidgetCityCatalog.rawCities` 对 `.missing/.corrupt` 给 `[]`
    → **容器数组必为空**，widget 侧根本没有解码路径；而用户选中的 id 来自
-   `suggestedEntities()` 里`WidgetBuiltInCities.cities` / `City.init` 产出的 `City`
-   → 必是 `makeID` 产物，可被`city(forID:)` 或 `city(fromCanonicalID:)` 还原。
+   `suggestedEntities()` 里 `WidgetBuiltInCities.cities` / `City.init` 产出的 `City`
+   → 必是 `makeID` 产物，可被 `city(forID:)` 或 `city(fromCanonicalID:)` 还原。
    ⚠️ **两条分支够不着的情形**（故结论不说满）：**非规范坐标串**会被
-   `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.swift:132-134` 要求
-   `makeID(lat,lon) == id` 逐字相等）而落到兜底；内置目录漂移/ 城市改名同理。
+   `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.city(fromCanonicalID:name:)` 尾部
+   那句`guard City.makeID(lat,lon) == id else { return nil }` 要求**逐字相等**）
+   而落到兜底；内置目录漂移 / 城市改名同理。
    正确处置是**升级 id 映射表**，不是让兜底静默改写。
-   ⚠️ **2026-09 补记：这个严重性此前被低估了** —— `entities(for:)` 不只用于界面回显，
-   系统反序列化 per-instance 配置时会拿它的返回值**回写**配置，故该兜底一旦触发是
-   **用哨兵静默改掉用户的选择**（改写配置，不只是显示错）。
-   已核实**当前不触发**（实体由 `WidgetCityEntity.make(city)` 从 `City` 生成、id 与
-   `City.makeID` 同格式，`city(forID:)` 与坐标回填两条分支同口径），故仅在
-   **内置目录漂移 / 城市改名**时才可能踩到 —— 那时正确处置是**升级映射表**，
-   **不是**让兜底静默改写用户选择。
 2. **`sharedContainerDown` 结构性不可达**：
-   `AppGroupStore.swift:48` 在 `UserDefaults(suiteName:)` 返回 nil 时回落 `.standard`
+   `AppGroupStore` 的 `UserDefaults` 兜底（`self.defaults = defaults ?? .standard`）
+   在 `UserDefaults(suiteName:)` 返回 nil 时回落 `.standard`
    → 小组件恒读自己进程内的私有 suite，`loadResult()` 永远 `.missing`。
    后果：`WidgetPayloadStatus` 承诺的「corrupt → 如实说共享数据不可用」在侧载渠道上
    **永远不会出现**（既得利益：不会出现假警报；代价：这条状态失去意义）。

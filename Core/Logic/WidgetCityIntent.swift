@@ -12,7 +12,8 @@
 //  本文件一度被判定为「小组件永远无数据」的根因，理由是"Intent 必须在主 App
 //  target 也有定义"。**该归因已被证伪，不要再把它当结论引用**：
 //  · 真正成立的搬 Core 理由是 `openAppWhenRun = true`（见
-//    `WidgetRefreshIntent.swift:27-30`）—— 那要求 Intent 进**主 App target**，
+//    `WidgetRefreshIntent.swift` 文件头「注意：AppIntent 需同时编译进主 App target
+//    与 Widget target」段）—— 那要求 Intent 进**主 App target**，
 //    因为系统在主 App 进程执行 `perform()`。
 //  · 而本类型是 `WidgetConfigurationIntent`，**没有** `openAppWhenRun`，只在
 //    **widget 进程**里被系统反序列化。故"`WidgetRefreshIntent` 需要进 app target"
@@ -30,8 +31,10 @@
 //
 //  ⚠️ 另：WidgetKit 占位渲染会系统套一层 `redacted(reason: .placeholder)`，
 //  把内容涂成点阵方块 —— 连「未选择城市」这类文案都看不见，**导致此前两次误判根因**。
-//  故四个family 的内容根视图都必须挂 `.unredacted()`（见
-//  `ZhishengWeatherWidget/SmallWeatherView.swift` 等），让占位与空态照常显示
+//  故**6 个**内容根视图（Small / Medium / Large + Accessory
+//  Circular / Rectangular / Inline）都挂了 `.unredacted()`（分别见
+//  `ZhishengWeatherWidget/{Small,Medium,Large}WeatherView.swift` 与
+//  `AccessoryWeatherViews.swift`，每文件 1 处），让占位与空态照常显示
 //  `WidgetCopy` 的文案，下次真机上一眼就能看出卡在哪一步。
 //
 //  ── 真机判别器（City 名 + 现象位，三态互斥，一眼可分）────────────────────
@@ -213,16 +216,18 @@ struct WidgetCityQuery: EntityQuery {
     /// 故容器里一份id 写成 `"30.250,120.170"` 的 JSON 就能产出非规范 id）。
     /// 真正让「当前不触发」成立的是**侧载渠道上容器恒空**：
     ///   · 容器不可用 → `AppGroupStore.loadCities()` 返 `.missing`
-    ///     （`AppGroupStore.swift:137`）→ `WidgetCityCatalog.rawCities` 给 `[]`
-    ///     （`:68-75`）→ **容器数组必为空**，故 widget 侧**根本没有解码路径**；
+    ///     （`Core/Storage/AppGroupStore.swift` 里`loadCities()` 首个 guard 的
+    ///     `else` 分支）→ `WidgetCityCatalog.rawCities` 对 `.missing/.corrupt`
+    ///     给 `[]` → **容器数组必为空**，故 widget 侧**根本没有解码路径**；
     ///   · 用户在配置界面选中的 id，来自 `suggestedEntities()` 里的
     ///     `WidgetCityEntity.make(city)`，而那些 `City` 全部出自
     ///     `WidgetBuiltInCities.cities` / `City.init` → 必是 `makeID` 产物。
     /// 而两条还原分支恰好覆盖得住：`city(forID:)` 命中内置目录，
     /// `city(fromCanonicalID:)` 兜**规范**坐标串（往返稳定）。
     /// ⚠️ 两条**够不着**的情形（故别把结论说过头）：**非规范坐标串**会被
-    /// `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.swift:132-134` 要求
-    /// `makeID(lat,lon) == id` **逐字相等**，反例见该文件 :116-117）→ 落到本兜底。
+    /// `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.city(fromCanonicalID:name:)`
+    /// 尾部那句 `guard City.makeID(lat,lon) == id else { return nil }` 要求
+    /// **逐字相等**，非规范反例见该函数文档的「严格性」段）→ 落到本兜底。
     /// 另：内置目录漂移 / 城市改名（id 变化）同样会踩到。
     /// 这两种情形的正确处置都是**升级 id 映射表**（把旧 id 迁到新 id），
     /// **而不是**让兜底静默改掉用户的选择。
@@ -259,8 +264,12 @@ struct WidgetCitySelectionIntent: WidgetConfigurationIntent {
         "选择此小组件显示的城市；默认跟随主 App 当前选中城市。")
 
     /// 非可选（R-C1）。**禁止加 `default:`**——AppIntents 要求 default 为
-    /// 编译期字面量，静态属性会挂编译（CI 实测）；默认值由
-    /// `WidgetCityQuery.defaultResult()` 提供哨兵（AC-C2：不是硬编码北京）。
+    /// 编译期字面量，静态属性会挂编译（CI 实测）；默认值改由本类型下方的
+    /// `init()` 在**函数体内**赋值（哨兵 = `WidgetCityEntity.followApp`，
+    /// 与 `WidgetCityQuery.defaultResult()` 同口径，AC-C2：不是硬编码北京）。
+    ///
+    /// ⚠️ 既然默认值已由 `init()` 提供，就**不要再依赖 `defaultResult()`
+    /// 来兜读回** —— 二者只是恰好同值，不是同一机制（详见 `init()` 的注释）。
     @Parameter(title: "城市")
     var city: WidgetCityEntity
 
@@ -289,9 +298,9 @@ struct WidgetCitySelectionIntent: WidgetConfigurationIntent {
     /// ⚠️ 为什么**不能**改成 `@Parameter(default:)` 来省掉这个 init：
     /// `default:` 要求**编译期字面量**，而哨兵是静态属性
     /// `WidgetCityEntity.followApp`（非字面量）—— 加了会挂编译（R-C1，CI 实测）。
-    /// `init` 的默认参数是**运行时求值**的普通 Swift，不受该限制，故走 init。
+    /// `init` 里的赋值是**运行时求值**的普通 Swift，不受该限制，故走 init。
     ///
-    /// 默认值与 `WidgetCityQuery.defaultResult()`（AC-C2哨兵）、以及
+    /// 默认值与 `WidgetCityQuery.defaultResult()`（AC-C2 哨兵）、以及
     /// `backgroundStyle` 的 `default: .glass` 三者**必须同口径**。
     /// 同仓库 `WidgetRefreshIntent` 也有 `init() {}`，属同一纪律。
     ///

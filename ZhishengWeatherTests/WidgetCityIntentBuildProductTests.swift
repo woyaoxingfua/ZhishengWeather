@@ -2,28 +2,36 @@
 //  WidgetCityIntentBuildProductTests.swift
 //  ZhishengWeatherTests
 //
-//  「配置用的AppIntent 有没有真的进**两个产物**」—— 根因级回归守卫。
+//  ⚠️⚠️ **文件名与内容不符，先读这段**（2026-09 `e65bcb9` 删用例后遗留的债）：
+//  本文件名叫 `...BuildProductTests`、标题曾写「根因级回归守卫」，但**现在
+//  完全不做任何 build product 检查**——只含两个纯逻辑 / 纯文本用例：
+//    ① `testCitySelectionIntentDefaultMatchesDefaultQuerySentinel`
+//    ② `testCityConfigurationIntentSourceLivesInCoreLogic`
+//  原先还有两个「产物字节扫描」用例（扫 bundle 找类型名），它们在 CI 上
+//  **编译不过**（`locatedAppBundle()` / `bundles(in:)` 的类型推断塌成 `[Any]`，
+//  加 `withUnsafeBytes` 指针代码），已在 `e65bcb9` 中**整体删除**。
+//  → **产物级验证仍是已知缺口**，本文件**没有**覆盖它。若要恢复，需重写而非
+//  复原（且请优先用「读 Info.plist / 用 grep 找符号」这类不需要 `bindMemory`
+//  的写法）。文件名暂留以免搅动提交历史，**但请勿据名推断本文件查产物**。
 //
 //  ── 被守卫的缺陷（2026-09 真机实测，全绿而功能是死的）────────────────────
 //  现象：小组件能添加到桌面，但**永远**显示 `--°` / 空态；主 App 一切正常；
 //  用户在编辑界面**能正常选择城市并保存**，仍然没有数据。
 //
-//  ⚠️ **归因更正（重要，勿再沿用旧说法）**：本文件原先把根因记作
-//  「配置Intent 位于 `ZhishengWeatherWidget/`、只编入 widget target，
-//  主 App 缺定义」。**该归因已被证伪**：
+//  ⚠️ **归因更正（重要，勿再沿用旧说法）**：曾把根因记作「配置 Intent 位于
+//  `ZhishengWeatherWidget/`、只编入 widget target，主 App 缺定义」。
+//  **该归因已被证伪**：
 //  · `WidgetRefreshIntent` 需要进主 App target，理由是 `openAppWhenRun = true`
-//    （系统在主 App 进程执行 perform()）；
+//  （系统在主 App 进程执行 perform()）；
 //  · 而 `WidgetCitySelectionIntent` 是 `WidgetConfigurationIntent`，**没有**
 //    `openAppWhenRun`，只在 **widget 进程**里被反序列化 —— 上面那条纪律
 //    **不适用于**它，按同一条处理属过度泛化；
-//  · 且该归因**解释不了**「用户能选、能保存」（若类型定义缺失，选择器本身
-//    就该坏）。
-//  故用例 1/2 现在只作为**结构性回归**（类型确实在两个产物里、文件没漂移），
-//  **不再**声称它们是那个真机缺陷的修复。
+//  · 且该归因**解释不了**「用户能选、能保存」（若类型定义缺失，选择器本身就该坏）。
 //
-//  ✅ 当前最强候选根因见用例 3：`WidgetCitySelectionIntent` **缺 initializer**
-//  → 系统读回per-instance 配置时退回 `defaultQuery.defaultResult()` 哨兵
-//  →「用户选了什么都被静默替换成默认值」→ 零网络请求 → 永久空态。
+//  ✅ 当前最强候选根因（**用例①** 守着它的不变式）：`WidgetCitySelectionIntent`
+//  **缺 initializer** → 系统读回 per-instance 配置时退回
+//  `defaultQuery.defaultResult()` 哨兵 →「用户选了什么都被静默替换成默认值」
+//  → 零网络请求 → 永久空态。
 //  ⚠️ 仍**未在真机验证**（本仓唯一编译门禁是 CI，验不了真机）。
 //
 //  与 `WidgetLocationBuildProductTests` / `AppIconBuildProductTests` 同族：
@@ -32,25 +40,16 @@
 //  真机打包正确，唯独小组件无数据，且不报错、不告警。
 //
 //  ── 守卫锚点纪律 ────────────────────────────────────────────────────────
-//  锚的是**性质**「默认配置解析出来的必须是用户可见的那个哨兵，且它与容器真空
-//  的组合必须如实要配置」，以及「配置 Intent 类型在两个产物里都存在」。
-//  不锚具体文件名、不锚元数据容器的目录名（见下方「证明力边界」）。
+//  锚的是**性质**：「默认配置解析出来的必须是用户可见的那个哨兵」、
+//  「哨兵 id 必须被判为 `.followApp`（分类点）」、「容器空时必须如实要配置」、
+//  以及「配置 Intent 的源码位置仍在 `Core/Logic/`」。**不锚具体文件名**。
 //
 //  ── ⚠️ 证明力边界（务必读，勿过度依赖本测试）─────────────────────────────
-//  1. 用例 1/2 断言的是**类型名出现在产物里**。这只能证明「类型被编进该产物」
-//     这一**结构性事实**，**不能**证明真机缺陷因此被修好（该缺陷的最强候选是
-//     用例 3 的缺init，两者是不同性质的问题）。
-//  2. 用例 3 是**纯逻辑单测**：它锁定「默认值与回退值同口径」「容器真空时如实
-//     要配置」。它**不能**证明真机上系统真的会用这个 init 去反序列化
+//  1. 两个用例都是**纯逻辑 / 纯文本断言**：它们锁定「默认值与回退值同口径」
+//     「哨兵分类正确」「容器空不注入默认城市」「源码位置未漂移」。
+//  2. 它们**不能**证明真机上系统真的会用这个 `init` 去反序列化配置
 //     —— 那取决于设备上的 AppIntents 运行时，**只能真机验**。
-//  3. 刻意**不**断言 AppIntents 元数据容器的目录名 / 文件名：那属于 Apple
-//     私有实现，跨 Xcode 版本会变；锚死它会让本测试在 Xcode 升级后**假红**，
-//     而假红会把真信号一起埋掉（与 SC-40 初版「锚在文件名上」的教训同类）。
-//     故采取**超集判据**：只要产物里有该类型的名字即通过，无论它落在
-//     可执行文件的反射段里还是元数据载荷里。
-//
-//  ── 定位不到产物必须 XCTFail ─────────────────────────────────────────────
-//  静默 skip 会退化成「永远为真的假绿」，那正是本类缺陷的成因。
+//  3. 本文件**不覆盖**产物级验证（见文首「已知缺口」）。
 //
 
 import Foundation
@@ -118,8 +117,16 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
                 + "若被判成 `.fixed(cityID:)`，说明哨兵 id 漂移，回退链会走错分支。"
         )
 
-        // 容器真空（侧载产物上的常态）时，默认配置必须**如实**要配置，
+        // 容器**空**（`cities: []` + `selectedID: nil`）时，默认配置必须**如实**要配置，
         // 而不是静默塞一个城市（或北京）—— 幽灵北京回归防线。
+        // ⚠️ 别把「容器空」与「容器不可用」混为一谈（`containerAvailable` 正是这个维度）：
+        //   · 本例传 `containerAvailable: true` = 容器**可用但里面啥也没有**
+        //     （与 `WidgetCityResolverTests.testFollowAppWithEmptyContainerYields
+        //     NoCityInsteadOfGhostBeijing` 同口径）；
+        //   · 侧载渠道上的常态是 `containerAvailable: false`（App Group 不可用）。
+        // 断言在**两种情况下都成立**，因为 `followAppOutcome` 只看 `selectedID`
+        // 与 `cities`，**不看** `containerAvailable` —— 故这里取哪个值都能守住
+        // 「不注入默认城市」这条性质。
         let outcome = await WidgetCityResolver.resolveOutcome(
             selection: WidgetCitySelection(id: intent.city.id,
                                            name: intent.city.name,
