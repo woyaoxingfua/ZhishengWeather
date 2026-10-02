@@ -287,10 +287,17 @@ struct WidgetCitySelectionIntent: WidgetConfigurationIntent {
     /// 默认值与 `WidgetCityQuery.defaultResult()`（AC-C2哨兵）、以及
     /// `backgroundStyle` 的 `default: .glass` 三者**必须同口径**。
     /// 同仓库 `WidgetRefreshIntent` 也有 `init() {}`，属同一纪律。
-    init(city: WidgetCityEntity = .followApp,
-         backgroundStyle: WidgetBackgroundStyle = .glass) {
-        self.city = city
-        self.backgroundStyle = backgroundStyle
+    ///
+    /// ⚠️ **必须是「无参」init，不能写成带默认参数的形式**（CI 实测，
+    /// run 37034221227）：写成
+    /// `init(city: WidgetCityEntity = .followApp, backgroundStyle: ... = .glass)`
+    /// 语法合法，但 Swift **不会**把它当成 `init()`，还会**阻止编译器合成**
+    /// 无参初始化器 → AppIntents 判定该类型不符合协议：
+    /// `error: type 'WidgetCitySelectionIntent' does not conform to protocol 'AppIntent'`。
+    /// 故默认值在函数体内赋值，与 `WidgetRefreshIntent.init() {}` 保持同形。
+    init() {
+        self.city = .followApp
+        self.backgroundStyle = .glass
     }
 }
 
