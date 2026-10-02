@@ -1,11 +1,34 @@
 //
 //  WidgetCityIntent.swift
-//  ZhishengWeatherWidget（Widget target）
+//  Core / Logic  [App + Widget 共用]
 //
 //  F-C 桌面小组件城市选择：Intent 三件套
 //  （WidgetCityEntity + WidgetCityQuery + WidgetCitySelectionIntent）。
 //
-//  ⚠️ 「禁联网」硬规则（**绝对规则，不设例外**）：本文件所有方法
+//  ⚠️⚠️ **纪律：本文件必须位于 `Core/Logic`，不得搬回 `ZhishengWeatherWidget/`**
+//  （与 `Core/Logic/WidgetRefreshIntent.swift:27-30` 是同一条纪律，两处都要遵守）。
+//
+//  理由（2026-09 真机缺陷实测，勿删）：
+//  AppIntent **不只要编进 Widget target，还必须编进主 App target** —— 系统抽取
+//  AppIntents 元数据（供主 App 进程反序列化用户已保存的 per-instance 配置）时，
+//  要求该 Intent 类型在**主 App 二进制里也有完整定义**。本文件一度留在
+//  `ZhishengWeatherWidget/`（只编入 widget target），后果是：
+//    系统抽出的元数据里类型定义不完整
+//      → 无法反序列化用户**已保存**的配置
+//      → `configuration.city` 永远退回默认值「跟随 App」哨兵
+//      → 走 `WidgetCityResolver.followAppOutcome(container:)`
+//      → 侧载产物上App Group 容器不可用 → 返回 `.needsConfiguration`
+//      → `WeatherProvider.swift:101` 的「无城市就不取数」→ **零网络请求**
+//      → 小组件**永远**显示 `--°` / 空态，而用户能在编辑界面正常选城市并保存。
+//  这个缺陷**全绿**：构建成功、单测全过、真机打包正确，唯独小组件无数据。
+//
+//  同源的另一半纪律：WidgetKit 占位渲染会系统套一层 `redacted(reason: .placeholder)`，
+//  把内容涂成点阵方块 —— 连「未选择城市」这类文案都看不见，**导致此前两次误判根因**。
+//  故四个 family 的内容根视图都必须挂 `.unredacted()`（见
+//  `ZhishengWeatherWidget/SmallWeatherView.swift` 等），让占位与空态照常显示
+//  `WidgetCopy` 的文案，下次真机上一眼就能看出卡在哪一步。
+//
+//  ⚠️「禁联网」硬规则（**绝对规则，不设例外**）：本文件所有方法
 //  （`suggestedEntities()` / `entities(for:)` / `defaultResult()`）
 //  **只允许纯本地读**（经 `AppGroupStore` 读共享容器；容器不可用 → 只剩哨兵 +
 //  内置目录），**禁止任何网络类型引用**；`qa-static-check.sh` SC-40 保持零命中。

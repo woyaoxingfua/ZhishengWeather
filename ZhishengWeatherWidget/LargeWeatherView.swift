@@ -69,6 +69,11 @@ struct LargeWeatherView: View {
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetBackground { entry.backgroundStyle.backgroundView }
+        // ⚠️ 必须 `.unredacted()`：系统占位渲染会套一层
+        // `redacted(reason: .placeholder)`，把整棵内容树涂成点阵方块 ——
+        // 连「未选择城市」这类 `WidgetCopy` 文案都看不见，导致此前两次误判根因。
+        // 摘掉后占位与空态照常显示我们自己的文案，真机上一眼就能看出卡在哪一步。
+        .unredacted()
     }
 
     // MARK: - ① 头部（A1-7：刷新按钮）

@@ -38,6 +38,10 @@ struct AccessoryCircularWeatherView: View {
                 .lineLimit(1)
         }
         .foregroundStyle(.primary)
+        // ⚠️ 必须 `.unredacted()`：系统占位渲染会套一层
+        // `redacted(reason: .placeholder)`，把内容涂成点阵方块，连`WidgetCopy`
+        // 的状态文案都看不见 → 小组件只剩灰块，此前两次误判根因即源于此。
+        .unredacted()
     }
 
     // MARK: - 取值（与 Small/Medium/Large 同源，空态安全兜底）
@@ -82,6 +86,8 @@ struct AccessoryRectangularWeatherView: View {
             }
         }
         .foregroundStyle(.primary)
+        // ⚠️ 必须 `.unredacted()`：见AccessoryCircularWeatherView 处的同一条纪律。
+        .unredacted()
     }
 
     // MARK: - 取值（与 Small/Medium/Large 同源，空态安全兜底）
@@ -123,6 +129,8 @@ struct AccessoryInlineWeatherView: View {
             .font(.system(size: 14, weight: .semibold))
             .lineLimit(1)
             .foregroundStyle(.primary)
+            // ⚠️ 必须 `.unredacted()`：见 AccessoryCircularWeatherView 处的同一条纪律。
+            .unredacted()
     }
 
     // MARK: - 取值（与 Small/Medium/Large 同源，空态安全兜底）
