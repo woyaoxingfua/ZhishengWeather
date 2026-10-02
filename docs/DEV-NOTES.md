@@ -223,19 +223,46 @@ CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包
 
 ### 「选了具体城市」这条路是通的（已核验到符号级）
 
-- 持久化：`WidgetCityIntent.swift:195` 是 `@Parameter var city`，由系统按实例存取，
-  **零共享容器写入** → 不存在"选了也白选"。
-- 解析：`WidgetCityResolver.swift:137` 的固定城市分支在 `builtIn`（`WidgetBuiltInCities`
+- 持久化：`Core/Logic/WidgetCityIntent.swift:248` 是 `@Parameter var city`，由系统按实例
+  存取，**零共享容器写入** → 不存在"选了也白选"。
+- 解析：`WidgetCityResolver.swift:138` 的固定城市分支在 `builtIn`（`WidgetBuiltInCities`
   34 城）命中，**不读 `containerAvailable`**，容器不可用完全不影响。
 - 取数：一路到 `OpenMeteoEndpoint.url`，除 `store.loadResult()`（已容忍失败）外
   **无任何 AppGroupStore 引用**。预算 `fetchBudget = 10` / `requestTimeout = 8`，非零。
 
+> ⚠️ **读回环节曾有第三个缺陷（2026-09 已定位并修）**：上面这条链的前提是
+> `configuration.city` **真的读回了用户所选的 id**。而`WidgetCitySelectionIntent`
+> 当时**没有 initializer**（`city` 又是无`default:` 的非可选 `@Parameter`）→
+> Apple 要求默认值由 init 提供；缺 init 时系统回退 `WidgetCityQuery.defaultResult()`
+> （= `followApp` 哨兵）→ **用户选了什么都被静默替换成默认值**，于是
+> `followAppOutcome`（侧载容器 `selectedID` 恒 nil）→ `.needsConfiguration`
+> → 「无城市就不取数」→ **零网络请求**。已在
+> `Core/Logic/WidgetCityIntent.swift` 补`init(city:backgroundStyle:)` 修复。
+> ⚠️ **仍未真机验证**，且**默认状态不能用来判断成败**（默认哨兵走`followApp`
+> 分支，侧载产物上必然 `.needsConfiguration`）—— 必须**选一个具体城市**再看
+> 标题那一行：真实温度 = 修好；「杭州」+`--°`「未能获取天气」= 取数链路问题；
+> 仍显示 `—` = 读回仍坏。
+>
+> ⚠️ 另有一处**归因更正**：曾把根因记作「配置 Intent 只编入 widget target、
+> 主 App 缺定义」。**该说法已证伪** —— 真正需要进主 App target 的是
+> `openAppWhenRun = true` 的 `WidgetRefreshIntent`（系统在主 App 进程执行 perform()），
+> 而 `WidgetCitySelectionIntent` 是 `WidgetConfigurationIntent`、只在 widget 进程
+> 反序列化；且该归因解释不了「用户能选、能保存」（选择器本身工作正常）。
+
 ### 已发现的三处内部缺陷（不阻断，但应登记）
 
 1. **回显与解析的语义不一致**（违反 P-13 同源纪律）：
-   `WidgetCityIntent.entities(for:)` 对无法解析的 id 兜底 `return .followApp`（:173），
-   而 `WidgetCityResolver` 对同类输入给 `.needsConfiguration`（:159）。
+   `WidgetCityIntent.entities(for:)` 对无法解析的 id 兜底 `return .followApp`
+   （`Core/Logic/WidgetCityIntent.swift:226`），而 `WidgetCityResolver` 对同类输入给
+   `.needsConfiguration`（`WidgetCityResolver.swift:159`）。
    后果：编辑界面回显「跟随 App」，实际解析为「未配置」。
+   ⚠️ **2026-09 补记：这个严重性此前被低估了** —— `entities(for:)` 不只用于界面回显，
+   系统反序列化 per-instance 配置时会拿它的返回值**回写**配置，故该兜底一旦触发是
+   **用哨兵静默改掉用户的选择**（改写配置，不只是显示错）。
+   已核实**当前不触发**（实体由 `WidgetCityEntity.make(city)` 从 `City` 生成、id 与
+   `City.makeID` 同格式，`city(forID:)` 与坐标回填两条分支同口径），故仅在
+   **内置目录漂移 / 城市改名**时才可能踩到 —— 那时正确处置是**升级映射表**，
+   **不是**让兜底静默改写用户选择。
 2. **`sharedContainerDown` 结构性不可达**：
    `AppGroupStore.swift:48` 在 `UserDefaults(suiteName:)` 返回 nil 时回落 `.standard`
    → 小组件恒读自己进程内的私有 suite，`loadResult()` 永远 `.missing`。

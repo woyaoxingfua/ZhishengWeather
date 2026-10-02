@@ -28,11 +28,24 @@
 //  ⚠️ 仍**未在真机验证**（本仓唯一编译门禁是 CI，验不了真机）—— 措辞按「候选」
 //  而非「已修好」：真机装上后若仍无数据，说明另有原因，别把这处当已定论。
 //
-//  另：WidgetKit 占位渲染会系统套一层 `redacted(reason: .placeholder)`，
+//  ⚠️ 另：WidgetKit 占位渲染会系统套一层 `redacted(reason: .placeholder)`，
 //  把内容涂成点阵方块 —— 连「未选择城市」这类文案都看不见，**导致此前两次误判根因**。
-//  故四个 family 的内容根视图都必须挂 `.unredacted()`（见
+//  故四个family 的内容根视图都必须挂 `.unredacted()`（见
 //  `ZhishengWeatherWidget/SmallWeatherView.swift` 等），让占位与空态照常显示
 //  `WidgetCopy` 的文案，下次真机上一眼就能看出卡在哪一步。
+//
+//  ── 真机判别器（City 名 + 现象位，三态互斥，一眼可分）────────────────────
+//  ⚠️ **默认状态（未选城市）不能用来判断修复是否成功**：默认哨兵走
+//  `followApp` 分支，而 App Group 容器在侧载产物上恒不可用
+//  → `followAppOutcome` 必然 `.needsConfiguration` → 「默认没数据」是**预期**行为，
+//  与本缺陷是否修好**无关**。必须**选一个具体城市**再看。
+//  判据（判据落在 `WidgetCopy.cityText` + `conditionText`）：
+//    · 标题 `—`（cityText 皆 nil → city==nil）+「暂无数据」 → **配置回读仍坏**
+//      （city 退回哨兵；本文件 init 未生效或系统持久化层另有问题）；
+//    · 标题「杭州」+ `--°` +「未能获取天气」 → **读回成功、取数链路坏**
+//      （`.fetchFailed`，问题在 WidgetWeatherService / 网络，与配置无关）；
+//    · 标题「杭州」+ 真实温度 → **全通，本轮修法命中**。
+//  有了 `.unredacted()`，这一行标题在真机上**可见** —— 这正是本轮加它的主要收益。
 //
 //  ⚠️「禁联网」硬规则（**绝对规则，不设例外**）：本文件所有方法
 //  （`suggestedEntities()` / `entities(for:)` / `defaultResult()`）
@@ -179,13 +192,33 @@ struct WidgetCityQuery: EntityQuery {
     /// 必须与解析层同源接 C0/C1（含规范坐标回填），否则「用内置城市 / 坐标配置的实例」在编辑界面
     /// 会被**错误回显成哨兵**（系统只按 id 查回实体）。
     /// 回显优先级：哨兵 → 容器城市 → 内置城市 → 规范坐标回填（名称为 id 串）
-    /// → 哨兵（怪值兜底，与 `WidgetCityResolver.resolveOutcome` 的 `.needsConfiguration`
-    /// 语义对齐：都表示"这个值没法解析成城市"）。
+    /// →哨兵（怪值兜底）。
+    /// ⚠️ **不要**把这个兜底读成"与 `WidgetCityResolver.resolveOutcome` 的
+    /// `.needsConfiguration` 语义对齐、因而合理"——**两者并不对齐**，且本兜底
+    /// 有一个远比"显示错"严重的代价，见下方 ⚠️⚠️ 段。简言之：解析层给
+    /// `.needsConfiguration` 只是**如实说"没城市"**，而本兜底会**改写用户的选择**。
     ///
     /// ⚠️ 已知限制（ARCH §10-3 / A10）：坐标回填路径拿不到展示名（系统只给 id，
     /// 旧实体不携带 city 记录），故用**坐标串本身**作确定性名称；该路径只出现在
     /// 「用户搜到过、但既不在容器也不在内置目录」的城市上。时区同样缺失 →
     /// 时刻渲染回退设备时区（既有安全行为，绝不硬编码偏移）。
+    ///
+    /// ⚠️⚠️ **下面那个 `return .followApp` 兜底会「覆盖」用户的选择，不只是显示问题**
+    /// （2026-09 补记，勿按"仅回显错误"理解）：
+    /// 本方法**不只**用于界面回显 —— 系统反序列化 per-instance 配置时，会拿
+    /// `entities(for:)` 的返回值**回写**该实例的配置。所以一旦某个 id 落到这个兜底，
+    /// 用户**原本选中的真实城市会被哨兵悄悄替换掉**（配置被改写，不是显示错）。
+    /// 已知当前**不触发**（适用范围要说准，别把结论说过头）：
+    ///实体由 `WidgetCityEntity.make(city)` 从 `City` 生成，而 `City.id` 唯一入口是
+    /// `City.makeID`（`City.swift:52`）→ **凡由 `City` 产生的 id 必是规范坐标串**，
+    /// 故必被`city(forID:)`（命中容器/内置）或 `city(fromCanonicalID:)`
+    ///（规范坐标往返稳定）之一还原。
+    /// ⚠️ **但非规范坐标串仍会落到兜底**：`city(fromCanonicalID:)` 只认
+    /// `City.makeID(lat,lon) == id` **逐字相等**的串（`WidgetCityCatalog.swift:132-134`），
+    /// 故 `"1,2"` / `"30.250,120.170"` 这类**会被拒绝**（详见该文件 :116-117）。
+    /// 这类脏值理论上来自旧版本地缘编码 id 格式变更等历史遗留。
+    /// 另：内置目录漂移 / 城市改名（id 变化）也会踩到 —— 那时正确的处置是
+    /// **升级映射表**（把旧 id 迁到新 id），**而不是**让兜底静默改掉用户的选择。
     func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
         let container = WidgetCityCatalog.rawCities(from: AppGroupStore().loadCities())
         return identifiers.map { id in
