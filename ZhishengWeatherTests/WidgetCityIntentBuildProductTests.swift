@@ -5,50 +5,57 @@
 //  「配置用的AppIntent 有没有真的进**两个产物**」—— 根因级回归守卫。
 //
 //  ── 被守卫的缺陷（2026-09 真机实测，全绿而功能是死的）────────────────────
-//  现象：小组件能添加到桌面，但**永远**显示 `--°` / 空态；主 App一切正常；
+//  现象：小组件能添加到桌面，但**永远**显示 `--°` / 空态；主 App 一切正常；
 //  用户在编辑界面**能正常选择城市并保存**，仍然没有数据。
 //
-//  根因：`WidgetCityIntent.swift`（配置三件套 `WidgetCityEntity` /
-//  `WidgetCityQuery` / `WidgetCitySelectionIntent`）当时位于
-//  `ZhishengWeatherWidget/` 目录 —— **只编入 widget target，主 App target
-//  完全没有这些类型定义**。
+//  ⚠️ **归因更正（重要，勿再沿用旧说法）**：本文件原先把根因记作
+//  「配置Intent 位于 `ZhishengWeatherWidget/`、只编入 widget target，
+//  主 App 缺定义」。**该归因已被证伪**：
+//  · `WidgetRefreshIntent` 需要进主 App target，理由是 `openAppWhenRun = true`
+//    （系统在主 App 进程执行 perform()）；
+//  · 而 `WidgetCitySelectionIntent` 是 `WidgetConfigurationIntent`，**没有**
+//    `openAppWhenRun`，只在 **widget 进程**里被反序列化 —— 上面那条纪律
+//    **不适用于**它，按同一条处理属过度泛化；
+//  · 且该归因**解释不了**「用户能选、能保存」（若类型定义缺失，选择器本身
+//    就该坏）。
+//  故用例 1/2 现在只作为**结构性回归**（类型确实在两个产物里、文件没漂移），
+//  **不再**声称它们是那个真机缺陷的修复。
 //
-//  为什么这会致命：系统抽取 AppIntents 元数据（供主 App 进程反序列化用户
-//  **已保存**的 per-instance 配置）时，要求该 Intent 类型在**主 App 二进制里
-//  也有完整定义**。缺定义 →
-//    元数据里类型不完整 → 无法反序列化已保存配置
-//    → `configuration.city` 永远退回默认哨兵「跟随 App」
-//    → `WidgetCityResolver.followAppOutcome(container:)`
-//    → 侧载产物上 App Group 容器不可用 → `.needsConfiguration`
-//    → `WeatherProvider.swift:101`「无城市就不取数」→ **零网络请求** → 空态。
+//  ✅ 当前最强候选根因见用例 3：`WidgetCitySelectionIntent` **缺 initializer**
+//  → 系统读回per-instance 配置时退回 `defaultQuery.defaultResult()` 哨兵
+//  →「用户选了什么都被静默替换成默认值」→ 零网络请求 → 永久空态。
+//  ⚠️ 仍**未在真机验证**（本仓唯一编译门禁是 CI，验不了真机）。
 //
-//  与`WidgetLocationBuildProductTests` / `AppIconBuildProductTests` 同族：
-//  纯映射单测**永远抓不到**这类缺陷 —— 它锁的是「解析逻辑写对了」，
-//  锁不住「类型有没有编进产物」。构建成功、单测全过、真机打包正确，
-//  唯独小组件无数据，且不报错、不告警。
+//  与 `WidgetLocationBuildProductTests` / `AppIconBuildProductTests` 同族：
+//  纯映射单测**永远抓不到**「值读回来变了」这类缺陷 —— 它锁的是「解析逻辑
+//  写对了」，锁不住「系统读回的值是不是用户选的那个」。构建成功、单测全过、
+//  真机打包正确，唯独小组件无数据，且不报错、不告警。
 //
 //  ── 守卫锚点纪律 ────────────────────────────────────────────────────────
-//  锚的是**性质**「主 App 产物与 appex 产物里都能找到配置 Intent 的类型名」，
+//  锚的是**性质**「默认配置解析出来的必须是用户可见的那个哨兵，且它与容器真空
+//  的组合必须如实要配置」，以及「配置 Intent 类型在两个产物里都存在」。
 //  不锚具体文件名、不锚元数据容器的目录名（见下方「证明力边界」）。
 //
-//  ── 定位不到产物必须 XCTFail ─────────────────────────────────────────────
-//  静默 skip 会退化成「永远为真的假绿」，那正是本类缺陷的成因。
-//
-//  ──⚠️ 证明力边界（务必读，勿过度依赖本测试）─────────────────────────────
-//  1. 本测试断言的是**类型名出现在产物里**（bundle 内全量字节扫描）。这证明
-//     「类型确实编进了该产物」，也就是上面那条根因链的**必要条件**被守住了。
-//  2. 它**不能**证明「系统成功反序列化了用户已保存的配置」。后者依赖设备上
-//     AppIntents 元数据抽取器的行为、以及 App Group 容器在侧载产物上是否可用
-//     —— 这两件事都**只能在真机验**（本仓唯一编译门禁是 CI，验不了真机）。
-//  3. 它刻意**不**断言 AppIntents 元数据容器的目录名 / 文件名：那属于 Apple
+//  ── ⚠️ 证明力边界（务必读，勿过度依赖本测试）─────────────────────────────
+//  1. 用例 1/2 断言的是**类型名出现在产物里**。这只能证明「类型被编进该产物」
+//     这一**结构性事实**，**不能**证明真机缺陷因此被修好（该缺陷的最强候选是
+//     用例 3 的缺init，两者是不同性质的问题）。
+//  2. 用例 3 是**纯逻辑单测**：它锁定「默认值与回退值同口径」「容器真空时如实
+//     要配置」。它**不能**证明真机上系统真的会用这个 init 去反序列化
+//     —— 那取决于设备上的 AppIntents 运行时，**只能真机验**。
+//  3. 刻意**不**断言 AppIntents 元数据容器的目录名 / 文件名：那属于 Apple
 //     私有实现，跨 Xcode 版本会变；锚死它会让本测试在 Xcode 升级后**假红**，
 //     而假红会把真信号一起埋掉（与 SC-40 初版「锚在文件名上」的教训同类）。
 //     故采取**超集判据**：只要产物里有该类型的名字即通过，无论它落在
 //     可执行文件的反射段里还是元数据载荷里。
 //
+//  ── 定位不到产物必须 XCTFail ─────────────────────────────────────────────
+//  静默 skip 会退化成「永远为真的假绿」，那正是本类缺陷的成因。
+//
 
 import Foundation
 import XCTest
+@testable import ZhishengWeather
 
 final class WidgetCityIntentBuildProductTests: XCTestCase {
 
@@ -73,9 +80,11 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
 
     /// 主 App 产物里必须能搜到 `WidgetCitySelectionIntent` 与 `WidgetCityEntity`。
     ///
-    /// 这就是那个「全绿却功能是死的」缺陷的哨兵：类型只在 widget 二进制里时，
-    /// 系统抽出的AppIntents 元数据缺定义 → 用户已保存的配置无法反序列化 →
-    /// 小组件永远空态，而 CI 全绿。
+    /// ⚠️ **本条不是那个真机缺陷的修复**（旧注释如此声称，已证伪，见文件头）。
+    /// 它现在只锁一条**结构性**性质：配置 Intent 类型在主 App 产物里也有定义。
+    /// 之所以仍要守住：`Core/` 被两个 target 同时编译，一旦有人为省事把配置
+    /// Intent挪进只进 app 的目录（或加 target 排除规则），两侧产物就不一致，
+    /// 而这类漂移**不报错、不告警、CI 全绿**。
     func testHostAppProductContainsCityConfigurationIntentTypes() {
         guard let app = locatedAppBundle() else { return }
 
@@ -85,15 +94,10 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
                 hits.isEmpty,
                 """
                 主 App 产物（\(Self.appBundleID)）里搜不到 AppIntents 类型 \(typeName)。
-                后果：系统抽取的 AppIntents 元数据缺该类型定义 → 无法反序列化用户
-                **已保存**的小组件配置 → `configuration.city` 永远退回「跟随 App」哨兵
-                → 走followAppOutcome → 侧载产物上 App Group 不可用 → `.needsConfiguration`
-                → 「无城市就不取数」→ **零网络请求** → 小组件永远空态。
-                且这一切**不报错、不告警、CI 全绿**。
-                最可能的原因：`Core/Logic/WidgetCityIntent.swift` 被搬回了
-                `ZhishengWeatherWidget/`（那里只编入 widget target）。
-                本文件必须与 `Core/Logic/WidgetRefreshIntent.swift` 同居 Core/Logic
-                —— AppIntent 需同时编进主 App 与 Widget 两个 target。
+                本条只锁「类型在主 App 产物里也有定义」这一结构性性质
+                （**不代表**真机无数据问题因此解决 —— 那件事见用例 3 的缺 init）。
+                若本条变红，说明 `Core/Logic/WidgetCityIntent.swift` 被挪出了 `Core/`，
+                或有人给 target 加了排除规则，使两个 target 的编译输入不一致。
                 （已扫 \(hits) 个文件均未命中。）
                 """
             )
@@ -126,14 +130,83 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
         }
     }
 
-    // MARK: - 3. 源码侧位置纪律：文件必须在 Core/Logic，且两个 target 都挂 Core
+    // MARK: - 3. 配置 Intent 的默认值不变式（缺 init 的静默回退防线）
+
+    /// `WidgetCitySelectionIntent()` 的默认 city 必须是 `followApp` 哨兵。
+    ///
+    /// ── 为什么这条比前两条更贴近「用户能选、能保存、却读回默认值」──────────
+    /// 非可选 `@Parameter` 且无 `default:` 时，Apple 要求默认值由 intent 的
+    /// **initializer** 提供。缺 init → 系统反序列化 per-instance 配置时退回
+    /// `WidgetCityQuery.defaultResult()`（也就是 `followApp` 哨兵），
+    /// **用户选了什么都被静默替换**。
+    /// 链：`city.id == followAppID` → `mode(forEntityID:)` 判 `.followApp`
+    /// → `followAppOutcome(container:)`（侧载容器 `selectedID` 恒 nil）
+    /// → `.needsConfiguration` → `WidgetDataResolver`「无城市就不取数」
+    /// → **零网络请求** → 小组件永远 `--°` / 「暂无数据」。
+    /// 而选择器本身工作正常（用户**能**选**能**保存），这正是该缺陷的特征签名。
+    ///
+    /// 本条同时锁住三处默认值**同口径**（init / defaultQuery / backgroundStyle
+    /// 的 `default:`），任一漂移都会让「配置界面显示的默认」与「实际回退值」不一致。
+    func testCitySelectionIntentDefaultMatchesDefaultQuerySentinel() async {
+        let intent = WidgetCitySelectionIntent()
+
+        XCTAssertEqual(
+            intent.city.id,
+            WidgetCityEntity.followAppID,
+            """
+            `WidgetCitySelectionIntent()` 的默认 city 不是「跟随 App」哨兵。
+            若默认值与 `WidgetCityQuery.defaultResult()` 不同口径，用户在配置界面
+            看到的默认项会与系统实际回退的值不一致（易被当成"保存没生效"）。
+            哨兵唯一真源是 `WidgetCityResolver.followAppID`，全仓禁写 "follow-app" 字面量。
+            """
+        )
+        XCTAssertEqual(
+            intent.backgroundStyle,
+            .glass,
+            "默认底色必须是「玻璃」（与 `@Parameter(default:)` 及 A1 前视觉一致）。"
+        )
+
+        // 哨兵必须真的解析成「跟随 App」，而不是被当成一个城市 id（`.fixed`）。
+        // 这是本缺陷的**唯一分类点**：mode 判错 → 整条链走偏。
+        XCTAssertEqual(
+            WidgetCityResolver.mode(forEntityID: intent.city.id),
+            .followApp,
+            "默认 city 的 id 必须被 `WidgetCityResolver.mode(forEntityID:)` 判为 `.followApp`；"
+                + "若被判成 `.fixed(cityID:)`，说明哨兵 id 漂移，回退链会走错分支。"
+        )
+
+        // 容器真空（侧载产物上的常态）时，默认配置必须**如实**要配置，
+        // 而不是静默塞一个城市（或北京）—— 幽灵北京回归防线。
+        let outcome = await WidgetCityResolver.resolveOutcome(
+            selection: WidgetCitySelection(id: intent.city.id,
+                                           name: intent.city.name,
+                                           subtitle: intent.city.subtitle),
+            container: WidgetContainerSnapshot(cities: [], selectedID: nil,
+                                               containerAvailable: true),
+            builtIn: WidgetBuiltInCities.cities,
+            location: { .notAuthorized })
+        XCTAssertEqual(
+            outcome,
+            .needsConfiguration,
+            """
+            容器真空 + 默认哨兵配置时，`resolveOutcome` 必须返回 `.needsConfiguration`
+            （`city == nil`），让 UI 如实显示「未选择城市」。
+            若这里解析出城市，等于在侧载产物上凭空注入默认城市（幽灵北京）。
+            outcome=\(outcome)
+            """
+        )
+    }
+
+    // MARK: - 4. 源码侧位置纪律：文件必须在 Core/Logic，且两个 target 都挂 Core
 
     /// `WidgetCityIntent.swift` 必须住在 `Core/Logic/`，且 `ZhishengWeatherWidget/`
     /// 下**不得**再有同名文件。
     ///
-    /// 为什么源码侧也要钉：产物扫描能抓住「类型没进产物」，但如果只看产物，
-    /// 「文件被搬走 + 恰好另一处有同名类型」这类漂移会很难排查。这里把
-    /// **物理位置**本身作为被守卫的性质 —— 它正是本次根因的直接成因。
+    /// ⚠️ 位置纪律的**理由已修正**（见文件头）：本文件住Core 的**真正**理由是
+    /// 「与 `WidgetRefreshIntent.swift` 同路径同惯例 + 两 target 共享 Core 的
+    /// 组织方式」，**不是**「配置 Intent 必须进主 App target」（那条不成立）。
+    /// 但**双向**断言仍要保留：搬走会让 widget 侧拿不到配置类型，搬回
+    /// `ZhishengWeatherWidget/` 会让两侧编译输入不一致 —— 两者都是静默失败。
     /// （写法参照同目录 `AppIconSourceSizeGuardTests` 的 `#filePath` 上溯定位。）
     func testCityConfigurationIntentSourceLivesInCoreLogic() {
         guard let root = locatedRepositoryRoot() else { return }
@@ -144,15 +217,16 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
 
         XCTAssertTrue(
             fm.fileExists(atPath: expected.path),
-            "配置 Intent 必须位于 Core/Logic/WidgetCityIntent.swift（由 project.yml 自动挂入"
-                + "主 App 与 Widget 两个 target）；实际找不到 \(expected.path)。"
+            "配置 Intent 必须位于 Core/Logic/WidgetCityIntent.swift（与 "
+                + "WidgetRefreshIntent.swift 同路径同惯例，由 project.yml 挂入两个 target）；"
+                + "实际找不到 \(expected.path)。"
         )
         XCTAssertFalse(
             fm.fileExists(atPath: stale.path),
             """
-            \(stale.path) 又出现了 —— AppIntent 只编入 widget target 会让系统抽出的
-            AppIntents 元数据缺定义，用户已保存的配置无法反序列化，小组件永远空态
-            （且不报错、CI 全绿）。请把它放回 Core/Logic/。
+            \(stale.path) 又出现了。若配置 Intent 只编入 widget target，两个 target 的
+            编译输入就不一致（widget 侧有、主 App 侧无）—— 这类漂移不报错、不告警、
+            CI 全绿。请把它放回 Core/Logic/。
             """
         )
 

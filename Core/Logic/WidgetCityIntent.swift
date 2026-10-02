@@ -5,24 +5,30 @@
 //  F-C 桌面小组件城市选择：Intent 三件套
 //  （WidgetCityEntity + WidgetCityQuery + WidgetCitySelectionIntent）。
 //
-//  ⚠️⚠️ **纪律：本文件必须位于 `Core/Logic`，不得搬回 `ZhishengWeatherWidget/`**
-//  （与 `Core/Logic/WidgetRefreshIntent.swift:27-30` 是同一条纪律，两处都要遵守）。
+//  ⚠️ 纪律：本文件住在 `Core/Logic`，由 project.yml 自动挂入主 App 与 Widget
+//  两个 target（与 `Core/Logic/WidgetRefreshIntent.swift` 同路径同惯例）。
 //
-//  理由（2026-09 真机缺陷实测，勿删）：
-//  AppIntent **不只要编进 Widget target，还必须编进主 App target** —— 系统抽取
-//  AppIntents 元数据（供主 App 进程反序列化用户已保存的 per-instance 配置）时，
-//  要求该 Intent 类型在**主 App 二进制里也有完整定义**。本文件一度留在
-//  `ZhishengWeatherWidget/`（只编入 widget target），后果是：
-//    系统抽出的元数据里类型定义不完整
-//      → 无法反序列化用户**已保存**的配置
-//      → `configuration.city` 永远退回默认值「跟随 App」哨兵
-//      → 走 `WidgetCityResolver.followAppOutcome(container:)`
-//      → 侧载产物上App Group 容器不可用 → 返回 `.needsConfiguration`
-//      → `WeatherProvider.swift:101` 的「无城市就不取数」→ **零网络请求**
-//      → 小组件**永远**显示 `--°` / 空态，而用户能在编辑界面正常选城市并保存。
-//  这个缺陷**全绿**：构建成功、单测全过、真机打包正确，唯独小组件无数据。
+//  ⚠️ **归因更正（2026-09，勿再按旧注释推理）**：
+//  本文件一度被判定为「小组件永远无数据」的根因，理由是"Intent 必须在主 App
+//  target 也有定义"。**该归因已被证伪，不要再把它当结论引用**：
+//  · 真正成立的搬 Core 理由是 `openAppWhenRun = true`（见
+//    `WidgetRefreshIntent.swift:27-30`）—— 那要求 Intent 进**主 App target**，
+//    因为系统在主 App 进程执行 `perform()`。
+//  · 而本类型是 `WidgetConfigurationIntent`，**没有** `openAppWhenRun`，只在
+//    **widget 进程**里被系统反序列化。故"`WidgetRefreshIntent` 需要进 app target"
+//    这条纪律**不适用于本类型**，把它当同一条属过度泛化。
+//  · 且该归因**解释不了**「用户在编辑界面能正常选城市并保存」—— 若类型定义缺失，
+//    选择器本身就该坏。
 //
-//  同源的另一半纪律：WidgetKit 占位渲染会系统套一层 `redacted(reason: .placeholder)`，
+//  ✅ 当前**最强的候选根因**（代码级、可复现的机制）：本类型**缺 initializer**。
+//  非可选 `@Parameter` 且无 `default:` 时，Apple 要求默认值由 init 提供；
+//  缺 init → 系统读回配置时退回 `defaultQuery.defaultResult()`（= `followApp`
+//  哨兵）→ **用户选了什么都被静默替换成默认值**。修法见下方
+//  `WidgetCitySelectionIntent.init`。
+//  ⚠️ 仍**未在真机验证**（本仓唯一编译门禁是 CI，验不了真机）—— 措辞按「候选」
+//  而非「已修好」：真机装上后若仍无数据，说明另有原因，别把这处当已定论。
+//
+//  另：WidgetKit 占位渲染会系统套一层 `redacted(reason: .placeholder)`，
 //  把内容涂成点阵方块 —— 连「未选择城市」这类文案都看不见，**导致此前两次误判根因**。
 //  故四个 family 的内容根视图都必须挂 `.unredacted()`（见
 //  `ZhishengWeatherWidget/SmallWeatherView.swift` 等），让占位与空态照常显示
@@ -222,6 +228,37 @@ struct WidgetCitySelectionIntent: WidgetConfigurationIntent {
     /// 系统按 per-instance 持久化；默认"玻璃"（与 A1 前视觉一致）。
     @Parameter(title: "底色", default: WidgetBackgroundStyle.glass)
     var backgroundStyle: WidgetBackgroundStyle
+
+    /// ⚠️ **必须有这个 initializer**（2026-09 真机缺陷修点，勿删）。
+    ///
+    /// Apple 明文要求：`@Parameter` 若是**非可选**且**没有 `default:`**，
+    /// 该默认值**必须由 intent 的 initializer 提供**。缺initializer 时，
+    /// 系统反序列化 per-instance 配置会退回 `WidgetCityQuery.defaultResult()`
+    /// ——也就是 `followApp` 哨兵，**无论用户在编辑界面选了什么**。
+    ///
+    /// 缺陷链（本条注释存在的全部理由）：
+    ///   `configuration.city.id == followAppID`
+    ///     → `WidgetCityResolver.mode(forEntityID:)` 判为 `.followApp`
+    ///     → `followAppOutcome(container:)`（侧载产物 App Group 容器不可用，
+    ///       `selectedID` 恒 nil）→ `.needsConfiguration`
+    ///     → `WidgetDataResolver`「无城市就不取数」→ **零网络请求**
+    ///     → 小组件**永远** `--°` / 「暂无数据」。
+    /// 而用户在编辑界面**能正常选择城市并保存**（选择器本身工作正常），
+    /// 只有「读回来」这一步被静默替换成默认值 —— 这正是本缺陷的特征签名。
+    ///
+    /// ⚠️ 为什么**不能**改成 `@Parameter(default:)` 来省掉这个 init：
+    /// `default:` 要求**编译期字面量**，而哨兵是静态属性
+    /// `WidgetCityEntity.followApp`（非字面量）—— 加了会挂编译（R-C1，CI 实测）。
+    /// `init` 的默认参数是**运行时求值**的普通 Swift，不受该限制，故走 init。
+    ///
+    /// 默认值与 `WidgetCityQuery.defaultResult()`（AC-C2哨兵）、以及
+    /// `backgroundStyle` 的 `default: .glass` 三者**必须同口径**。
+    /// 同仓库 `WidgetRefreshIntent` 也有 `init() {}`，属同一纪律。
+    init(city: WidgetCityEntity = .followApp,
+         backgroundStyle: WidgetBackgroundStyle = .glass) {
+        self.city = city
+        self.backgroundStyle = backgroundStyle
+    }
 }
 
 /// 小组件底色三档（AppIntents 参数枚举）。
