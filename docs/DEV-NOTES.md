@@ -253,9 +253,16 @@ CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包
 
 1. **回显与解析的语义不一致**（违反 P-13 同源纪律）：
    `WidgetCityIntent.entities(for:)` 对无法解析的 id 兜底 `return .followApp`
-   （`Core/Logic/WidgetCityIntent.swift:226`），而 `WidgetCityResolver` 对同类输入给
+   （`Core/Logic/WidgetCityIntent.swift:235`），而 `WidgetCityResolver` 对同类输入给
    `.needsConfiguration`（`WidgetCityResolver.swift:159`）。
-   后果：编辑界面回显「跟随 App」，实际解析为「未配置」。
+   后果不止「显示错」：**系统反序列化 per-instance 配置时会拿`entities(for:)`
+   的返回值回写配置**，故该兜底一旦触发，等于**用哨兵静默改写用户的选择**
+   （改写配置，不是界面错显）。已核实**当前不触发**——`City.id` 唯一入口是
+   `City.makeID`（`City.swift:70`），故凡由 `City` 产生的 id 必是规范坐标串；
+   但**非规范坐标串**（如 `"1,2"` / `"30.250,120.170"`）会被
+   `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.swift:132-134` 要求
+   `makeID(lat,lon) == id` 逐字相等）而落到兜底；内置目录漂移/ 城市改名同理。
+   正确处置是**升级 id 映射表**，不是让兜底静默改写。
    ⚠️ **2026-09 补记：这个严重性此前被低估了** —— `entities(for:)` 不只用于界面回显，
    系统反序列化 per-instance 配置时会拿它的返回值**回写**配置，故该兜底一旦触发是
    **用哨兵静默改掉用户的选择**（改写配置，不只是显示错）。
