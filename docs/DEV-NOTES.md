@@ -223,9 +223,9 @@ CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包
 
 ### 「选了具体城市」这条路是通的（已核验到符号级）
 
-- 持久化：`Core/Logic/WidgetCityIntent.swift:248` 是 `@Parameter var city`，由系统按实例
+- 持久化：`Core/Logic/WidgetCityIntent.swift:257` 是 `@Parameter var city`，由系统按实例
   存取，**零共享容器写入** → 不存在"选了也白选"。
-- 解析：`WidgetCityResolver.swift:138` 的固定城市分支在 `builtIn`（`WidgetBuiltInCities`
+- 解析：`WidgetCityResolver.swift:137` 的固定城市分支在 `builtIn`（`WidgetBuiltInCities`
   34 城）命中，**不读 `containerAvailable`**，容器不可用完全不影响。
 - 取数：一路到 `OpenMeteoEndpoint.url`，除 `store.loadResult()`（已容忍失败）外
   **无任何 AppGroupStore 引用**。预算 `fetchBudget = 10` / `requestTimeout = 8`，非零。
@@ -257,9 +257,15 @@ CI 产物字节级取证（run `35751372045`，head_sha `ce021f8`）确认打包
    `.needsConfiguration`（`WidgetCityResolver.swift:159`）。
    后果不止「显示错」：**系统反序列化 per-instance 配置时会拿`entities(for:)`
    的返回值回写配置**，故该兜底一旦触发，等于**用哨兵静默改写用户的选择**
-   （改写配置，不是界面错显）。已核实**当前不触发**——`City.id` 唯一入口是
-   `City.makeID`（`City.swift:70`），故凡由 `City` 产生的 id 必是规范坐标串；
-   但**非规范坐标串**（如 `"1,2"` / `"30.250,120.170"`）会被
+   （改写配置，不是界面错显）。已核实**当前不触发** —— 但**理由不是「id 必规范」**
+   （`City.id` 是 `var`，且 `City: Codable` 的合成 `init(from:)` 会从 JSON **直接解 id**、
+   不经 `makeID`，故容器里一份 id 写成 `"30.250,120.170"` 的 JSON 就能产出非规范 id）。
+   真正成立的理由是**侧载渠道上容器恒空**：容器不可用 → `AppGroupStore.loadCities()`
+   返 `.missing`（`AppGroupStore.swift:137`）→ `WidgetCityCatalog.rawCities` 给 `[]`
+   → **容器数组必为空**，widget 侧根本没有解码路径；而用户选中的 id 来自
+   `suggestedEntities()` 里`WidgetBuiltInCities.cities` / `City.init` 产出的 `City`
+   → 必是 `makeID` 产物，可被`city(forID:)` 或 `city(fromCanonicalID:)` 还原。
+   ⚠️ **两条分支够不着的情形**（故结论不说满）：**非规范坐标串**会被
    `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.swift:132-134` 要求
    `makeID(lat,lon) == id` 逐字相等）而落到兜底；内置目录漂移/ 城市改名同理。
    正确处置是**升级 id 映射表**，不是让兜底静默改写。

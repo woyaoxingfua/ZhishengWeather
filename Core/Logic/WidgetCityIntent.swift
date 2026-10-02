@@ -208,17 +208,24 @@ struct WidgetCityQuery: EntityQuery {
     /// 本方法**不只**用于界面回显 —— 系统反序列化 per-instance 配置时，会拿
     /// `entities(for:)` 的返回值**回写**该实例的配置。所以一旦某个 id 落到这个兜底，
     /// 用户**原本选中的真实城市会被哨兵悄悄替换掉**（配置被改写，不是显示错）。
-    /// 已知当前**不触发**（适用范围要说准，别把结论说过头）：
-    ///实体由 `WidgetCityEntity.make(city)` 从 `City` 生成，而 `City.id` 唯一入口是
-    /// `City.makeID`（`City.swift:52`）→ **凡由 `City` 产生的 id 必是规范坐标串**，
-    /// 故必被`city(forID:)`（命中容器/内置）或 `city(fromCanonicalID:)`
-    ///（规范坐标往返稳定）之一还原。
-    /// ⚠️ **但非规范坐标串仍会落到兜底**：`city(fromCanonicalID:)` 只认
-    /// `City.makeID(lat,lon) == id` **逐字相等**的串（`WidgetCityCatalog.swift:132-134`），
-    /// 故 `"1,2"` / `"30.250,120.170"` 这类**会被拒绝**（详见该文件 :116-117）。
-    /// 这类脏值理论上来自旧版本地缘编码 id 格式变更等历史遗留。
-    /// 另：内置目录漂移 / 城市改名（id 变化）也会踩到 —— 那时正确的处置是
-    /// **升级映射表**（把旧 id 迁到新 id），**而不是**让兜底静默改掉用户的选择。
+    /// 已知当前**不触发**，但**理由不是「id 必规范」**（`City.id` 是 `var`，且`City`
+    /// 是 `Codable`，合成 `init(from:)` 会从 JSON **直接解id**、不经 `makeID`，
+    /// 故容器里一份id 写成 `"30.250,120.170"` 的 JSON 就能产出非规范 id）。
+    /// 真正让「当前不触发」成立的是**侧载渠道上容器恒空**：
+    ///   · 容器不可用 → `AppGroupStore.loadCities()` 返 `.missing`
+    ///     （`AppGroupStore.swift:137`）→ `WidgetCityCatalog.rawCities` 给 `[]`
+    ///     （`:68-75`）→ **容器数组必为空**，故 widget 侧**根本没有解码路径**；
+    ///   · 用户在配置界面选中的 id，来自 `suggestedEntities()` 里的
+    ///     `WidgetCityEntity.make(city)`，而那些 `City` 全部出自
+    ///     `WidgetBuiltInCities.cities` / `City.init` → 必是 `makeID` 产物。
+    /// 而两条还原分支恰好覆盖得住：`city(forID:)` 命中内置目录，
+    /// `city(fromCanonicalID:)` 兜**规范**坐标串（往返稳定）。
+    /// ⚠️ 两条**够不着**的情形（故别把结论说过头）：**非规范坐标串**会被
+    /// `city(fromCanonicalID:)` 拒绝（`WidgetCityCatalog.swift:132-134` 要求
+    /// `makeID(lat,lon) == id` **逐字相等**，反例见该文件 :116-117）→ 落到本兜底。
+    /// 另：内置目录漂移 / 城市改名（id 变化）同样会踩到。
+    /// 这两种情形的正确处置都是**升级 id 映射表**（把旧 id 迁到新 id），
+    /// **而不是**让兜底静默改掉用户的选择。
     func entities(for identifiers: [String]) async throws -> [WidgetCityEntity] {
         let container = WidgetCityCatalog.rawCities(from: AppGroupStore().loadCities())
         return identifiers.map { id in
