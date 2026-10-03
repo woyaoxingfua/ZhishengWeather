@@ -639,10 +639,17 @@ struct SettingsView: View {
         + "手动选一次；该选择由系统按小组件实例保存，卸载重装前一直有效。"
         + "「重载小组件时间线」只请系统重新拉取一次，不会同步城市。"
 
-    /// App 版本号（Info.plist MARKETING_VERSION，AC-A3-10）。
+    /// App 版本号（Info.plist MARKETING_VERSION / CFBundleVersion，AC-A3-10）。
+    ///
+    /// 显示成 `0.1.0 (123)` 两段，**build 号不可省**：侧载安装时系统**不刷新图标与
+    /// 展示名缓存**，用户无法从桌面判断"装的到底是不是新包"。只显示 `0.1.0` 时
+    /// 每次构建看起来都一样 —— 曾因此让人误判"改了没生效/没装上"。
+    /// `CURRENT_PROJECT_VERSION` 由 CI 注入 `GITHUB_RUN_NUMBER`，逐次递增。
     static var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        return version ?? "--"
+        let v = version ?? "--"
+        guard let build, !build.isEmpty else { return v }
+        return "\(v) (\(build))"
     }
 }

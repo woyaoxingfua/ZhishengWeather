@@ -104,12 +104,19 @@ jobs:
 
       - name: Archive (unsigned)
         run: |
+          # ⚠️ build 号必须逐次递增（2026-10-03 补）
+          # 侧载安装时系统不刷新图标与展示名缓存，用户无法从桌面判断装的是不是新包。
+          # 此前 `CURRENT_PROJECT_VERSION: "1"` 写死在 project.yml，每次构建都是
+          # `0.1.0 (1)`，导致「改了没生效 / 到底装没装上」无法区分。
+          # GITHUB_RUN_NUMBER 逐次递增，命令行 build setting 优先级高于 project.yml。
+          # CFBundleVersion 必须是**递增的正整数**，故不能带前缀 / 短横线。
           xcodebuild archive \
             -project ZhishengWeather.xcodeproj \
             -scheme ZhishengWeather \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ZhishengWeather.xcarchive \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
