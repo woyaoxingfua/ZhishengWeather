@@ -25,6 +25,17 @@
 //   - AC-B1-7 的**粒度诚实文案原样保留**（「15 分钟粒度 · 由逐小时插值，非实况外推」）——
 //     这是事实性标注，不得删改或弱化。
 //
+//  P3 修订：**顶部结论句**（对齐竞品的"结论句"形态——墨迹「大雨定点速报」/
+//  Apple Weather Next-Hour / 彩云降水条给的都是一句话，不是图表）：
+//   - 句子由 `MinutelyPrecipitationCopy.headline(points:now:)` 生成（**Core 单一真源**，
+//     可 XCTest 直接断言；本视图**不拼字符串**）；
+//   - 判定复用 `MinutelyPrecipitationEngine.timing(_:)`，与既有引擎**同一口径**，
+//     杜绝"引擎说在下、文案说没下"的自相矛盾；
+//   - `now` 由 `TimelineView(.everyMinute)` 注入（**本文件不调用 `Date()`**），
+//     每分钟自动重算，与 `DaylightCard.sunsetRow` 同一做法；
+//   - `headline == nil` → **整行不渲染**（不留空白、不画"无"）；
+//   - 柱状图 / 峰值标注 / 逐柱概率 / 「由逐小时插值，非实况外推」的诚实标注**全部原样保留**。
+//
 
 import SwiftUI
 
@@ -49,12 +60,20 @@ struct MinutelyPrecipitationCard: View {
     }
 
     private var card: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            bars
-            probabilityRow
-            axis
-            footer
+        // 外层 spacing = 0：headline 为 nil 时 `headlineRow` 整体不占位，
+        // 若沿用 spacing 10 会**凭空多出一段 10pt 空白**（`TimelineView` 包着
+        // EmptyView 不是字面上的 EmptyView，VStack 的 spacing 仍会生效）→
+        // 违反「nil → 整行不渲染，不留空白」。故 headline 的下间距做在它自己身上，
+        // 内层 VStack 的 10pt 间距（header…footer 之间）保持原样不动。
+        VStack(alignment: .leading, spacing: 0) {
+            headlineRow
+            VStack(alignment: .leading, spacing: 10) {
+                header
+                bars
+                probabilityRow
+                axis
+                footer
+            }
         }
         .padding(12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
@@ -62,6 +81,31 @@ struct MinutelyPrecipitationCard: View {
             RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
                 .stroke(Theme.divider, lineWidth: 0.5)
         )
+    }
+
+    // MARK: - 顶部结论句（P3）
+
+    /// 卡片顶部的结论句行（「正在下雨」/「约 N 分钟后开始降水」/「即将开始降水」/
+    /// 「可能有降水，暂不确定」）。
+    ///
+    /// - 句子由 `MinutelyPrecipitationCopy`（Core 单一真源）生成，本视图**不拼字符串**；
+    /// - `now` 由 `TimelineView(.everyMinute)` 注入 → 每分钟自动重算
+    ///   （与 `DaylightCard.sunsetRow` 同一做法；**本文件不调用 `Date()`**）；
+    /// - `headline == nil` → **整段隐藏**（不留空白、不画「无」）；下间距 10pt
+    ///   挂在 `Text` 上，故隐藏时**连间距一起消失**。
+    @ViewBuilder
+    private var headlineRow: some View {
+        TimelineView(.everyMinute) { context in
+            if let headline = MinutelyPrecipitationCopy.headline(points: points,
+                                                                 now: context.date) {
+                Text(headline)
+                    .font(.system(size: Theme.FontSize.sectionTitle, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .padding(.bottom, 10)
+            }
+        }
     }
 
     // MARK: - 标题（粒度诚实标注）
