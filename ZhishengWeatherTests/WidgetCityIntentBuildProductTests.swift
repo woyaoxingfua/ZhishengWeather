@@ -72,11 +72,11 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
     // 已在 CI 上跑通的构建产物定位办法（参见同目录 `WidgetLocationBuildProductTests.swift`
     // 与 `AppIconBuildProductTests.swift`），应优先把字节扫描加回来。
 
-    // MARK: - 3. 配置 Intent 的默认值不变式（缺 init 的静默回退防线）
+    // MARK: - ① 配置 Intent 的默认值不变式（缺 init 的静默回退防线）
 
     /// `WidgetCitySelectionIntent()` 的默认 city 必须是 `followApp` 哨兵。
     ///
-    /// ── 为什么这条比前两条更贴近「用户能选、能保存、却读回默认值」──────────
+    /// ── 为什么这条最贴近「用户能选、能保存、却读回默认值」─────────────────
     /// 非可选 `@Parameter` 且无 `default:` 时，Apple 要求默认值由 intent 的
     /// **initializer** 提供。缺 init → 系统反序列化 per-instance 配置时退回
     /// `WidgetCityQuery.defaultResult()`（也就是 `followApp` 哨兵），
@@ -139,15 +139,16 @@ final class WidgetCityIntentBuildProductTests: XCTestCase {
             outcome,
             .needsConfiguration,
             """
-            容器真空 + 默认哨兵配置时，`resolveOutcome` 必须返回 `.needsConfiguration`
+            容器**空**（`cities: []` + `selectedID: nil`，无论 `containerAvailable`
+            取值）+ 默认哨兵配置时，`resolveOutcome` 必须返回 `.needsConfiguration`
             （`city == nil`），让 UI 如实显示「未选择城市」。
-            若这里解析出城市，等于在侧载产物上凭空注入默认城市（幽灵北京）。
+            若这里解析出城市，等于凭空注入默认城市（幽灵北京）。
             outcome=\(outcome)
             """
         )
     }
 
-    // MARK: - 4. 源码侧位置纪律：文件必须在 Core/Logic，且两个 target 都挂 Core
+    // MARK: - ② 源码侧位置纪律：文件必须在 Core/Logic，且两个 target 都挂 Core
 
     /// `WidgetCityIntent.swift` 必须住在 `Core/Logic/`，且 `ZhishengWeatherWidget/`
     /// 下**不得**再有同名文件。
