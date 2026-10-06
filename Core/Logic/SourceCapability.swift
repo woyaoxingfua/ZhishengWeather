@@ -27,4 +27,12 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
                                  //   单列一个 case 而不复用 `.currentObservation`：
                                  //   `.currentObservation` 隐含体感温度 / 天气码 / 降水等
                                  //   本轮并不提供 → 复用会**虚报能力**（下游按能力寻址时会误信）。
+                                 //   同一条纪律在此复述一次，因为下面两个 case 面临**完全相同**的诱惑：
+    case marineWaveConditions    // 海浪要素：浪高 / 浪向 / 周期 / 涌浪 ← 第四源 marine。
+                                 //   ⚠️ **不复用 `.dailyForecast`**（它隐含高低温 / 天气码 / 降水概率，
+                                 //   marine 端点一条都不提供）→ 复用即虚报能力。
+                                 //   也**不复用 `.currentObservation`**：marine 无温度 / 气压 / 湿度。
+    case riverDischarge          // 河道流量（river_discharge，m³/s）← 第五源 flood。
+                                 //   ⚠️ 这是**逐日**序列，但语义与天气逐日预报毫无关系
+                                 //   （无高低温、无天气码），故同样单列而不复用 `.dailyForecast`。
 }

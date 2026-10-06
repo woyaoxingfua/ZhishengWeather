@@ -30,6 +30,9 @@ struct SettingsView: View {
     let lastUpdated: Date?
 
     /// 主数据源展示名（动态派生，不再写死常量，ARCH §5 L3）。
+    ///
+    /// ⚠️ 这一行**只是名字**，本身不构成署名（CC BY 4.0 要求可点击的出处）。
+    /// 真正的署名在页面底部「数据署名」区，由 `DataAttribution` 统一提供。
     private var primarySourceDisplayName: String {
         SourceCatalog.all.first { $0.role == .primary }?.displayName ?? "Open-Meteo"
     }
@@ -417,6 +420,79 @@ struct SettingsView: View {
                                     SourcePreferences.shared.setDisabled(row.id, disabled: !enabled)
                                 }))
                         }
+                    }
+                }
+            }
+
+            // 数据署名（CC BY 4.0 合规义务）。
+            //
+            // ⚠️ 这是**义务**不是装饰：Open-Meteo 官方定价页明文要求
+            // "This licence mandates giving appropriate credit and indicating any
+            // modifications made to the data."（CC BY 4.0）—— 署名与说明改动两项都强制。
+            //
+            // 放在设置页底部而非主屏：主屏是天气数字的舞台，塞一坨法务文案会干扰
+            // 「一眼看到今天多少度」这个核心任务。
+            //
+            // 文案与链接**全部**派生自 `DataAttribution`（Core），本页只负责渲染 ——
+            // 绝不另写一份，否则合规文案会与真源漂移，而漂移的合规文案等于没有。
+            Section("数据署名") {
+                // ① 统一声明：出处 + 许可 + **已做转换**（三者缺一即不满足 CC BY 4.0）。
+                Text(DataAttribution.unifiedStatement)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+
+                // ② 转换明细：逐条对应真实代码，不是笼统一句「数据经过处理」。
+                // 用 `id: \.self`（清单本身无重复项，见 DataAttributionTests），
+                // 避开 `enumerated()` 的元组解构闭包 —— 那种写法在 SwiftUI ForEach
+                // 里编译脆性偏高，而这里的收益仅是「多一个行号前缀」，不值得。
+                ForEach(DataAttribution.modificationCategories, id: \.self) { item in
+                    Text("· " + item)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+
+                // ③ 逐源列出 + **可点击**官网链接。
+                // 只显示网址字符串不满足 "giving credit" 的可追溯性，故用 `Link`。
+                ForEach(DataAttribution.allEntries) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(entry.displayName)
+                            Spacer(minLength: 8)
+                            if let url = entry.websiteURL {
+                                Link(destination: url) {
+                                    HStack(spacing: 4) {
+                                        Text("官网")
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.system(size: 10))
+                                    }
+                                    .font(.system(size: 12))
+                                }
+                            }
+                        }
+                        Text(entry.provides)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.secondaryText)
+                        if let note = entry.note {
+                            // 如实备注（如 archive/ensemble「现状可用但官方矩阵不含」）。
+                            // 用橙色而非红色：这是**信息**不是错误。
+                            Text(note)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                // ④ 许可全文链接（让用户能自行核对条款）。
+                if let licenseURL = DataAttribution.licenseURL {
+                    Link(destination: licenseURL) {
+                        HStack {
+                            Text(DataAttribution.licenseDisplayName)
+                            Spacer(minLength: 8)
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                        .font(.system(size: 12))
                     }
                 }
             }

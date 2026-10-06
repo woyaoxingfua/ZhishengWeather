@@ -34,6 +34,19 @@ enum SourceID: String, CaseIterable, Sendable {
     /// —— 仅补**基础数值字段**（温 / 压 / 湿 / 云 / 风），且是**不同的数值模式**
     /// （与 Open-Meteo 交叉校验才有意义）。
     case metNorwayForecast = "met-norway-forecast"
+    /// 第四源：海浪（Open-Meteo Marine，`marine-api.open-meteo.com`，免 Key）——
+    /// 仅补**海浪要素**（浪高 / 浪向 / 周期 / 涌浪），且**只在沿海坐标**才有数据。
+    ///
+    /// ⚠️ rawValue **必须与实际域名语义一致**：端点已从 `api.open-meteo.com`
+    /// 迁到**独立子域名** `marine-api.open-meteo.com`，写在主站上一律 404
+    /// （实测 `{"reason":"Not Found"}`）。故此处是 `open-meteo-marine`，
+    /// **不是** `open-meteo-forecast` 的变体、也不是 `marine.open-meteo.com`。
+    case marineForecast = "open-meteo-marine"
+    /// 第五源：河道流量（Open-Meteo Flood，`flood-api.open-meteo.com`，免 Key）——
+    /// 仅补**河道流量**（`river_discharge`，m³/s）。
+    ///
+    /// ⚠️ 同上：独立子域名，写在主站上 404。
+    case floodForecast = "open-meteo-flood"
 }
 
 // MARK: - Codable
