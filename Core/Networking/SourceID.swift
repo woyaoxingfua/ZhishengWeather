@@ -47,6 +47,12 @@ enum SourceID: String, CaseIterable, Sendable {
     ///
     /// ⚠️ 同上：独立子域名，写在主站上 404。
     case floodForecast = "open-meteo-flood"
+    /// 第六源：**官方气象预警**（中国气象局 NMC 预警信号公开接口，免 Key）
+    /// —— 仅补**预警**能力（颜色等级 / 类型 / 行政区划 / 发布时间）。
+    ///
+    /// ⚠️ rawValue 用 `nmc-alarm`：与前五个源不同，本源**不是**数值预报，
+    /// 而是**预警信号**本身（其余五家都是气象要素）。
+    case nmcAlarm = "nmc-alarm"
 }
 
 // MARK: - Codable

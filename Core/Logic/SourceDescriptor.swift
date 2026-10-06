@@ -190,7 +190,37 @@ enum SourceDirectory {
                          participatesInAutoExclusion: false,
                          websiteURLString: "https://open-meteo.com/en/docs/flood-api",
                          // 同 marine：官方免费档功能表**逐字列出** "Flood API" → 无需备注。
-                         usageNote: nil)
+                         usageNote: nil),
+
+        // 第六源：官方气象预警（中国气象局 NMC `www.nmc.cn/rest/findAlarm`，免 Key）。
+        //
+        // ⚠️ 这是本仓**第一个官方预警源** —— 前五家（Open-Meteo / sunrise-sunset /
+        // MET Norway / marine / flood）都是**数值要素**，只有本源是**预警信号本身**。
+        SourceDescriptor(id: .nmcAlarm,
+                         displayName: "中国气象局预警",
+                         role: .auxiliary,
+                         capabilities: [.officialWarning],
+                         // ⚠️ **诚实留空**：预警要素（颜色 / 类型 / 防御指南）**不在**
+                         // `WeatherFieldKey` 域内（它们属于 `OfficialWarningItem` 模型），
+                         // 塞几个天气字段进来充数只会让 EV-1 判"永远缺字段"。
+                         // → 后果：与 air/marine/flood 同处境，**无 EV-1 信号源**。
+                         requiredFields: [],
+                         // 实测 2026-10-06：免 Key、无需 Referer、无需账号 → false。
+                         needsCredential: false,
+                         // 同marine / air：接线尚未完成，**无调用点上报**
+                         // `recordMissingFields` / `recordHTTPStatus` → 诚实置false，
+                         // 不在设置页给一个"点了没反应"的开关。
+                         participatesInAutoExclusion: false,
+                         // 实测 2026-10-06 经代理：`http://www.nmc.cn/` → **HTTP 200**
+                         //（https 亦 200）。CC BY 4.0 署名义务要求可追溯的 credit，
+                         // 故这里填官网首页。
+                         websiteURLString: "http://www.nmc.cn/",
+                         // ⚠️⚠️ **许可状态必须如实写，不得美化**（这是硬要求）。
+                         // 我们调用的是**公开网页接口**，**未获中国气象局任何形式的
+                         // API 授权 / 许可协议签署** —— 无账号、无 Key、无协议。
+                         // 故如实告知「未获官方授权 + 仅供个人自用」，
+                         // **不得**写「官方授权」或任何暗示已获授权的字样。
+                         usageNote: "数据来自中国气象局官网公开预警接口，未经官方 API 授权，仅供个人自用。预警信息请以官方发布为准。")
     ]
 
     /// 按 id 取描述符（未登记 → nil；调用方按「未知源一律不参与自动摘除」处理）。

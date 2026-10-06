@@ -307,6 +307,25 @@ struct ContentView: View {
                             currentUV: snapshot.uvIndex,
                             dailyPeakFallback: snapshot.daily?.first?.uvIndexMax,
                             timeZone: viewModel.selectedTimeZone)
+                // 官方预警卡（第六源 · 中国气象局 NMC）。
+                //
+                // **插入位置**：UV 卡之后、可排序区块 `ForEach(orderedVisibleSections)`
+                // **之前**（与 `UVIndexCard` / `RadarMapCard` 同款：不占用
+                // `HomeSection`，避免老用户持久化顺序把它补到尾部）。
+                //
+                // ⚠️ **四态由VM 派生，本文件不做任何判定**：
+                //   · `.none`（真的没预警）→ 卡内 `EmptyView`，不留空白；
+                //   · `.active` / `.stale` / `.unavailable` → 卡内各有可见输出。
+                // ⚠️ **`displayedOfficialWarning` 为 nil 时不渲染** —— nil 表示
+                //   **从未取数**（不是"没有预警"）。绝不能把 nil 当成 `.none`：
+                //   那会在真正有红色预警时让卡片静默消失（本仓明令禁止的静默兜底）。
+                // `now` 由 `TimelineView` 外的 `snapshot.fetchedAt` 提供
+                //   （卡片本身不读 `Date()`）。
+                if let warningState = viewModel.displayedOfficialWarning {
+                    OfficialWarningCard(state: warningState,
+                                       now: snapshot.fetchedAt,
+                                       timeZone: viewModel.selectedTimeZone)
+                }
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in

@@ -35,4 +35,13 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
     case riverDischarge          // 河道流量（river_discharge，m³/s）← 第五源 flood。
                                  //   ⚠️ 这是**逐日**序列，但语义与天气逐日预报毫无关系
                                  //   （无高低温、无天气码），故同样单列而不复用 `.dailyForecast`。
+    case officialWarning         // 官方气象预警（预警信号 / 颜色等级 / 防御指南）
+                                 //   ← 第六源 NMC（中国气象局）。
+                                 //   ⚠️ **不复用 `.currentObservation`**（它隐含温压湿 /
+                                 //   天气码 / 降水，预警一条都不提供）→ 复用即虚报能力。
+                                 //   也**不复用 `.dailyForecast`**（预警是**即时事件**、
+                                 //   随时增删，与逐日预报序列无关）。
+                                 //   单列的另一个理由：预警的领域模型是**列表**而非
+                                 //   `WeatherFieldKey` 域内的标量，混进既有能力枚举
+                                 //   会逼出一个假字段（见 `SourceCapability` 文件头）。
 }

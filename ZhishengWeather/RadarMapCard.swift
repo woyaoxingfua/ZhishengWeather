@@ -94,6 +94,12 @@ final class RadarTileOverlay: MKTileOverlay {
         maximumZ = RadarTileZoomRange.maximum
         // 盖在 Apple 底图之上，不替换底图内容。
         canReplaceMapContent = false
+        // `.loadBeforeDisplay`：瓦片中位数仅 ~4 KB，预加载成本可接受；
+        // `.loadAsync` 会让拖动时出现空白格子闪烁，对天气图观感伤害大。
+        //
+        // ⚠️ `loadingPolicy` 声明在 **MKTileOverlay** 上，**不在**
+        // `MKTileOverlayRenderer` 上 —— 设到 renderer 上编译不过。
+        loadingPolicy = .loadBeforeDisplay
     }
 
     /// 纠偏后的瓦片请求坐标。
@@ -222,11 +228,9 @@ struct RadarMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
-                let renderer = MKTileOverlayRenderer(tileOverlay: tileOverlay)
-                // `.loadBeforeDisplay`：瓦片中位数仅 ~4 KB，预加载成本可接受；
-                // `.loadAsync` 会让拖动时出现空白格子闪烁，对天气图观感伤害大。
-                renderer.loadingPolicy = .loadBeforeDisplay
-                return renderer
+                // 注意：`loadingPolicy` 是在 `RadarTileOverlay.init` 里设的
+                // （它属于 MKTileOverlay，不属于 renderer）。这里只造 renderer。
+                return MKTileOverlayRenderer(tileOverlay: tileOverlay)
             }
             return MKOverlayRenderer(overlay: overlay)
         }
@@ -263,11 +267,10 @@ struct RadarMapCard: View {
             if availability.allowsScrubbing, let timeline {
                 timelineBar(timeline)
             }
-            if let note = delayNote(timeline) {
-                Text(note)
-                    .font(.system(size: Theme.FontSize.footnote))
-                    .foregroundStyle(Theme.secondaryText)
-            }
+            // `delayNote` 是 `@ViewBuilder -> some View`（内部自行判空并用
+            // TimelineView 更新），**不是** Optional —— 用 `if let` 解它会
+            // 让 `note` 变成 `some View`，而 `Text(_:)` 要的是 StringProtocol。
+            delayNote(timeline)
         }
         .padding(12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))

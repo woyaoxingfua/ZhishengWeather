@@ -93,6 +93,27 @@ final class WeatherViewModel {
     /// 而不是整卡静默消失）。失败只写本属性，**绝不触碰 `state`**。
     private(set) var airState: SourceState = .idle
 
+    /// 官方预警第六链路服务（`www.nmc.cn`，免 Key；与天气链路物理分离）。
+    private let alarmService: NmcAlarmProviding
+    /// 官方预警四态（**直接持有**，不进 `WeatherSnapshot`/共享容器 ——
+    /// 预警是**列表**且随时增删，落进快照契约会给小组件带来无谓耦合）。
+    ///
+    /// ⚠️ 失败**绝不**退化成 `.none`：取数失败 → `.stale(.fetchFailed)`，
+    /// 否则用户会在真正有红色预警时看到"无预警"（内容错误，见 `OfficialWarning`）。
+    ///
+    /// ⚠️ **初值刻意是 `.unavailable` 而非 `.none`**：四态里**没有** `.idle`
+    /// （"还没取数"不属于用户能理解的四态之一）。
+    /// 但把初值设成 `.none` 就是**谎报"没有预警"** —— 那恰是本链路存在的
+    /// 理由所要消灭的缺陷。故初值取 `.unavailable`，并且
+    /// `displayedOfficialWarning` 在**首次取数完成前返回 nil**
+    /// （卡根本不渲染），从根上避免"未取数就被当成无预警"。
+    private(set) var officialWarningState: OfficialWarningState = .unavailable
+    /// 官方预警**归属城市** id（跨城串号守卫，与 `ensembleCityID` 同款纪律）。
+    private var officialWarningCityID: String? = nil
+    /// 官方预警最近一次取数**尝试**时刻（既是新鲜度判据的基准，也让 UI 知道
+    /// "已经取过了" —— `nil` 表示**从未取数**，此时不渲染卡片）。
+    private var lastOfficialWarningFetchAt: Date? = nil
+
     /// 集合预报第三链路服务（独立域名 `ensemble-api.open-meteo.com`，独立慢节奏）。
     private let ensembleService: EnsembleProviding
     /// 集合预报（本特性）：**仅存于 VM，不进 WeatherSnapshot / 共享容器**。
@@ -172,6 +193,7 @@ final class WeatherViewModel {
          locationProvider: LocationProvider? = nil,
          airService: AirQualityProviding = AirQualityService(),
          ensembleService: EnsembleProviding = EnsembleService(),
+         alarmService: NmcAlarmProviding = NmcAlarmService(),
          reminderScheduler: UmbrellaReminderScheduler? = nil,
          activityManager: WeatherActivityManager? = nil) {
         self.service = service
@@ -179,6 +201,9 @@ final class WeatherViewModel {
         self.locationProvider = locationProvider ?? LocationProvider()
         self.airService = airService
         self.ensembleService = ensembleService
+        // ⚠️ `NmcAlarmService` 是普通 actor（非 @MainActor 隔离 init），
+        // 故可作 default 参数直接求值（同 `airService` / `ensembleService`）。
+        self.alarmService = alarmService
         // ⚠️ 同 LocationProvider：@MainActor 隔离 init 不能作 default 参数
         //（default 在调用方非隔离上下文求值），故 default 用 nil、体内创建。
         self.reminderScheduler = reminderScheduler ?? UmbrellaReminderScheduler()
@@ -311,6 +336,9 @@ final class WeatherViewModel {
             // 集合第三链路（独立 Task；内部自带 3h 慢节奏守卫，不随 15min 主循环刷新）。
             let ensembleCity = selectedCity
             Task { await loadEnsemble(for: ensembleCity) }
+            // 官方预警第六链路（独立 Task；失败绝不反噬天气，且失败在屏上可见为 .stale）。
+            let alarmCity = selectedCity
+            Task { await loadOfficialWarnings(for: alarmCity) }
             // 雨伞提醒副链路（本地通知；纯副作用，绝不触碰 state，失败静默降级）。
             scheduleUmbrellaReminderIfNeeded(for: snapshot, city: selectedCity)
             // 过期丢弃（P1-A）：刷新期间用户若切换城市，当前结果已非选中城市，丢弃不应用，
@@ -470,6 +498,9 @@ final class WeatherViewModel {
             // 集合第三链路（独立 Task；3h 慢节奏守卫 + 跨城守卫见 loadEnsemble）。
             let ensembleCity = city
             Task { await loadEnsemble(for: ensembleCity) }
+            // 官方预警第六链路（独立 Task；同 loadAir 的失败隔离与跨城守卫）。
+            let alarmCity = city
+            Task { await loadOfficialWarnings(for: alarmCity) }
             // 过期丢弃（P1-A）：取数期间用户若又切换城市，仅当选中项仍是本次目标城市才应用，
             // 否则丢弃，交由对应的 select/addAndSelect/remove 取数流程修正界面。
             guard directory.selectedID == city.id else { return }
@@ -561,7 +592,52 @@ final class WeatherViewModel {
         }
     }
 
-    // MARK: - 集合预报第三链路（Ensemble，额度 4.0 倍）
+    // MARK: - 官方预警链路（第六源 · 中国气象局 NMC）
+
+    /// 拉取官方预警（独立 Task，R5 失败隔离，照 `loadAir` 形状）。
+    ///
+    /// ⚠️ **绝不触碰 `state`**：预警链路挂掉不影响天气主屏。
+    /// ⚠️ **失败不静默**：catch 里置 `.stale(.fetchFailed)`，
+    /// **绝不**置 `.none`（那会把"取不到"说成"没有预警"）。
+    /// - Parameter city: 本次取数目标城市（提供市名做筛选 + 时区解析发布时间）。
+    private func loadOfficialWarnings(for city: City) async {
+        lastOfficialWarningFetchAt = Date()
+        do {
+            let timeZone = WeatherTimeFormatter.timeZone(for: city)
+            // 一次拉**全国**列表（实测当日 161 条 ≈ 45 KB，免 Key），
+            // 筛选在本地做 —— 免得为每个城市各发一次请求。
+            let all = try await alarmService.fetchAllWarnings(timeZone: timeZone)
+            let matched = NmcAlarmMapper.warnings(in: all,
+                                                  matchingCityName: city.name,
+                                                  cityCode: nil)
+            // 跨城串号守卫（P1-A纪律平移）：切城中返回的旧结果直接丢弃。
+            guard directory.selectedID == city.id else { return }
+            officialWarningCityID = city.id
+            officialWarningState = OfficialWarningState.resolve(items: matched,
+                                                                latestIssuedAt: matched
+                                                                    .compactMap(\.issuedAt)
+                                                                    .max(),
+                                                                now: Date())
+        } catch {
+            guard directory.selectedID == city.id else { return }
+            officialWarningCityID = city.id
+            // ⚠️ 文案取自 FaultDomain 单一真源（同loadAir）。
+            officialWarningState = .stale(reason: .fetchFailed(Self.message(for: error)))
+        }
+    }
+
+    /// 官方预警状态（**仅当已取过数且归属当前选中城市时**返回，否则 nil）。
+    ///
+    /// - Returns: nil = **从未取数**（卡片不渲染）或归属别的城市。
+    ///   刻意用 nil 表达"还没取数"而不是 `.none` —— 后者会被读成"没有预警"。
+    var displayedOfficialWarning: OfficialWarningState? {
+        guard lastOfficialWarningFetchAt != nil,
+              let id = directory.selectedID,
+              id == officialWarningCityID else { return nil }
+        return officialWarningState
+    }
+
+    // MARK: - 集合预报第三链路（Ensemble，额度 4.0倍）
 
     /// 拉取集合预报（独立 Task，R5 隔离 + 配额守卫）：
     ///  - **慢节奏**：同一城市 3 小时内不重复取数（`ensembleCadence`）——本调用等价
