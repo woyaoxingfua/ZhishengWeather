@@ -218,8 +218,11 @@ struct CLLocationCoordinate2Like: Equatable, Sendable {
     /// 北京（复用既有默认城市常量，不引入第二套默认坐标）。
     static let beijing = CLLocationCoordinate2Like(latitude: 39.9090, longitude: 116.3970)
 
-    /// → MapKit 坐标（App 侧唯一转换点）。
-    var mapCoordinate: CLLocationCoordinate2 {
+    /// → MapKit / CoreLocation 坐标（App 侧唯一转换点）。
+    /// ⚠️ 类型名是 **`CLLocationCoordinate2D`**（带尾 D）；曾误写成
+    /// `CLLocationCoordinate2`（无尾 D，那不是任何真实类型），CI 报
+    /// `cannot find type` （run 37460108230）。
+    var mapCoordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 }

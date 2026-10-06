@@ -136,13 +136,19 @@ final class WeatherViewModel {
     /// `refresh()` 是热路径且带 R-3 回归风险注释，就地保持不动更安全）：
     /// 选中城市为「当前位置」且定位**未**回落到默认 → 用定位新坐标；
     /// 否则用选中城市存储坐标。
+    ///
+    /// ⚠️ 这里用的是**属性** `location`（`private(set) var LocationInfo`），
+    /// **不是** `refresh()` 里的局部常量 `resolved` —— 那个局部量在方法作用域内，
+    /// 属性区访问不到（曾误写 `resolved.isFallback` 导致 CI 编译不过，
+    /// run 37460108230）。语义等价：`location` 就是 `refresh()` 结束时
+    /// `location = resolved` 赋完的值。
     var resolvedCoordinateForRadar: (latitude: Double, longitude: Double) {
         guard let selectedCity = directory.selectedCity else {
             return (location.latitude, location.longitude)
         }
-        let useResolved = selectedCity.isCurrentLocation && !resolved.isFallback
+        let useResolved = selectedCity.isCurrentLocation && !location.isFallback
         return useResolved
-            ? (resolved.latitude, resolved.longitude)
+            ? (location.latitude, location.longitude)
             : (selectedCity.latitude, selectedCity.longitude)
     }
 
