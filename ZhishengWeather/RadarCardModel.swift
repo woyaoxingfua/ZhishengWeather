@@ -48,6 +48,16 @@ final class RadarCardModel {
     /// 是否正在首次加载（**只用于显示"正在加载"，不参与四态判定**）。
     private(set) var isLoading: Bool = false
 
+    /// 本次加载对应的城市标识（**防串号的唯一守卫**）。
+    ///
+    /// 取数是 `async`，用户可能在等 A 城数据时切到 B 城。
+    /// `load` 里写入本值，后到的 A 城结果必须 `guard currentCityID == cityID`
+    /// 才能落地（见 `load` 内两处 guard）——否则会把旧城数据画到新城地图上。
+    ///
+    /// ⚠️ 2026-10-06 补：本属性**此前只有赋值、没有声明**（`load` 内 :161/:173/:179
+    /// 三处读写），CI 编译不过（run 37460108230）。逻辑本已正确，只是漏了声明。
+    private(set) var currentCityID: String?
+
     /// 加载是否已超时（秒）。
     ///
     /// ⚠️ **必须有超时兜底**：取数卡住时若一直转圈，用户看到的就是
@@ -56,7 +66,15 @@ final class RadarCardModel {
     /// **底图与模型概率照常可用**（绝不空白）。
     static let loadTimeout: TimeInterval = 12
 
-    /// 本次加载是否已超时（由 `load` 注入的时刻差算出，不调 `Date()`）。
+    /// 本次加载是否已超时。
+    ///
+    /// 判定式是 `Date().timeIntervalSince(now) > loadTimeout`（见 `load` 末尾）：
+    /// `now` 是本次加载的**起点**（由调用方注入，单测可固定），
+    /// `Date()` 取**完成时刻**，两者之差即真实耗时。
+    ///
+    /// ⚠️ 此处**必须**读完成时刻，不能用"注入的 now 自己减自己"
+    /// ——那样永远等于 0、超时分支永不触发，正是本条要防的"转圈卡死"。
+    /// App 侧调 `Date()` 是本仓既有惯例（如 `WeatherViewModel` 同样直接调）。
     private(set) var hasTimedOut: Bool = false
 
     /// 瓦片宿主（取自元数据）。
