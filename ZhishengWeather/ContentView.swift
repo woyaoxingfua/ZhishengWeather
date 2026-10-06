@@ -38,11 +38,15 @@ struct ContentView: View {
 
     /// 降水雷达卡状态（第四链路：独立域名 + 独立失败域）。
     ///
-    /// 与 `attributionCoordinator` **完全同款**的接法（`@StateObject` +
-    /// `.task(id:)` 驱动），因此**不新增第二个刷新生命周期**。
+    /// 与 `attributionCoordinator` 生命周期**同款**（`.task(id:)` 驱动），
+    /// 但持有方式**必须不同**：`RadarCardModel` 用 `@Observable` 而非
+    /// `ObservableObject` —— `@Observable` 宏**不合成 `$` 投影**，
+    /// 用 `@StateObject` 会直接编译失败（run 37458644694 实证）。
+    /// 这一点在本文件下方已有一条关于 `$` 投影的注释，三处口径必须一致。
+    ///
     /// 刻意**不进 `WeatherViewModel`**：雷达失败只该写自己的状态，
-    /// 塞进主 VM 会污染主 `state`（违反本仓失败隔离纪律）。
-    @StateObject private var radarModel = RadarCardModel()
+    /// 塞进主 VM 会污染主 `state`（失败隔离纪律）。
+    @State private var radarModel = RadarCardModel()
 
     var body: some View {
         // Handoff / Siri 建议：先把「当前城市」取成**局部值**再交给下面的

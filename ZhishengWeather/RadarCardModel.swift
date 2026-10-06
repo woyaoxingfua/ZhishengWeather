@@ -26,6 +26,7 @@
 //
 
 import Foundation
+import CoreLocation
 import Observation
 
 /// 雷达卡主屏状态。
