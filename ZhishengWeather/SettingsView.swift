@@ -89,6 +89,14 @@ struct SettingsView: View {
     /// 实时活动失败短句（非空时在实时活动区下方红色小字展示；成功后清空）。
     @State private var liveActivityErrorMessage: String?
 
+    /// 雷达 GCJ-02 纠偏模式（本页状态源）。
+    ///
+    /// ⚠️ **调试开关**，故放**设置页**而非主屏（遵循本仓惯例：P 开头是产品
+    /// 功能、调试开关归设置）。这个开关的存在是因为 **R1 未确认**：
+    /// MapKit 是否自动对 `MKTileOverlay` 施加 GCJ-02 偏移，本机无法回答。
+    /// 默认档与判断依据见 `CoordinateTransform.defaultMode`。
+    @State private var radarCoordinateMode: CoordinateTransformMode
+
     /// 诊断记录读写层（App 本地 UserDefaults；换图标 / 实时活动 / 小组件共用一份）。
     private let diagnostics: AppDiagnosticsStore
 
@@ -138,6 +146,8 @@ struct SettingsView: View {
         _umbrellaReminderEnabled = State(initialValue: scheduler.isEnabled)
         _iconChoice = State(initialValue: switcher.currentChoice())
         _liveActivityEnabled = State(initialValue: manager.isEnabled)
+        // 雷达纠偏模式：读注入的 App 本地偏好（非法值已在 store 内回落默认档）。
+        _radarCoordinateMode = State(initialValue: RadarCoordinateModeStore.current())
     }
 
     var body: some View {
@@ -249,6 +259,39 @@ struct SettingsView: View {
                 Text(sharedContainerAvailable ? Self.widgetContainerOKHint : Self.widgetManualCityHint)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.secondaryText)
+            }
+
+            // 雷达纠偏模式（**调试开关**，故在设置页而非主屏）。
+            //
+            // ⚠️ 这一档的存在是因为 **R1 未经真机确认**：MapKit 是否自动对
+            // `MKTileOverlay` 施加 GCJ-02 偏移，本机无法判定。故做成三态开关，
+            // 由实测收敛，而不是把一个未确认的假设写死。
+            //
+            // 验收方法：北京天安门轮廓 / 上海黄浦江岸线对偏移，标准 < 50 m。
+            Section("雷达回波（调试）") {
+                Picker("GCJ-02 纠偏", selection: $radarCoordinateMode) {
+                    ForEach(CoordinateTransformMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .onChange(of: radarCoordinateMode) { _, newValue in
+                    RadarCoordinateModeStore.set(newValue)
+                }
+                Text(radarCoordinateMode.explanation)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                // 如实告知：默认档**未经真机验证**，以及境外城市的已知局限。
+                Text("默认档尚未真机验证。请在北京或上海对一次天安门轮廓 / "
+                     + "黄浦江岸线，偏移小于 50 m 才算收敛；两种纠偏不要同时开。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                if radarCoordinateMode.appliesCorrection {
+                    Text("注意：纠偏开启时，边界框内的部分境外城市（"
+                         + CoordinateTransform.knownOutOfChinaRegions.joined(separator: "、")
+                         + "）会被多偏。可切「关闭纠偏」对照。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
 
             Section("单位") {
