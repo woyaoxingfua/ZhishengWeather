@@ -36,6 +36,8 @@ enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
     case liveActivity
     /// 小组件时间线重载（`WidgetCenter.reloadAllTimelines()`）。
     case widgetTimeline
+    /// 雷达纠偏探针（R1：`CoordinateTransform` 的偏移量实测落盘）。
+    case radarOffsetProbe
 
     /// 面向用户的来源名（设置页展示用）。
     var displayName: String {
@@ -46,6 +48,8 @@ enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
             return "实时活动"
         case .widgetTimeline:
             return "小组件时间线"
+        case .radarOffsetProbe:
+            return "雷达纠偏探针"
         }
     }
 }
@@ -215,6 +219,38 @@ final class AppDiagnosticsStore {
     /// - Returns: 最近一条记录；无记录为 nil。
     func latest() -> AppDiagnosticEntry? {
         loadLog().latestBySource.values.max { $0.occurredAt < $1.occurredAt }
+    }
+
+    // MARK: - R1：雷达纠偏探针落盘
+
+    /// 把「当前偏移量到底是多少米 / 多少像素」写进诊断记录。
+    ///
+    /// ── 为什么需要它（R1 的核心痛点）────────────────────────────────────
+    /// 纠偏方向此前只能靠「用户手动切档 + 人眼比对两个地物」判断，太弱：
+    /// ① 人眼判不出 50 m 量级；② 无法留痕、无法复查；③ 无法把结论带回来讨论。
+    /// 本方法把**偏移量本身**（各参考点的米数 + 像素当量）落盘，
+    /// 真机验收时用户只需要**读一个数字**，而不是在屏幕上找两处地物。
+    ///
+    /// ⚠️ **它不判断方向对错** —— 偏移量是纯几何事实，与 MapKit 的行为无关。
+    /// 方向仍须真机看回波与底图是否对齐（但注意：见
+    /// `CoordinateTransform.correctionIsInertAcrossRadarZooms`，
+    /// 切档在 z4–z7 上**不改变瓦片请求**，故切档无法用于判方向）。
+    ///
+    /// - Parameters:
+    ///   - mode: 当前纠偏档位（仅作为记录上下文，不影响计算）。
+    ///   - tileEdge: 瓦片边长（像素）。
+    ///   - store: 诊断层（默认 `.shared`，单测可注入独立 suite）。
+    static func recordRadarOffsetProbe(mode: CoordinateTransformMode,
+                                       tileEdge: Int = RadarTileURLBuilder.tileEdge,
+                                       store: AppDiagnosticsStore = .shared) {
+        let summaries = CoordinateTransform.probeSummaries(tileEdge: tileEdge)
+        let message = ("当前档位：" + mode.displayName + "\n"
+            + summaries.joined(separator: "\n")
+            + "\n官方文档未定义 tile overlay 是否被纠偏（见 CoordinateTransform.Evidence）")
+        store.record(source: .radarOffsetProbe,
+                     succeeded: true,
+                     target: "offsetProbe",
+                     message: message)
     }
 
     // MARK: - 内部

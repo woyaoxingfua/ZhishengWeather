@@ -211,6 +211,40 @@ final class RadarCardModel {
         guard let frame = timeline.frame(at: index) else { return nil }
         return frame.path
     }
+
+    // MARK: - R1 纠偏探针（真机读数用，**不判断方向**）
+
+    /// 当前城市的偏移探针结果。
+    ///
+    /// ⚠️ **这是几何事实，不是结论**：它回答「GCJ-02 偏移在这个城市是
+    /// 多少米 / 多少像素」，**不**回答「MapKit 有没有施加这个偏移」。
+    /// 后者只能真机看回波与底图是否对齐。
+    ///
+    /// 设计意图：让真机验收从「人眼比两处地物」变成「读一个数字」。
+    var offsetProbe: CoordinateTransform.OffsetProbe {
+        CoordinateTransform.offsetProbe(longitude: center.longitude,
+                                        latitude: center.latitude,
+                                        name: "当前城市")
+    }
+
+    /// **本档位在雷达可用层级上是否改变瓦片索引**（关键诊断量）。
+    ///
+    /// ⚠️ **这是本轮最重要的诊断项。** 若为 `true`（恒等），说明：
+    /// 切档在 z4–z7 上**产生完全相同的瓦片 URL**，渲染逐像素相同 ——
+    /// 因此「切档看回波是否对齐」这个验收方法**在原理上就无效**，
+    /// 三个档位看起来一模一样，会被误判成"开关没用"。
+    /// 详见 `CoordinateTransform.correctionIsInertAcrossRadarZooms`。
+    var correctionIsInertForThisCity: Bool {
+        CoordinateTransform.correctionIsInertAcrossRadarZooms(
+            maximumOffsetMeters: offsetProbe.distanceMeters)
+    }
+
+    /// 把偏移探针写进诊断记录（供真机导出 / 截图反馈）。
+    ///
+    /// - Parameter store: 诊断层（默认 `.shared`；单测可注入独立 suite）。
+    func recordOffsetProbe(store: AppDiagnosticsStore = .shared) {
+        AppDiagnosticsStore.recordRadarOffsetProbe(mode: coordinateMode, store: store)
+    }
 }
 
 // MARK: - 轻量坐标值类型
