@@ -95,6 +95,14 @@ final class WeatherViewModel {
 
     /// 官方预警第六链路服务（`www.nmc.cn`，免 Key；与天气链路物理分离）。
     private let alarmService: NmcAlarmProviding
+
+    /// 官方预警**第七链路补源**服务（`weather.com.cn`，字段级富化用）。
+    ///
+    /// ⚠️ **它不是"又一个预警源"**：列表仍由 `alarmService`（NMC）独家负责
+    /// （实测两者互不包含，理由见 `OfficialWarningEnrichment` 文件头），
+    /// 本服务只负责把 NMC 条目上**缺的那些字段**（防御指南正文等）补上。
+    /// 故它**不参与**四态判定，也不影响列表条数。
+    private let alarmDetailService: WeatherCnAlarmProviding
     /// 官方预警四态（**直接持有**，不进 `WeatherSnapshot`/共享容器 ——
     /// 预警是**列表**且随时增删，落进快照契约会给小组件带来无谓耦合）。
     ///
@@ -194,6 +202,7 @@ final class WeatherViewModel {
          airService: AirQualityProviding = AirQualityService(),
          ensembleService: EnsembleProviding = EnsembleService(),
          alarmService: NmcAlarmProviding = NmcAlarmService(),
+         alarmDetailService: WeatherCnAlarmProviding = WeatherCnAlarmService(),
          reminderScheduler: UmbrellaReminderScheduler? = nil,
          activityManager: WeatherActivityManager? = nil) {
         self.service = service
@@ -204,6 +213,9 @@ final class WeatherViewModel {
         // ⚠️ `NmcAlarmService` 是普通 actor（非 @MainActor 隔离 init），
         // 故可作 default 参数直接求值（同 `airService` / `ensembleService`）。
         self.alarmService = alarmService
+        // ⚠️ 同 `alarmService`：`WeatherCnAlarmService` 是普通 actor
+        // （非 @MainActor 隔离 init），故可作 default 参数直接求值。
+        self.alarmDetailService = alarmDetailService
         // ⚠️ 同 LocationProvider：@MainActor 隔离 init 不能作 default 参数
         //（default 在调用方非隔离上下文求值），故 default 用 nil、体内创建。
         self.reminderScheduler = reminderScheduler ?? UmbrellaReminderScheduler()
@@ -610,11 +622,19 @@ final class WeatherViewModel {
             let matched = NmcAlarmMapper.warnings(in: all,
                                                   matchingCityName: city.name,
                                                   cityCode: nil)
+            // 第七源字段级补源（实测接线：此前`enrich` 无生产调用方，
+            // 正文永远拿不到 —— 故在此接入）。
+            // ⚠️ **补源失败绝不改变四态**：列表来自 NMC 且已取数成功，
+            // 正文取不到只是"这条少了防御指南"，**不是**"预警数据不可信"。
+            // 若把补源失败并进下面的 catch，会把真实存在的预警画成
+            // 「预警数据获取失败」—— 那是**内容错误**（用户会以为没有预警）。
+            // 故补源单独 try，失败即"字段保持 nil"，由 UI 如实说明。
+            let enriched = await enrichOfficialWarnings(matched, timeZone: timeZone)
             // 跨城串号守卫（P1-A纪律平移）：切城中返回的旧结果直接丢弃。
             guard directory.selectedID == city.id else { return }
             officialWarningCityID = city.id
-            officialWarningState = OfficialWarningState.resolve(items: matched,
-                                                                latestIssuedAt: matched
+            officialWarningState = OfficialWarningState.resolve(items: enriched,
+                                                                latestIssuedAt: enriched
                                                                     .compactMap(\.issuedAt)
                                                                     .max(),
                                                                 now: Date())
@@ -624,6 +644,33 @@ final class WeatherViewModel {
             // ⚠️ 文案取自 FaultDomain 单一真源（同loadAir）。
             officialWarningState = .stale(reason: .fetchFailed(Self.message(for: error)))
         }
+    }
+
+    /// 第七源字段级补源（**绝不抛错、绝不丢条目**）。
+    ///
+    /// - Parameters:
+    ///   - items: NMC 已按城市筛出的条目（通常 0~ 数条）。
+    ///   - timeZone: 发布地时区（注入给秒级发布时间解析用）。
+    /// - Returns: 补源后的条目；**任何失败都原样返回入参**。
+    ///
+    /// ## 为什么整体`try?` 而不是让错误上抛
+    /// 实测该通道**限频严**（详情端点串行 + 间隔，见 `WeatherCnAlarmProviding`），
+    /// 失败是**预期内**的常态而非异常。而列表条目来自 NMC 且**已取数成功** ——
+    /// 正文取不到只意味着"这条少了防御指南"，把它升级成"预警数据不可信"
+    /// 会让用户以为没有预警，那是**内容错误**。故：失败 = 字段保持 nil。
+    ///
+    /// ## 为什么空列表直接返回（不发请求）
+    /// `fetchDetails` 对空数组已保证"不发任何请求"；这里提前返回是为了
+    /// 连actor 调用都不发生——本城市无预警时不该有任何网络开销。
+    private func enrichOfficialWarnings(_ items: [OfficialWarningItem],
+                                        timeZone: TimeZone?) async -> [OfficialWarningItem] {
+        guard !items.isEmpty else { return items }
+        // 只对**本城市命中的条目**取详情：实测详情端点限频严，
+        // 对全国 137 条全量拉取不可行（这也正是该服务只接受点名列表的原因）。
+        let alertIDs = items.map(\.id)
+        guard let details = try? await alarmDetailService.fetchDetails(forAlertIDs: alertIDs),
+              !details.isEmpty else { return items }
+        return OfficialWarningEnrichment.enrich(items, with: details, timeZone: timeZone)
     }
 
     /// 官方预警状态（**仅当已取过数且归属当前选中城市时**返回，否则 nil）。

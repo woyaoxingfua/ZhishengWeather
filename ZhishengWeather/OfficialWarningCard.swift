@@ -35,6 +35,23 @@
 //  故蓝用 `Theme.accentSecondary`（与 UV 低档同源的强调色），与既有卡片
 //  同源但**语义不冲突**。
 //
+//  ── 防御指南正文（第七源 weather.cn 补源，`item.defenseGuide`）──────────
+//  默认**收起**：只显示颜色 + 类型 + 地区 + 发布时间；点条目展开防御指南。
+//
+//  ## 实测形态（2026-10-06 当次抓取，5 条详情逐条统计，**非引自文档**）
+//  · 长度 **137~154 字符**（5/5 非空）；
+//  · **换行 0 个**（`\n` 与 `\r` 计数均为 0）→ 上游是**单段**纯文本，
+//    **不是**"上游大概率 `\n` 分段"的假设。故正文交给 `Text` 直接渲染；
+//  · **无 HTML 残留**（正则扫 `<[^>]+>` 与 `&[a-zA-Z]+;` 均 0 命中）
+//    → **刻意不写任何正则清洗**：没实测到残留就不做"想象中的清洗"，
+//    凭空清洗会**改写官方原文**，那属内容错误。
+//
+//  ## 敏感内容纪律
+//  正文是**官方原文**：只排版，**不改写、不摘要、不加自己编的建议**。
+//  空/缺失时**如实显示**「暂无防御指南正文。」—— 既不静默隐藏，
+//  也**绝不**编兜底文案（把"不知道"说成"有建议"是内容错误）。
+//  故每条都**恒可点开**：无正文的条目也要能让用户看见"这条没有正文"。
+//
 //  ── 时钟 ─────────────────────────────────────────────────────────────
 //  本文件**不调用 `Date()`**：`now` 由调用方注入（ContentView 传
 //  `viewModel.lastUpdatedDate` 或 `TimelineView` 的 `context.date`）。
@@ -57,6 +74,13 @@ struct OfficialWarningCard: View {
 
     /// 最多展示的条数（其余折叠为「还有 N 条」）。
     var maxVisible: Int = 3
+
+    /// 展开了「防御指南」的条目 id 集合（**按 id 而非下标**）。
+    ///
+    /// ⚠️ 用 `Set<String>` + `item.id` 而非 `Set<Int>`：
+    /// 列表会随刷新变动（增删预警），按下标记住展开态会把A 预警的展开状态
+    /// 套到 B 上 —— 与 `OfficialWarningItem.id` 存在的原因同款。
+    @State private var expandedIDs: Set<String> = []
 
     var body: some View {
         // `.none` → 整卡隐藏（不留空白）；其余三态都有可见输出。
@@ -156,32 +180,113 @@ struct OfficialWarningCard: View {
         }
     }
 
-    /// 单条预警行：颜色圆点 + 类型 + 地点 + 发布时间。
+    /// 单条预警行：颜色圆点 + 类型 + 地点 + 发布时间（**默认收起**）。
+    ///
+    /// ## 为什么**每条都可点开**（哪怕没有正文）
+    /// 正文缺失是一个**必须让用户看见的事实**（"这条没有防御指南" vs
+    /// "这条有防御指南"是两种不同的风险认知）。若给无正文的条目去掉箭头、
+    /// 做成不可点，用户永远看不到这个区别 —— 那就是**静默隐藏**。
+    /// 故：箭头恒显示、恒可点，展开后**如实**显示"有正文"或"暂无正文"。
+    /// 这样"缺失"永远可见，且**绝不**编兜底文案。
     private func row(_ item: OfficialWarningItem) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Circle()
-                .fill(Self.color(for: item.color))
-                .frame(width: 8, height: 8)
-                .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(item.kind)预警")
-                    .font(.system(size: Theme.FontSize.caption, weight: .semibold))
-                    .foregroundStyle(Self.color(for: item.color))
-                // ⚠️ 地点缺失（标题没解析出行政区划）→ **不显示地点行**，
-                // 绝不显示空白或"未知地点"（原文已在 kind 里带了信息）。
-                if let region = item.region, !region.isEmpty {
-                    Text(region)
+        let raw = item.defenseGuide ?? ""
+        let isExpanded = expandedIDs.contains(item.id)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if isExpanded {
+                    expandedIDs.remove(item.id)
+                } else {
+                    expandedIDs.insert(item.id)
+                }
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Circle()
+                        .fill(Self.color(for: item.color))
+                        .frame(width: 8, height: 8)
+                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(item.kind)预警")
+                            .font(.system(size: Theme.FontSize.caption, weight: .semibold))
+                            .foregroundStyle(Self.color(for: item.color))
+                        // ⚠️ 地点缺失（标题没解析出行政区划）→ **不显示地点行**，
+                        // 绝不显示空白或"未知地点"（原文已在 kind 里带了信息）。
+                        if let region = item.region, !region.isEmpty {
+                            Text(region)
+                                .font(.system(size: Theme.FontSize.footnote))
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    // ⚠️ 发布时间缺失 → **不显示时刻**（绝不拿 `now` 编一个出来）。
+                    if let issuedAt = item.issuedAt {
+                        Text(Self.issueTimeText(issuedAt, now: now, timeZone: timeZone))
+                            .font(.system(size: Theme.FontSize.footnote))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.secondaryText)
+                        .padding(.top, 3)
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                defenseGuideBody(raw)
+            }
+        }
+    }
+
+    /// 展开后的**防御指南正文**（官方原文，逐字展示，**不改写、不摘要**）。
+    ///
+    /// ## 为什么用 `Text` + `.fixedSize(horizontal:false, vertical:true)`
+    /// 实测正文形态（2026-10-06 当次抓取，5 条）：单段纯文本，
+    /// 长度 **137~154 字符**，**换行 0 个**（`\n` / `\r` 计数均为 0），
+    /// **无任何 HTML 标签或实体**（正则扫 `<[^>]+>` 与 `&[a-zA-Z]+;` 均 0 命中）。
+    /// → 故本文件**不做任何正则清洗**：没实测到残留就不写"想象中的清洗"，
+    ///   凭空加清洗反而会**改写官方原文**，那属内容错误。
+    /// → 换行仍按纯文本语义交给 `Text`：若将来上游真的给了 `\n`，
+    ///   `Text` 会如实分段显示，无需额外处理。
+    ///
+    /// ## 为什么 `.fixedSize(horizontal:false, vertical:true)`
+    /// 缺了它，`ScrollView` 内的 `Text` 会在水平方向按 proposal 压缩、
+    /// 高度按行数估算，长正文会被挤出可视区。放开 vertical 方向后，
+    /// 高度由实际行数决定（外层再用 `.frame(maxHeight:)` 封顶 + 可滚）。
+    @ViewBuilder
+    private func defenseGuideBody(_ raw: String) -> some View {
+        if raw.isEmpty {
+            // ⚠️ "没取到"与"取到但为空"（上游偶发空串，已在 `enrich`
+            // 按缺失处理）在这里汇合 → **如实说明缺内容**，
+            // 绝不编一段兜底文案（把"不知道"说成"有建议"是内容错误）。
+            Text("暂无防御指南正文。")
+                .font(.system(size: Theme.FontSize.footnote))
+                .foregroundStyle(Theme.secondaryText)
+                .padding(.leading, 16)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("防御指南")
+                    .font(.system(size: Theme.FontSize.footnote, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryText)
+                ScrollView {
+                    Text(raw)
                         .font(.system(size: Theme.FontSize.footnote))
                         .foregroundStyle(Theme.secondaryText)
+                        .lineSpacing(2)
+                        // ⚠️ `Text` 的默认行数限制并非"无限"，
+                        // 显式给 `nil` = 不限行数（官方原文**不许截断**）。
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                // ⚠️ 封顶 + 可滚动：正文再长也**撑不爆整张卡**。
+                //   120pt 是**防御性上限**（实测 154 字符约 4~6 行足够显示完），
+                //   不是"展示上限"—— 没有 `.lineLimit` 截断，永远显示全文。
+                .frame(maxHeight: 120)
             }
-            Spacer(minLength: 8)
-            // ⚠️ 发布时间缺失 → **不显示时刻**（绝不拿 `now` 编一个出来）。
-            if let issuedAt = item.issuedAt {
-                Text(Self.issueTimeText(issuedAt, now: now, timeZone: timeZone))
-                    .font(.system(size: Theme.FontSize.footnote))
-                    .foregroundStyle(Theme.secondaryText)
-            }
+            .padding(.leading, 16)
         }
     }
 
