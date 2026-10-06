@@ -176,7 +176,6 @@ struct RadarMapView: UIViewRepresentable {
     let center: CLLocationCoordinate2D
 
     func makeCoordinator() -> Coordinator { Coordinator() }
-
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
@@ -236,29 +235,19 @@ struct RadarMapView: UIViewRepresentable {
 
 // MARK: - 雷达卡
 
-/// 降水雷达卡（含降级四态）。
+/// 降水雷达卡（**主屏装配入口**，含降级四态）。
+///
+/// 装配契约：
+///  · 状态由 `RadarCardModel` 提供（`@Observable`），本视图**只渲染，不判定**；
+///  · 降级四态（含 `.radarUnavailable`）**必须完整渲染出可见内容**，
+///    **绝不允许**出现空白地图页或无限转圈（硬要求）。
 @MainActor
 struct RadarMapCard: View {
 
-    /// 降级态（由调用方经 `RadarAvailability.resolve` 裁定，本视图不自行判定）。
-    let availability: RadarAvailability
+    /// 状态容器（四态、时间轴、覆盖、纠偏档的唯一真源）。
+    let model: RadarCardModel
 
-    /// 时间轴；nil = 无有效帧（对应非 `.radar` 态，scrubber 禁用）。
-    let timeline: RadarTimeline?
-
-    /// 瓦片宿主。
-    let host: String
-
-    /// 纠偏模式（R1 开关；设置页可改）。
-    let mode: CoordinateTransformMode
-
-    /// 缓存。
-    let cache: RadarTileCache
-
-    /// 地图中心。
-    let center: CLLocationCoordinate2D
-
-    /// 时刻渲染时区（D-4 一致性）。
+    /// 时刻渲染时区（D-4 一致性：随选中城市时区）。
     var timeZone: TimeZone = .current
 
     /// 回放选中帧（受控：由本视图的 scrubber 写入）。
@@ -288,6 +277,14 @@ struct RadarMapCard: View {
         )
     }
 
+    // MARK: - 派生
+
+    /// 降级四态（由 model 派生，本视图不自行判定）。
+    private var availability: RadarAvailability { model.availability }
+
+    /// 时间轴（由 model 提供）。
+    private var timeline: RadarTimeline? { model.timeline }
+
     // MARK: - 标题
 
     private var header: some View {
@@ -311,13 +308,37 @@ struct RadarMapCard: View {
 
     private var mapArea: some View {
         ZStack(alignment: .bottomLeading) {
-            RadarMapView(
-                framePath: currentFramePath,
-                host: host,
-                mode: mode,
-                cache: cache,
-                center: center
-            )
+            // ⚠️ **四态都渲染地图**（含 `.radarUnavailable`）——
+            // 硬要求：地图页仍可进，**绝不允许**空白页 / 无限转圈。
+            // 非 `.radar` 态只是**不叠回波层**（`currentFramePath` 返回 nil），
+            // 底图照常显示，上方另有明确降级文案。
+            ZStack {
+                RadarMapView(
+                    framePath: currentFramePath,
+                    host: model.host,
+                    mode: model.coordinateMode,
+                    cache: model.tileCache,
+                    center: model.center.mapCoordinate
+                )
+                .frame(height: mapHeight)
+
+                // 首次加载：真实进度指示 + 明确说明。
+                // ⚠️ 必须**由 isLoading 驱动、且有超时兜底**（见 model 的
+                // loadTaskHasTimedOut）—— 否则取数失败时这里会永久转圈，
+                // 那正是"转圈卡死"，是最容易被误认为功能正常的失败态。
+                if model.isLoading && !model.hasTimedOut {
+                    VStack(spacing: 6) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(Theme.accent)
+                        Text("正在获取雷达回波…")
+                            .font(.system(size: Theme.FontSize.footnote))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
             .frame(height: mapHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
@@ -340,14 +361,25 @@ struct RadarMapCard: View {
         }
     }
 
-    /// 非 `.radar` 态在地图上的补充说明（`.radar` 态 → nil，不占位）。
+    /// 非 `.radar` 态在地图上的补充说明。
+    ///
+    /// ⚠️ **`.radarUnavailable` 绝不能返回 nil**（否则地图上什么字都没有 =
+    /// 用户看到一片空白）。每个降级态都必须有一句可读说明。
     private var degradedOverlayText: String? {
         switch availability {
-        case .radar: return nil
+        case .radar:
+            return nil
         case .forecast(let kind):
-            return kind == .domesticHourly ? "回波暂缺 · 见下方逐时概率" : "境外区域 · 见下方 2 小时概率条"
+            return kind == .domesticHourly
+                ? "回波暂缺 · 见下方逐时概率"
+                : "境外区域 · 见下方 2 小时概率条"
         case .radarUnavailable(let reason):
-            return reason.allowsRetry ? "加载失败 · 可下拉重试" : reason.headline
+            // 三种原因**都**有文案（"本区域暂无实时回波 · 下方为模型概率"）。
+            // 加载超时另给一句可操作提示，绝不空着。
+            if model.isLoading && model.hasTimedOut {
+                return "雷达加载超时 · 已显示底图，下方为模型概率"
+            }
+            return reason.headline
         }
     }
 

@@ -126,6 +126,26 @@ final class WeatherViewModel {
         reminderScheduler
     }
 
+    /// 雷达链路用的坐标（**与本类取数口径逐字一致**的唯一只读出口）。
+    ///
+    /// 为什么需要这个出口：降水雷达是**独立链路**（App 侧 `RadarCardModel`
+    /// 自持状态，不进本 VM），但它的坐标**必须**与主链路同源 —— 否则会出现
+    /// "主屏显示杭州的天气、雷达地图却画在北京"这类串号。
+    ///
+    /// 口径与 `refresh()` 里那段**完全相同**（刻意复制而非抽方法：
+    /// `refresh()` 是热路径且带 R-3 回归风险注释，就地保持不动更安全）：
+    /// 选中城市为「当前位置」且定位**未**回落到默认 → 用定位新坐标；
+    /// 否则用选中城市存储坐标。
+    var resolvedCoordinateForRadar: (latitude: Double, longitude: Double) {
+        guard let selectedCity = directory.selectedCity else {
+            return (location.latitude, location.longitude)
+        }
+        let useResolved = selectedCity.isCurrentLocation && !resolved.isFallback
+        return useResolved
+            ? (resolved.latitude, resolved.longitude)
+            : (selectedCity.latitude, selectedCity.longitude)
+    }
+
     /// 防止并发重复刷新。
     private var isRefreshing = false
 

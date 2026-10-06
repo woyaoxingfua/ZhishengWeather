@@ -36,6 +36,14 @@ struct ContentView: View {
     /// 由下方 `.task(id: 城市 id)` 驱动，复用既有刷新节拍，不引入第二刷新生命周期。
     @StateObject private var attributionCoordinator = SourceAttributionCoordinator()
 
+    /// 降水雷达卡状态（第四链路：独立域名 + 独立失败域）。
+    ///
+    /// 与 `attributionCoordinator` **完全同款**的接法（`@StateObject` +
+    /// `.task(id:)` 驱动），因此**不新增第二个刷新生命周期**。
+    /// 刻意**不进 `WeatherViewModel`**：雷达失败只该写自己的状态，
+    /// 塞进主 VM 会污染主 `state`（违反本仓失败隔离纪律）。
+    @StateObject private var radarModel = RadarCardModel()
+
     var body: some View {
         // Handoff / Siri 建议：先把「当前城市」取成**局部值**再交给下面的
         // userActivity 闭包 —— 该闭包是 @escaping 且非主 actor 隔离，若直接
@@ -112,6 +120,17 @@ struct ContentView: View {
                     primary = PrimarySolarInput()
                 }
                 await attributionCoordinator.refresh(for: city, primarySolar: primary, now: Date())
+            }
+            // 降水雷达（第四链路）：随城市切换加载，覆盖探测 + 元数据并发。
+            // ⚠️ 坐标**复用既有真源**（`directory.selectedCity`；"当前位置"项用
+            // VM 已解析的 `location` 覆盖，与 `WeatherViewModel` 自身取
+            // latitude/longitude 的口径逐字一致）——**不新建第二套城市来源**。
+            .task(id: viewModel.directory.selectedCity?.id) {
+                guard let city = viewModel.directory.selectedCity else { return }
+                let resolved = viewModel.resolvedCoordinateForRadar
+                await radarModel.load(cityID: city.id,
+                                      latitude: resolved.latitude,
+                                      longitude: resolved.longitude)
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
             .navigationDestination(for: CityRoute.self) { route in
@@ -254,6 +273,23 @@ struct ContentView: View {
                     MinutelyPrecipitationCard(points: minutely,
                                               timeZone: viewModel.selectedTimeZone)
                 }
+                // 降水雷达卡（第四链路 · RainViewer）。
+                //
+                // **插入位置**：紧跟「短时降水卡」之后、「可排序区块」之前。
+                // 理由（三条）：
+                //  ① 语义相邻 —— 短时降水是"未来 2 小时模型概率"，雷达是"过去 2 小时
+                //     实况回波"，两者是同一时间轴的正反面，放一起用户能连续读；
+                //  ② 短时降水卡是**干窗即隐藏**的（AC-B1-8），所以雷达卡不能挂在它
+                //     内部（否则无雨时雷达也跟着消失 —— 而"无雨"恰恰是用户最想确认
+                //     "确实没下"的时候）。挂在它之后 = 干窗时雷达照常显示；
+                //  ③ **不占用 `HomeSection`**（不参与排序/隐藏）—— 与
+                //     `EnsembleUncertaintyCard` 同款做法。加新 case 会让老用户的
+                //     持久化顺序把它补到尾部，且用户没主动要求过它可排序。
+                //
+                // 四态（`.radar` / `.forecast` / `.radarUnavailable`）**全部**由
+                // `RadarCardModel` 派生并渲染，**绝无空白地图页**。
+                RadarMapCard(model: radarModel,
+                             timeZone: viewModel.selectedTimeZone)
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in

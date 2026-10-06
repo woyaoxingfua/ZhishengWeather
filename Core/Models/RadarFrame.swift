@@ -76,6 +76,20 @@ struct RadarTimeline: Equatable, Sendable {
     /// 是否停在最新帧（= 实况，非回放）。
     var isLive: Bool { index == frames.count - 1 }
 
+    /// 取指定下标的帧（**越界安全**）。
+    ///
+    /// - Parameter index: 目标下标；nil = 最后一帧（实况，即最新帧）。
+    /// - Returns: 帧；下标越界 / 时间轴为空 → nil。
+    ///
+    /// 为什么不直接用 `frames[index]`：Swift 的数组下标越界会**崩溃**，
+    /// 而 UI 的 scrubber 在切换城市/帧数变化时会短暂给出越界下标。
+    func frame(at index: Int?) -> RadarFrame? {
+        guard !frames.isEmpty else { return nil }
+        let resolved = index ?? (frames.count - 1)
+        guard frames.indices.contains(resolved) else { return nil }
+        return frames[resolved]
+    }
+
     /// 当前帧距今多少分钟（用于"数据延迟 N 分钟"的诚实提示）。
     ///
     /// - Parameter now: 当前时刻（**由调用方注入**；Core 禁内部 `Date()`）。
