@@ -185,7 +185,11 @@ actor RadarTileCache {
         while !RadarConcurrencyGate.admits(active: activeRequests) {
             try? await Task.sleep(nanoseconds: 50_000_000)  // 50 ms
         }
-        let sinceLast = now.timeIntervalSince(lastRequestEpoch)
+        // `lastRequestEpoch` 是 **epoch 秒（TimeInterval）**，不是 `Date` ——
+        // 写入侧（下方）用 `now.timeIntervalSince1970`，读取侧必须同口径。
+        // 曾误写成 `now.timeIntervalSince(lastRequestEpoch)`，那是 `Date` 的方法、
+        // 参数要 `Date`，CI 报 `cannot convert 'TimeInterval' to 'Date'`（run 37458007802）。
+        let sinceLast = now.timeIntervalSince1970 - lastRequestEpoch
         if sinceLast < RadarTileCachePolicy.minimumRequestInterval {
             // `max(0, ·)`：UInt64(负 Double) 会**trap 崩溃**，而时钟回拨 / 注入
             // 的 now 早于上次发起时刻都可能让差值为负 —— 故显式夹紧。
