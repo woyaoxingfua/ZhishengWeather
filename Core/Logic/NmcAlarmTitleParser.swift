@@ -73,7 +73,12 @@ import Foundation
 /// 故本enum 显式承认第五档 `.orange`，并为**将来可能出现的其他颜色**
 /// 留 `.unspecified(原文)` 兜底 —— **绝不**把不认识的颜色悄悄降级成`.blue`
 /// （那会让一个未知等级被显示成最低档，属内容错误）。
-enum NmcAlarmColor: String, Equatable, CaseIterable, Sendable {
+// ⚠️ **不要加 `String` raw type** —— 本 enum 有 `case unspecified(String)`
+// 关联值 case，Swift 明确规定「有raw type 的 enum 不能有带参数的 case」
+// （error: enum with raw type cannot have cases with arguments），
+// 且 RawRepresentable / CaseIterable 合成会连带失败。
+// 颜色原文走 `rawText` 计算属性取，不靠 rawValue。
+enum NmcAlarmColor: Equatable, Sendable {
 
     /// 红色（最高；实测 `data.stat` 里 `r` 计数位，当前为 0）。
     case red
@@ -85,6 +90,12 @@ enum NmcAlarmColor: String, Equatable, CaseIterable, Sendable {
     case blue
     /// 上游出现了本enum 未收录的颜色 → **如实保留原文**，不降级。
     case unspecified(String)
+
+    /// 四个已知色的**穷举**（供测试遍历 / 颜色分布统计用）。
+    ///
+    /// ⚠️ 刻意**不含** `.unspecified` —— 它带原文，不是稳定枚举成员，
+    /// 遍历时无法给出可比对的值。
+    static let knownColors: [NmcAlarmColor] = [.red, .orange, .yellow, .blue]
 
     /// **展示 / 排序用的规范序**（红 > 橙 > 黄 > 蓝）。
     ///

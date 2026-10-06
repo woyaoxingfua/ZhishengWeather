@@ -50,9 +50,13 @@ enum NmcAlarmMapper {
                     timeZone: TimeZone?) -> [OfficialWarningItem] {
         // 三处可选链缺任一 → 空数组（**不抛错**：解码成功但实质无数据）。
         guard let list = response.data?.page?.list else { return [] }
-        return list.compactMap { entry in
-            // ⚠️ 数组元素本身可为 nil（上游塞 null）→ compactMap 自动跳过。
-            mapEntry(entry, timeZone: timeZone)
+        return list.compactMap { entry -> OfficialWarningItem? in
+            // ⚠️ 元素类型是 `Entry?`（上游会塞 null）→ 闭包入参是**嵌套**的
+            // `Optional<Optional<Entry>>`。`compactMap` **只解一层**，
+            // 必须自己先把外层 optional 摊平，否则 `entry` 传给 `mapEntry`
+            // 会报 "value of optional type 'Entry?' must be unwrapped"。
+            guard let entry else { return nil }
+            return mapEntry(entry, timeZone: timeZone)
         }
     }
 
@@ -137,9 +141,13 @@ enum NmcAlarmMapper {
               title.hasSuffix(NmcAlarmTitleParser.signalSuffix) else {
             return unknownKind
         }
-        var middle = String(title[bureauRange.upperBound..
-                                    title.index(title.endIndex,
-                                                offsetBy: -NmcAlarmTitleParser.signalSuffix.count)])
+        // ⚠️ 上界用 `index(_:offsetBy:)`而非 `..<`，且**必须先把 `endIndex`
+        // 折成局部常量** —— 直接在闭区间里写 `title.endIndex..xxx` 会让
+        // 编译器把 `endIndex` 当成下标表达式解析，报 `cannot find operator '..'`
+        // 与 `extra argument in subscript`（本仓已实测踩过）。
+        let tailStart = title.index(title.endIndex,
+                                   offsetBy: -NmcAlarmTitleParser.signalSuffix.count)
+        var middle = String(title[bureauRange.upperBound..<tailStart])
         if middle.hasPrefix(NmcAlarmTitleParser.verb) {
             middle.removeFirst(NmcAlarmTitleParser.verb.count)
         }
