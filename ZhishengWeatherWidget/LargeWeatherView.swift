@@ -56,13 +56,30 @@ struct LargeWeatherView: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             heroSection
-            divider
-            dailySection
-            divider
-            // A2-8：逐时趋势条（4 小时，AC-A2-24）。
-            hourlyTrendSection
-            divider
-            metricsSection
+            // ⚠️ 空态（`hasPayload == false`）下**整段不渲染**下面三个数据区块。
+            //
+            // 修的是本轮定位到的独立缺陷（不依赖 App Group，代码层面即可判死）：
+            // 此前无论有没有数据都渲染「未来三天 / 未来四小时 / 2×3 指标网格」，
+            // 空态时各自落进 `Text("暂无逐日数据")` / `Text("暂无逐时数据")` /
+            // `Text("暂无指标数据")` 三句**硬编码**兜底（不在 `WidgetCopy` 单一
+            // 真源里，且被 §13 七态表的 `WidgetCopy` 判定覆盖不到）。
+            // 后果是 Small 只说一次「暂无数据」，Large 却同一屏说了**四次**
+            // （三句硬编码 + hero 的 `WidgetCopy` 状态句），彼此还不一致 ——
+            // 用户看到的是一片「暂无」，**看不出到底卡在取数还是取到了没数据**，
+            // 而这正是本项目最忌讳的「让人无法自查」的状态。
+            //
+            // 「宁缺不猜」：没有数据就不摆出逐日 / 逐时 / 指标的架子（那会让
+            // 「什么都没取到」看起来像「取到了但缺几项」）；空态由 hero 的
+            // `WidgetCopy.conditionText` + `hintText` **一次性**如实表达。
+            if entry.resolution.hasPayload {
+                divider
+                dailySection
+                divider
+                // A2-8：逐时趋势条（4 小时，AC-A2-24）。
+                hourlyTrendSection
+                divider
+                metricsSection
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)

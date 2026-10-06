@@ -146,4 +146,17 @@ struct WidgetEntryResolution: Equatable, Sendable {
     var dataSource: WidgetDataSource
     /// 空态可操作原因（正交轴之二）；有载荷时恒为 nil。
     var emptyReason: WidgetEmptyReason?
+
+    /// 本条目是否承载真实数据（视图据此在「渲染数据」与「渲染如实空态」之间二选一）。
+    ///
+    /// 为什么需要这个派生量（而不是让视图各写 `payload != nil`）：
+    /// 空态下 Large 的逐日 / 逐时 / 指标三个区块各有自己的「暂无X数据」兜底，
+    /// 那三句话既不在 `WidgetCopy` 单一真源里，又会让人误读成
+    /// 「有数据、只是缺某一项」，而真相是「什么都没有、什么都没取到」。
+    /// 视图据此**整段不渲染**这三个区块，改由 `WidgetCopy` 的状态句 + 提示行
+    /// 一次性如实表达（宁缺不猜：没有数据就不摆出一副有数据的架子）。
+    ///
+    /// 不变式（与文件头那条一致，故本属性无独立取值空间）：
+    /// `hasPayload` ⟺ `payload != nil` ⟺ `emptyReason == nil`。
+    var hasPayload: Bool { payload != nil }
 }
