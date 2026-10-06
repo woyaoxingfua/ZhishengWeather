@@ -128,6 +128,25 @@ struct OpenMeteoResponse: Codable, Sendable {
         /// 实测探针（与 `OpenMeteoEndpoint` 逐字相同参数）：72 条、**0 个 null**、取值 6~360。
         /// ⚠️ `360` 是合法值（等同 0°，正北），mapper/ui **不得**把它规范化成 nil。
         var wind_direction_10m: [Double?]? = nil
+        /// P2 · AC-B17c：逐时 UV 指数（**无量纲**，WHO 标准量表 0–11+）。
+        ///
+        /// 整键可选 + 元素可选（`[Double?]?`，v1.6 截断日 null 纪律）。
+        /// ⚠️ **`0.0` 是合法值**（夜间），**绝不可**当成缺失 —— 实测（2026-10-06，北京）
+        /// 24 条里前 7 条就是 0.0。缺失只有一种形态：键不存在或元素为 `null`。
+        /// ⚠️ 与 `Current.uv_index`（**此刻**实况）、`Daily.uv_index_max`（**当日峰值**）
+        /// 三者语义各不相同，UI 不许共用一个标签。
+        var uv_index: [Double?]? = nil
+        /// P2 · AC-B17c：逐时能见度（**米**，Open-Meteo 原生单位；换算归 UI）。
+        ///
+        /// 整键可选 + 元素可选。实测（2026-10-06，北京）24 条、0 个 null、16740–18480 m。
+        /// 与 `Current.visibility`（实况）语义不同；换算口径复用 `ContentView.visibilityText`
+        /// 既有的「≥1000 m 用 km、否则用 m」惯例。
+        var visibility: [Double?]? = nil
+        /// P2 · AC-B17c：逐时**零度层高度**（**米**，Open-Meteo 原生单位）。
+        ///
+        /// 语义：该海拔高度处气温为 0℃（即**冻雨/雨夹雪的分界高度**）——不是"地面前 0℃ 的高度"，
+        /// 也不是海拔。整键可选 + 元素可选。实测（2026-10-06，北京）24 条、0 个 null、2670–4010 m。
+        var freezing_level_height: [Double?]? = nil
     }
 
     /// 逐日序列（用于当日高/低温 + F-A 逐日预报）。

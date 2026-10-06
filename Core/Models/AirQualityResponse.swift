@@ -61,6 +61,20 @@ struct AirQualityResponse: Codable, Sendable {
         let pm2_5: [Double?]?
         /// 逐时 PM10（μg/m³）。元素 null = 该小时缺测。
         let pm10: [Double?]?
+        /// P2 · AC-C5b：逐时一氧化碳 CO（**μg/m³**，Open-Meteo 原生单位）。
+        ///
+        /// 整键可选 + 元素可选（同上纪律）。实测（2026-10-06探针，
+        /// 北京 39.9/116.4，`hourly` 含本键 + `forecast_hours=24`）：
+        /// HTTP 200、键存在、24 条、**0 个 null**、峰值 2310.0 μg/m³
+        /// （CO 量级远高于其他污染物，**不可与其他污染物同轴**——见
+        /// `AirQualityPollutantRow` 的逐污染物独立归一化）。
+        var carbon_monoxide: [Double?]? = nil
+        /// P2 · AC-C5b：逐时二氧化氮 NO₂（μg/m³）。整键/元素可选。实测 24 条 0 null、峰值 92.4。
+        var nitrogen_dioxide: [Double?]? = nil
+        /// P2 · AC-C5b：逐时二氧化硫 SO₂（μg/m³）。整键/元素可选。实测 24 条 0 null、峰值 16.6。
+        var sulphur_dioxide: [Double?]? = nil
+        /// P2 · AC-C5b：逐时臭氧 O₃（μg/m³）。整键/元素可选。实测 24 条 0 null、峰值 42.0。
+        var ozone: [Double?]? = nil
     }
 
     /// 当前块（响应可能整体缺少 current → 上游按回退处理）。

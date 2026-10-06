@@ -40,6 +40,21 @@ struct HourlyPoint: Codable, Equatable, Identifiable, Sendable {
     ///    —— 那是拿一个时刻的值冒充整条时间序列，属**编造数据**（AC-C4c 红线）。
     ///    本字段缺失时就该让下游**如实空态**（AC-C4b：该小时不画箭头，且不影响风速柱）。
     var windDirection: Double? = nil
+    /// P2 · AC-B17c：该小时 UV 指数（**无量纲**，WHO 标准量表 0–11+，越高越强）。
+    ///
+    /// 可选，nil 语义同 `precipitation`：
+    /// nil = 服务端未返回 / 元素 null / 旧缓存无此键。
+    ///
+    /// ⚠️ **`0.0` 是合法值**（夜间 UV 为 0），**不得**被转成 nil 或被下游当"缺测"处理
+    /// —— 与 `WeatherSnapshot.uvIndex`（此刻实况）、`DailyForecast.uvIndexMax`（当日峰值）
+    /// 三者语义不同，UI 不许共用一个标签。分级规则见 `UVIndexGuide`（WHO 标准）。
+    var uvIndex: Double? = nil
+    /// P2 · AC-B17c：该小时能见度（**米**，Open-Meteo 原生单位；m→km 换算归展示层）。
+    /// 可选，nil 语义同 `precipitation`。`0 m` 不合法但若出现仍**原样保留**（只 null 才转 nil）。
+    var visibility: Double? = nil
+    /// P2 · AC-B17c：该小时**零度层高度**（**米**）——该海拔高度处气温为 0℃，
+    /// 即雨/雪分界高度。可选，nil 语义同 `precipitation`。⚠️ 不是海拔、不是地面前 0℃ 高度。
+    var freezingLevelHeight: Double? = nil
 
     /// 以时刻作为稳定标识（同一小时内唯一）。
     var id: Date { time }

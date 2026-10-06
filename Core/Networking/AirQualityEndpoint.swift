@@ -52,10 +52,22 @@ enum AirQualityEndpoint {
 
     /// 逐时字段（P2 / D-B11，AC-B22）：逐时 AQI + 两种颗粒物。
     /// 键名以 2026-09-20 探针实测为准：`us_aqi` / `pm2_5` / `pm10`。
+    ///
+    /// P2 · AC-C5b 追加四键：`carbon_monoxide` / `nitrogen_dioxide` /
+    /// `sulphur_dioxide` / `ozone`（补齐**六污染物**的逐时序列）。
+    /// 键名以 2026-10-06 探针实测为准（`hourly=pm10,pm2_5,carbon_monoxide,
+    /// nitrogen_dioxide,sulphur_dioxide,ozone` + `forecast_hours=24`，
+    /// 北京 39.9/116.4）：HTTP 200、**六个键全部存在**、各 24 条、**0 个 null**，
+    /// 峰值分别为 pm10 157.9 / pm2_5 144.8 / CO 2310.0 / NO₂ 92.4 / SO₂ 16.6 / O₃ 42.0。
+    /// ⚠️ **仍并入既有那一条 URL 的一次请求**（AC-B23：绝不新增第二个端点/请求）。
     static let hourlyFields = [
         "us_aqi",
         "pm2_5",
-        "pm10"
+        "pm10",
+        "carbon_monoxide",
+        "nitrogen_dioxide",
+        "sulphur_dioxide",
+        "ozone"
     ].joined(separator: ",")
 
     /// 逐时窗口条数：**显式**声明取未来 24 小时。

@@ -294,6 +294,19 @@ struct ContentView: View {
                 // `RadarCardModel` 派生并渲染，**绝无空白地图页**。
                 RadarMapCard(model: radarModel,
                              timeZone: viewModel.selectedTimeZone)
+                // P2 · AC-B17c：UV 指数卡（当前档位 + 防晒建议 + 当日峰值与峰值时刻）。
+                //
+                // **插入位置**：与「短时降水卡」「空气质量卡」同级，固定区块，
+                // 位于 `ForEach(orderedVisibleSections)` **之前**（理由同 `RadarMapCard`：
+                // 不占用 `HomeSection`，避免老用户持久化顺序把它补到尾部）。
+                //
+                // 隐藏判据全在卡内（当前 UV 与峰值**都**无 → `EmptyView`），
+                // 故这里**无条件**挂载——与 `RadarMapCard` 同款（由卡内四态自行决定渲染）。
+                // 分级与文案由 Core `UVIndexGuide` 单一真源给出，本文件不拼字符串。
+                UVIndexCard(points: snapshot.hourly,
+                            currentUV: snapshot.uvIndex,
+                            dailyPeakFallback: snapshot.daily?.first?.uvIndexMax,
+                            timeZone: viewModel.selectedTimeZone)
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in
@@ -339,6 +352,11 @@ struct ContentView: View {
             // A2-1：空气卡（独立链路，airQuality == nil 整卡不渲染，R5）。
             if let airQuality = viewModel.airQuality {
                 AirQualityCard(airQuality: airQuality)
+                // P2 · AC-C5b：六污染物 24h **分项**趋势（只做加法，不重做既有 AQI 卡）。
+                // 挂在同一 case 内紧跟既有卡之后 → 二者天然相邻、同进同退
+                // （`airQuality == nil` 时本卡随之不渲染，不做第二个失败判据）。
+                // 卡内再守一层：六项**全**缺测 → 整卡 `EmptyView`（绝不渲染六个 "--"）。
+                AirQualityPollutantCard(points: airQuality.hourly ?? [])
             } else if case .failed(let message) = viewModel.airState {
                 // 本轮：空气链路**取数失败**时如实说明「该链路失败」，不再静默消失。
                 noticeRow("空气质量暂不可用：\(message)")

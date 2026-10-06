@@ -42,6 +42,16 @@ struct AqiHourlyPoint: Codable, Equatable, Identifiable, Sendable {
     var pm25: Double?
     /// 该小时 PM10（μg/m³）。nil = 缺测。`0` 原样保留为 0。
     var pm10: Double?
+    /// P2 · AC-C5b：该小时一氧化碳 CO（**μg/m³**）。nil = 缺测，`0` 合法。
+    /// ⚠️ CO 的量级（实测峰值 2310 μg/m³）比其余污染物高**一到两个数量级**，
+    /// 故它**绝不可**与 PM/NO₂/SO₂/O₃ 共用一条纵轴——分项图必须逐污染物独立归一化。
+    var carbonMonoxide: Double? = nil
+    /// P2 · AC-C5b：该小时二氧化氮 NO₂（μg/m³）。nil = 缺测，`0` 合法。
+    var nitrogenDioxide: Double? = nil
+    /// P2 · AC-C5b：该小时二氧化硫 SO₂（μg/m³）。nil = 缺测，`0` 合法。
+    var sulphurDioxide: Double? = nil
+    /// P2 · AC-C5b：该小时臭氧 O₃（μg/m³）。nil = 缺测，`0` 合法。
+    var ozone: Double? = nil
 
     /// 以时刻作为稳定标识（同一整点唯一）。
     var id: Date { time }

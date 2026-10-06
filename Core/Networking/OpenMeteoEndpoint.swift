@@ -102,7 +102,22 @@ enum OpenMeteoEndpoint {
     //   实测探针（北京 39.9042,116.4074，forecast_days=2 + past_days=1，与本文件逐字相同参数）：
     //     HTTP 200；`wind_direction_10m` 存在、72 条、**0 个 null**、取值 6~360（度）。
     //     ⚠️ 360 是合法值（等同 0°，正北），方位映射必须容纳闭区间 [0,360]。
-    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability", "precipitation", "wind_speed_10m", "wind_gusts_10m", "apparent_temperature", "wind_direction_10m"].joined(separator: ",")
+    //
+    // P2 · AC-B17c（本轮补齐）：再 +uv_index（**无量纲** 0–11+）/ visibility（**米**）/
+    //   freezing_level_height（**米**，该高度处气温为 0℃）。
+    //   三者均**并入既有这一次请求**（R-Q2「加字段不加剧请求」，Open-Meteo 配额计数仍 ×1），
+    //   **不新增任何 query 参数**，既有 wind_speed_unit / forecast_days / past_days 逐字不动。
+    //   实测探针（2026-10-06，北京 39.9/116.4，`hourly=uv_index,visibility,freezing_level_height`
+    //   + forecast_days=1 + timezone=Asia/Shanghai + timeformat=unixtime，逐字同参）：
+    //     HTTP 200；三个键**都存在**、各 24 条、**0 个 null**；
+    //     `uv_index` 取值 0.0–4.9（**含 7 个 0.0 的夜间值** —— 0 是合法值不是缺测，
+    //     mapper/UI 绝不可把它当缺失，见 `UVIndexGuide`）；
+    //     `visibility` 16740–18480 m；`freezing_level_height` 2670–4010 m。
+    //   ⚠️ 仍按 v1.6/v1.7 纪律声明为**可选 + 元素可选**：全局词表里存在、但某端点/部署
+    //   不支持时，Open-Meteo 会返回 HTTP 200 并**静默省略整个键**（`AirQualityEndpoint`
+    //   文件头记录了未知字段名会 400，但"变量存在而端点不支持"是另一码事）——
+    //   非可选声明会让整包解码失败、**主屏与小组件同时无数据**。
+    static let hourlyFields = ["temperature_2m", "weather_code", "precipitation_probability", "precipitation", "wind_speed_10m", "wind_gusts_10m", "apparent_temperature", "wind_direction_10m", "uv_index", "visibility", "freezing_level_height"].joined(separator: ",")
 
     /// 逐日字段（v1.1 新增高低温；F-A 追加天气码与最大降水概率；
     /// A1 追加 sunrise/sunset——run37 实测在 unixtime 下返回 epoch 整数，

@@ -48,15 +48,10 @@ final class RadarCardModel {
     /// 是否正在首次加载（**只用于显示"正在加载"，不参与四态判定**）。
     private(set) var isLoading: Bool = false
 
-    /// 本次加载对应的城市标识（**防串号的唯一守卫**）。
-    ///
-    /// 取数是 `async`，用户可能在等 A 城数据时切到 B 城。
-    /// `load` 里写入本值，后到的 A 城结果必须 `guard currentCityID == cityID`
-    /// 才能落地（见 `load` 内两处 guard）——否则会把旧城数据画到新城地图上。
-    ///
-    /// ⚠️ 2026-10-06 补：本属性**此前只有赋值、没有声明**（`load` 内 :161/:173/:179
-    /// 三处读写），CI 编译不过（run 37460108230）。逻辑本已正确，只是漏了声明。
-    private(set) var currentCityID: String?
+    // ⚠️ `currentCityID` 的声明在**本文件下方**（`var currentCityID: String?`），
+    // 不要在这里再加一个 —— 2026-10-06 曾因 grep 模式漏看 `var` 与 `private(set) var`
+    // 的区别而重复声明，CI 报 `invalid redeclaration`（run 37463237543）。
+    // 教训：**grep 到"一处声明"不等于"只有一处声明"**，加属性前要 grep 裸符号名。
 
     /// 加载是否已超时（秒）。
     ///
@@ -200,6 +195,10 @@ final class RadarCardModel {
     }
 
     /// 当前城市 id（由主屏写入，仅用于上面的切城守卫）。
+    ///
+    /// **防串号的唯一守卫**：取数是 `async`，用户可能在等 A 城时切到 B 城；
+    /// `load` 里写入本值，后到的 A 城结果必须 `guard currentCityID == cityID`
+    /// 才能落地，否则会把旧城数据画到新城地图上。
     var currentCityID: String?
 
     /// 当前应显示的帧路径。

@@ -115,7 +115,15 @@ enum OpenMeteoMapper {
                     // P2 · AC-B17b：逐时风向（度）。元素 null → nil（AC-C4b 要求该小时
                     // 不画箭头）；但 **0 与 360 都是合法风向**，原样保留，绝不规范化成 nil。
                     // 缺键/越界同样 → nil（`optionalDouble` 有边界守卫）。
-                    windDirection: optionalDouble(hourly.wind_direction_10m, at: index)
+                    windDirection: optionalDouble(hourly.wind_direction_10m, at: index),
+                    // P2 · AC-B17c：逐时 uv_index / visibility / freezing_level_height。
+                    // 同样走 `optionalDouble`（缺键 / 越界 / 元素 null → nil），
+                    // **缺值绝不写 0**：其中 `uv_index` 尤其危险 —— 0 是**合法值**（夜间），
+                    // 若把缺失也写成 0，UV 分级会显示"低"而不是"无数据"（说谎）。
+                    // `freezing_level_height` 单位为米（原值透传，换算/解读归 UI）。
+                    uvIndex: optionalDouble(hourly.uv_index, at: index),
+                    visibility: optionalDouble(hourly.visibility, at: index),
+                    freezingLevelHeight: optionalDouble(hourly.freezing_level_height, at: index)
                 )
                 points.append(point)
             }

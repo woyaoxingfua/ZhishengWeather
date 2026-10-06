@@ -79,7 +79,14 @@ enum AirQualityMapper {
                 time: Date(timeIntervalSince1970: TimeInterval(epoch)),
                 usAqi: sanitizedAqi(aqi),
                 pm25: sanitizedConcentration(pm25),
-                pm10: sanitizedConcentration(pm10)
+                pm10: sanitizedConcentration(pm10),
+                // P2 · AC-C5b：另外四种污染物逐时搬运，净化规则与 PM 完全同款
+                //（负值/非有限 → nil；`0` 原样保留为 0，绝不当缺失）。
+                // 缺键 / 越界 / 元素 null 一律 nil → 该污染物分项图整块隐藏。
+                carbonMonoxide: sanitizedConcentration(element(block.carbon_monoxide, at: index)),
+                nitrogenDioxide: sanitizedConcentration(element(block.nitrogen_dioxide, at: index)),
+                sulphurDioxide: sanitizedConcentration(element(block.sulphur_dioxide, at: index)),
+                ozone: sanitizedConcentration(element(block.ozone, at: index))
             ))
         }
         return result.isEmpty ? nil : result
