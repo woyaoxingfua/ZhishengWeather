@@ -121,18 +121,42 @@ struct WeatherCnAlarmListResponse: Decodable, Sendable {
         /// 按下标逐项解码（`keyedContainer` 在数组形态下不可用）。
         ///
         /// - 缺项 / 类型不符 → 该字段 nil，**不抛错**。
-        /// - ⚠️ 下标越界（上游改元数）→ `allKeys` 迭代自然跳过，
-        ///   不崩溃（实测元数恒为 8，但不该把该性质当契约依赖）。
+        /// - ⚠️ 下标越界（上游改元数）→ 越界取到 nil，**不崩溃**
+        ///   （实测元数恒为 8，但不该把该性质当契约依赖）。
         init(from decoder: Decoder) throws {
             var container = try decoder.unkeyedContainer()
-            guard let elements = try? container.allKeys else {
-                // 非数组形态（上游改结构）→ 全字段留nil，交给 mapper 丢弃。
-                self.init()
-                return
+            // ⚠️ `UnkeyedDecodingContainer` **没有 `decode(_:at:)`** —— 它只能
+            // **按游标顺序**解，没有随机下标入口。故先顺序扫一遍收集字符串，
+            // 再按下标取。
+            //
+            // ⚠️ `container.allKeys` 在 unkeyed 容器上是**非 throwing** 属性，
+            // 包 `try?` 会触发「type of expression is ambiguous without a type
+            // annotation」；数量直接用 `count`。
+            let count = container.count
+            var slots: [Int: String] = [:]
+            var cursor = 0
+            while cursor < count, !container.isAtEnd {
+                // 每轮**必须恰好消费一个元素**，否则游标不前进 → 死循环。
+                // `decodeNil()` 遇 null 会消费并返回 true；
+                // 否则 `decode(String.self)` 消费一个（失败时已抛出，
+                // 但 currentIndex 不会推进 —— 故失败分支要靠 isAtEnd 兜底退出）。
+                if (try? container.decodeNil()) == true {
+                    cursor += 1
+                    continue
+                }
+                if let text = try? container.decode(String.self) {
+                    slots[cursor] = text
+                    cursor += 1
+                } else {
+                    // 类型不符：无法用 decode 消费。unkeyed 容器没有公开的
+                    // "跳过" API，此时**只能退出**——已解码的前缀仍可用，
+                    // 缺的字段留 nil（**如实缺失**，不编造）。
+                    break
+                }
             }
             func string(_ index: Int) -> String? {
-                guard elements.contains(index) else { return nil }
-                return try? container.decode(String.self, at: index)
+                guard index >= 0, index < count else { return nil }
+                return slots[index]
             }
             self.region = string(Index.region)
             self.filename = string(Index.filename)
