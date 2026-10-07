@@ -82,33 +82,53 @@ final class MarineFloodSourcesTests: XCTestCase {
 
     // MARK: - 1．端点：独立子域名（本轮硬要求）
 
-    /// marine端点必须在 `marine-api.` 子域，且**只有一条 URL / 一次请求**。
+    /// marine端点必须在**独立子域**，且**只有一条 URL / 一次请求**。
     ///
-    /// ⚠️ 锚的是**性质**（"独立子域名"），不是整串 URL：改版本路径不该让守卫失效。
-    /// 但同时钉住"不得出现第二个 marine 主机"，防"新增一条重试 URL"。
+    /// ⚠️ 锚的是**性质**（"独立子域名"），不是整串 URL 字面量：
+    /// 主站基准从 `OpenMeteoEndpoint.baseURLString` 派生，改版本路径、
+    /// 改子域命名都不该让守卫失效；但"退回主站"必须被抓住。
     func testMarineEndpointUsesDedicatedSubdomainAndSingleRequest() throws {
         let url = try XCTUnwrap(MarineEndpoint.url(latitude: 36.07, longitude: 120.38))
         let absolute = url.absoluteString
 
-        XCTAssertTrue(absolute.hasPrefix("https://marine-api.open-meteo.com/v1/marine"),
-                      "marine 端点必须在独立子域marine-api.open-meteo.com"
-                      + "（写在主站 api.open-meteo.com 上一律 404），实际=\(absolute)")
-        XCTAssertEqual(absolute.components(separatedBy: "marine-api.open-meteo.com").count - 1, 1,
-                       "不得新增第二条 marine 请求 URL")
-        // 🔴 锚**host**，不用子串（2026-10-07 修正的测试缺陷）。
+        // 主站基准**从生产常量派生**（`Core/Networking/OpenMeteoEndpoint.swift`），
+        // 不在测试里硬编码 —— 否则主站换域名时本守卫会静默失守。
+        let mainSite = try XCTUnwrap(URL(string: OpenMeteoEndpoint.baseURLString))
+        let mainHost = try XCTUnwrap(mainSite.host)
+        let mainPath = mainSite.path
+        let host = try XCTUnwrap(url.host)
+
+        XCTAssertEqual(url.scheme, "https", "marine 请求必须是 https")
+
+        // 🔴 核心守卫（2026-10-07 修正）：**host 不得是主站 host**。
         //
-        // ⚠️ 旧写法`!absolute.contains("api.open-meteo.com/v1/marine")`
-        // **永远为假**：正确 host 是 `marine-api.open-meteo.com`，它本身就
-        // **包含**子串 `api.open-meteo.com/v1/marine` ⇒ 该断言与本函数
-        // 第一条 `hasPrefix("https://marine-api...")` 断言**自相矛盾**，
-        // 两条不可能同时通过。这不是 marine 端点写错了，是**守卫写法错了**。
-        //
-        // 意图（"不得把 marine 挂到主站路径上，实测 404"）的正确表达是
-        // **host 精确等于 marine 子域**，而不是子串否定。
-        XCTAssertEqual(url.host, "marine-api.open-meteo.com",
-                       "marine 请求必须打到独立子域（主站 api.open-meteo.com上一律 404）")
-        XCTAssertNotEqual(url.host, "api.open-meteo.com",
-                          "🔴 不得把 marine 请求挂到主站 host 上（实测 404）")
+        // ⚠️ 旧写法 `!absolute.contains("api.open-meteo.com/v1/marine")`
+        // **永远为假**，因为正确 host `marine-api.open-meteo.com` 本身就**包含**
+        // 子串 `api.open-meteo.com/v1/marine` ⇒ 它与同函数第一条
+        // `hasPrefix("https://marine-api...")` 断言**自相矛盾**，两条不可能同时通过。
+        // 端点没写错，是**守卫锚错了对象**：子串否定在"子域名前缀"这个形态下
+        // 天然不可用（`marine-api` 以 `api` 开头），只能锚 host。
+        XCTAssertNotEqual(host, mainHost,
+                          "🔴 不得把 marine 请求挂到主站 host \(mainHost) 上（实测 404）")
+
+        // 「独立子域」= 同一注册域 + **前导标签不同**（marine-api vs api）。
+        // 锚性质不锚字面量：子域改名/升版本都不该让守卫失效，
+        // 但"退回主站"必须被发现。
+        let mainDomain = mainHost.split(separator: ".").dropFirst().joined(separator: ".")
+        XCTAssertTrue(host.hasSuffix(".\(mainDomain)"),
+                      "marine host 必须落在 \(mainDomain) 之下（独立子域），实际=\(host)")
+        XCTAssertNotEqual(host.split(separator: ".").first,
+                          mainHost.split(separator: ".").first,
+                          "marine 必须有自己的前导子域标签，不能与主站共用")
+
+        // 路径也不得是主站路径（marine 与 forecast 是不同资源）。
+        XCTAssertNotEqual(url.path, mainPath,
+                          "marine 路径不得与主站路径相同（主站=\(mainPath)）")
+
+        // 「只有一条 marine 请求」：整串 URL 里 marine host 恰好出现一次
+        //（防后人新增一条重试/备用 URL）。
+        XCTAssertEqual(absolute.components(separatedBy: host).count - 1, 1,
+                       "不得新增第二条 marine 请求 URL，实际=\(absolute)")
 
         let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         let names = items.map(\.name)
