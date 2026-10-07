@@ -289,7 +289,16 @@ enum WidgetTrace {
     ///
     /// - Parameter message: 已脱敏的单行文本。
     private static func emit(_ message: String) {
-        WeatherLog.widget.notice(message)
+        // ⚠️ `Logger` 的消息参数是 **`OSLogMessage`（编译期构造）**，
+        // 不能直接传运行时 `String` —— CI 报
+        // "cannot convert value of type 'String' to expected argument type 'OSLogMessage'"。
+        //
+        // 用 **String 插值** 而不是 `\(message)` 走 `OSLogMessage` 的
+        // `ExpressibleByStringInterpolation`：Swift 会把它编译成
+        // 对运行时值的 `privacy` 处理，此时必须显式指定
+        // `privacy: .public`，否则整条消息在真机 Console 里
+        // 可能显示为 `<private>`（而本文件刻意要显示已脱敏的全文）。
+        WeatherLog.widget.notice("\(message, privacy: .public)")
     }
 
     // MARK: - 脱敏
