@@ -335,7 +335,9 @@ final class NmcAlarmTests: XCTestCase {
         let item = try XCTUnwrap(items.first)
         XCTAssertEqual(item.id, "35060441600000_20261006202800")
         XCTAssertEqual(item.cityName, "漳州市")
-        XCTAssertEqual(item.county, "龙海区")
+        // ⚠️ 县段**刻意**不在模型上（`OfficialWarningItem` 没有 `county` 字段，
+        // 见 OfficialWarning.swift 的字段清单）—— 它只保留在下方的 `region`
+        // 展示串里。故此处不引用不存在的属性，县名由region 断言覆盖。
         XCTAssertEqual(item.kind, "大风")
         XCTAssertEqual(item.color, .yellow)
         // 行政区划码 = alertid 前 6 位（实测 GB/T 2260）
@@ -760,7 +762,8 @@ final class NmcAlarmTests: XCTestCase {
         let items = try await NmcAlarmService(session: session)
             .fetchAllWarnings(timeZone: shanghai)
         XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items.first?.county, "石狮市")
+        // ⚠️ 模型上没有 `county` 字段，县段只在 `region` 串里（见上方同款注释）。
+        XCTAssertEqual(items.first?.region, "福建省 / 泉州市 / 石狮市")
 
         // ② 2xx + 空列表 → **空数组**（"成功但没有"，不是失败）
         NmcStubURLProtocol.handler = { request in

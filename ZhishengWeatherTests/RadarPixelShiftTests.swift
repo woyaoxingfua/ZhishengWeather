@@ -28,6 +28,10 @@ import Foundation
 // `ShiftedTileOverlayRenderer` 是 App target 的 MapKit 类，故本测试需 import MapKit
 // 才能调它的静态 `shiftVector`（`CLLocationCoordinate2D` 也来自 MapKit 的连带导出）。
 import MapKit
+// ⚠️ `UIScreen` 属于 **UIKit**，不由 MapKit / Foundation 保证 re-export
+// （同款判断见 `SettingsView.pixelShiftReading` 与 `RadarMapCard` 的 import 注释）
+// → 必须显式引入，否则 `UIScreen.main.scale` 报 "cannot find 'UIScreen' in scope"。
+import UIKit
 @testable import ZhishengWeather
 
 // MARK: - 一、MapKit 侧平移能力的查证结论（钉住「查到了什么」）
@@ -395,6 +399,13 @@ final class PixelShiftDiagnosticsTests: XCTestCase {
 ///
 /// ⚠️ 这些用例**只验纯函数 `shiftVector`**，不真跑 MapKit 渲染
 /// （那需要真机/ 模拟器）。可执行的部分是「档位→ 向量」的映射与钳制。
+///
+/// ⚠️ **整体标 `@MainActor`**：`testShiftVectorMatchesCoreProbeMagnitude` 要读
+/// `UIScreen.main.scale`（`shiftVector` 内部也读同一个量，两边必须同源），
+/// 而 `UIScreen.main` 是 **`@MainActor` 隔离**的 —— 非隔离的同步用例读它会报
+/// "call to main actor-isolated property 'main' in a synchronous nonisolated
+/// context"（本仓 P-04 / P-06 铁律的同类形态）。
+@MainActor
 final class ShiftedTileOverlayRendererTests: XCTestCase {
 
     /// `.off` → 零向量（⇒ renderer 走原生路径，**不改任何渲染行为**）。

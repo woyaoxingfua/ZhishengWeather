@@ -232,6 +232,18 @@ struct WeatherCnAlarmDetail: Decodable, Sendable, Equatable {
     var EFFECT: String?
     /// 跨源连接键（实测与列表 [4]、NMC `alertid` **逐字相同**，5/5）。
     var identifier: String?
+    /// 预警类型英文名（实测 **5/5 恒为空串**）。
+    ///
+    /// ⚠️ 建模它**只为让测试能断言「实测恒空」这条事实**（见
+    /// `WeatherCnAlarmTests.testNAMEENIsPinyinNotEnglishAndTypeEnglishIsEmpty`）。
+    /// 它**没有生产消费方**：真正的英文字段是 `YJYC_EN`，而本通道
+    /// **拿不到英文预警标题**（`YJTYPE_EN` 恒空）。
+    /// ⚠️ 故**绝不可**把它当英文标题展示 —— 空串会让UI 渲染出空白标题。
+    var YJTYPE_EN: String?
+    /// 签发人/ 责任单位（实测 **5/5 恒为空串**）。
+    ///
+    /// ⚠️ 同上：建模**仅为让测试断言「实测恒空」**，无生产消费方。
+    var UNDERWRITER: String?
 
     /// 从 **JSONP** 文本解码（实测壳为 `var alarminfo={…};`）。
     ///

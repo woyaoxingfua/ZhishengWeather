@@ -38,6 +38,11 @@ import MapKit
 // `CLLocationCoordinate2D` 显式引入：MapKit 虽会连带 CoreLocation，
 // 但不保证 Swift 侧可见（模块 re-export 不是语言保证）。显式引入零成本。
 import CoreLocation
+// ⚠️ `UIScreen` 属于 **UIKit**，不由 SwiftUI / MapKit 保证 re-export
+// （同款判断见 `SettingsView.pixelShiftReading` 的注释）→ 必须显式引入，
+// 否则 `UIScreen.main.scale` 报 "cannot find 'UIScreen' in scope"。
+// 本类型整体已标 `@MainActor`（见下），故 `UIScreen.main` 的隔离也满足。
+import UIKit
 
 // MARK: - 纠偏模式偏好（App 本地，不进共享容器）
 

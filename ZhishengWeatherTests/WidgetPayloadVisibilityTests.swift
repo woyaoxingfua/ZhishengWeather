@@ -71,7 +71,7 @@ final class WidgetPayloadVisibilityTests: XCTestCase {
                                    status: .stale, dataSource: .sharedContainer,
                                    emptyReason: nil)),
             ("画廊占位（有载荷、无城市）",
-             WidgetEntryResolution(city: nil, payload: .placeholder,
+             WidgetEntryResolution(city: nil, payload: payload(),
                                    status: .available, dataSource: .none,
                                    emptyReason: nil)),
             ("无城市",
@@ -127,18 +127,49 @@ final class WidgetPayloadVisibilityTests: XCTestCase {
 
     // MARK: - 3. 画廊占位仍是「有载荷」（防把示例数据整段藏起来）
 
-    /// 回归防线：`WidgetEntryResolution.placeholder` 是全仓**唯一**「有载荷但
+    /// 回归防线：画廊占位是全仓**唯一**「有载荷但
     /// 无城市」的组合（`WeatherEntry.swift` 有论证）。若哪天有人把占位改成
     /// `payload: nil`，`hasPayload` 会变false → 画廊里整段数据区被收起 →
     /// 用户在添加组件的预览里看到空白。此例锁死它必须仍落在「有载荷」那侧。
+    ///
+    /// ⚠️ 为什么在这里**就地构造**而不直接引用 `WidgetEntryResolution.placeholder`：
+    /// 该静态量定义在 **Widget target**（`ZhishengWeatherWidget/WeatherEntry.swift`
+    /// 的 `extension WidgetEntryResolution`），而本测试 target 的 sources 只有
+    /// `ZhishengWeatherTests`、依赖只有主App —— 它在本文件里**不可见**
+    /// （引用会报 `cannot find 'placeholder' in scope`）。
+    /// 本测试 target 同样看不到 Widget 侧的 `SharedWeatherPayload.placeholder`
+    /// （`WeatherSnapshot.placeholder` 亦然），故payload 走本地构造，
+    /// 断言的**性质**（有载荷 + 无城市 + 无空因 ⇒ hasPayload 为 true）不变。
     func testGalleryPlaceholderStillCountsAsPayloadBearing() {
+        let gallery = Self.placeholderEquivalent()
         XCTAssertTrue(
-            WidgetEntryResolution.placeholder.hasPayload,
+            gallery.hasPayload,
             "画廊 / 预览占位带着示例载荷（emptyReason == nil），必须仍算「有数据」——"
                 + "否则 Large 的数据区块会被整段收起，画廊预览显示空白"
         )
-        XCTAssertNil(WidgetEntryResolution.placeholder.city,
+        XCTAssertNil(gallery.city,
                      "占位的 city 为 nil 是既有约定（名字回退快照 location）")
+    }
+
+    /// Widget 侧 `WidgetEntryResolution.placeholder` 的**等价本地构造**。
+    ///
+    /// 逐字对齐 `ZhishengWeatherWidget/WeatherEntry.swift` 的定义：
+    /// `city: nil` + 示例 `payload` + `status: .available` +
+    /// `dataSource: .none` + `emptyReason: nil`。
+    private static func placeholderEquivalent() -> WidgetEntryResolution {
+        let snapshot = WeatherSnapshot(location: Self.beijing.locationInfo,
+                                       temperature: 23, apparentTemperature: 22,
+                                       weatherCode: 2, windSpeed: 3, windDirection: 90,
+                                       humidity: 50, isDay: true, hourly: [],
+                                       dailyHigh: 25, dailyLow: 15,
+                                       fetchedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        return WidgetEntryResolution(city: nil,
+                                     payload: SharedWeatherPayload(snapshot: snapshot,
+                                                                  updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                                                                  timeZoneIdentifier: "Asia/Shanghai"),
+                                     status: .available,
+                                     dataSource: .none,
+                                     emptyReason: nil)
     }
 
     // MARK: - 4. 全部七个空因都收敛为「不渲染数据区块」
