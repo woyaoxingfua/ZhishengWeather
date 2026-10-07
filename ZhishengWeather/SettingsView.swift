@@ -146,7 +146,8 @@ struct SettingsView: View {
     /// 设置页没有地图中心（用户在主屏选城市），故无法给出"你这个位置"的读数。
     /// 取参考点最大值是**偏保守**的一侧：它不会让平移量显得比实际更大，
     /// 也避免用户以为自己那座城市特别大。
-    /// 实测最大为广州 z7@2x 的 **0.933 px**（`PixelShiftMagnitudeTests`）。
+    /// 实测最大为北京 z7@2x 的 **1.184 px**（`PixelShiftMagnitudeTests`，
+    /// 2026-10-07 修`cos` 方向后；旧值 0.933 px 建立在错误的 cos 方向上）。
     private var pixelShiftReading: String {
         let scale = Double(displayScale)
         let edge = Double(RadarTileURLBuilder.tileEdge)

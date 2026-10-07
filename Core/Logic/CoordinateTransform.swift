@@ -64,28 +64,31 @@
 //  真机要验的是「**不纠偏时**回波与底图差多少米」，而这个差值由
 //  **底图本身**决定，与开关无关（见 `radarAlignmentProbe`）。
 //
-//  ── 🔴🔴🔴 本轮（第二轮）结论：改索引做不到，必须像素级平移；且平移量< 1 px ──
+//  ── 🔴🔴🔴 本轮（第三轮）结论：改索引做不到；平移量**按倍率分档**────────
 //  · **MapKit 侧确实有平移手段**（不是"猜"，见 `Evidence` + `PixelShiftProbe`）：
 //    `MKTileOverlayRenderer` 官方页只有 `init` / `reloadData`，**无任何**平移属性；
 //    但 `MKOverlayRenderer.draw(_:zoomScale:in:)` 是 Apple 文档明写的子类钩子
 //    （"Subclasses need to override the `draw(_:zoomScale:in:)` method"），
 //    在该方法内 `context.translateBy` 即可整体平移瓦片内容。
-//  · **但平移量在真机上不足一个像素**（实测，见 `PixelShiftProbe` 注释）——
-//    **但这句话只在 @1x/@2x 成立，@3x 不成立**，不可笼统转述：
-//    z7 全中国境内瓦片穷举，@1x/@2x 下最大 **0.933 设备像素**（z7@2x，广州；
-//    552 个瓦片中心的独立穷举最大值是 0.9313 px @113.906°E/28.304°N），
-//    552 个瓦片里**0 个**达到 1.0 px。即：**@1x/@2x 下平移了也看不见**。
-//    ⚠️ **@3x 是例外**：z7@3x 参考点里**3 个**越过 1 px
-//    （广州 1.400、上海 1.004、北京 1.045px），**看得见**。
-//    （2026-10-07 修正：此前 `zoomScale` 把 `contentScaleFactor` 也乘了进去，
-//    与 `magnitudeDevicePixels` 重复 → `csf` 被平方，@2x 读数虚高一倍，
-//    曾把本就 < 1 px 的量误报为「可见」。现缩放因子只施加一次。）
-//    ⚠️ 「0.933」这个数**是设备像素（@2x）**，不是点量 —— 点量是 0.4665。
+//  · **平移量在真机上不足一个像素** —— 但这句话**只在 @1x 成立**：
+//    z7 参考点最大值（Python 独立复算，cos 修正后）@1x **0.592 px**、
+//    @2x **1.184 px**、@3x **1.776 px**（均为北京；高纬被 `1/cos²` 放大）。
+//    ⇒ **@2x 起就已肉眼可辨**，不可笼统转述为"平移了也看不见"。
+//    ⚠️ **2026-10-07 修了实现层面的两处真bug（两处都与"看不见"这个结论有关）：**
+//    ① `zoomScale` 曾把 `contentScaleFactor` 也乘了进去，与
+//      `magnitudeDevicePixels` 重复 ⇒ `csf` 被平方、@2x 读数虚高一倍（已修）。
+//    ② 🔴 `metersPerMapPoint` 把 `cos` **方向搞反了**（`÷ cos` ⇒ `× cos`）：
+//      Web Mercator 地面分辨率 = `cos(lat)·2πR/(tileEdge·2^z)` ⇒ **高纬 1 投影单位
+//      覆盖的地面更少**，米/点应**乘** cos。旧实现让高纬平移量被系统性低估
+//      `1/cos²` 倍（北京 ×1.700），并因此让"@2x 全中国都看不见"这个**产品级结论**
+//      变成假话。详见 `metersPerMapPoint` 的注释。
+//    ⚠️ 「0.933 / 552 瓦片 0 个 ≥ 1 px」那套数**建立在错误的 cos 方向上，已作废**。
 //  · **性质**：`设备像素 = 基量 × 2^(z−7) × csf` —— 对 z 与 csf 都**线性**。
 //    故「是否≥ 1 px」**不是**与倍率无关的常数，而是存在阈值
-//    `csf* = 1 / 基量`（广州 2.14、上海 2.99、北京 2.87、成都 3.92）。
-//    @2x 恰好全在阈值下方、@3x 越过后三个 ⇒ **必须按倍率分档表述**，
-//    任何"平移量恒不足 1 px"的无条件说法都是错的。
+//    `csf* = 1 / 基量`（北京 1.69 / 广州 1.81 / 上海 2.19 /
+//    成都 2.91 / 乌鲁木齐 3.32）。
+//    @1x 恰好全在阈值下方、@2x 越过北京与广州、@3x 再越过上海与成都
+//    ⇒ **必须按倍率分档表述**，任何"平移量恒不足 1 px"的无条件说法都是错的。
 //  ⇒ 所以本轮实现的是**机制 + 可读的量化读数**，而不是"用户能看出对齐了"。
 //    详见 `PixelShiftProbe` 与 `RadarMapCard` 里的 `ShiftedTileOverlayRenderer`。
 //
@@ -399,10 +402,11 @@ enum CoordinateTransform {
         ///   （见 `overlayRendererSubclassHookQuote`），且方法签名收 `CGContext`，
         ///   故可用 Core Graphics 的 `translateBy` 平移绘制内容。
         /// - ⚠️ **这只证明「机制存在」，不证明「平移量看得见」** —— 实测平移量
-        ///   在 **@1x/@2x** 不足 1 设备像素（见 `PixelShiftProbe`）⇒ 在默认档下
+        ///   在 **@1x** 不足 1 设备像素（见 `PixelShiftProbe`）⇒ 在 @1x 下
         ///   它**不是**用户可感知的纠偏。
-        ///   ⚠️ **该判断必须按倍率分档、不可无条件转述**：@3x + z7 有 3 个参考点
-        ///   越过 1 px（广州 1.400 px），是看得见的（见文件头「性质」段）。
+        ///   ⚠️ **该判断必须按倍率分档、不可无条件转述**：@2x 起 z7 就有参考点
+        ///   越过 1 px（北京 1.184 px、广州 1.104 px），@3x 四个，是看得见的
+        ///   （见文件头「性质」段）。
         static let translationViaDrawHookAvailable: Bool = true
     }
 
@@ -456,9 +460,9 @@ enum CoordinateTransform {
 
         /// 🆕 **是否达到肉眼可辨的 1 设备像素**。
         ///
-        /// ⚠️ 这是本轮最要紧的判据。**实测（2026-10-07 修正 csf 平方后）**：
-        /// @1x / @2x 全区间为 `false`（最大 0.933 px@z7@2x，广州）；
-        /// **@3x + z7 为 `true`**（广州 1.400 px）—— 故不能一概声称"看不见"。
+        /// ⚠️ 这是本轮最要紧的判据。**实测（2026-10-07 修正 csf 平方 + cos 方向后）**：
+        /// **@1x** 全区间为 `false`（最大 0.592 px@z7@7，北京）；
+        /// **@2x 起为 `true`**（北京 1.184 px、广州 1.104 px）—— 故不能一概声称"看不见"。
         var isVisuallyDetectable: Bool { magnitudeDevicePixels >= 1.0 }
 
         /// 单行摘要（进诊断面板；**必须**带"方向未验证"字样，见`summary`）。
@@ -478,12 +482,25 @@ enum CoordinateTransform {
     /// ⚠️ **它只影响平移量的绝对数值，不影响任何结论**（见下方实测交叉验证）。
     static let MKMapSizeWorldWidth: Double = 268_435_456.0
 
-    /// 某纬度上「1 mapPoint 等于多少米」（赤道周长 / 世界宽度 / cos(lat)）。
+    /// 某纬度上「1 mapPoint 等于多少米」（赤道周长 / 世界宽度 **× cos(lat)**）。
     ///
-    /// ⚠️ **实测交叉验证（2026-10-07）**：本函数与 `zoomScale` 组合后，
-    /// 在赤道处反推出的「1 屏幕点 =多少米」与解析式
-    /// `tileEdgeMeters/256` 逐位吻合（z4 9783.9 vs 9783.940，
-    /// z7 1223.0 vs 1222.992）⇒ **换算链自洽**。
+    /// 🔴🔴 **2026-10-07 修正：`cos` 的方向此前是反的（`÷ cos` ⇒ `× cos`）。**
+    /// **错的是实现，不是断言** —— `testMetersPerMapPointShrinksWithLatitude`
+    /// 一直在说「40° 处 1 mapPoint 覆盖更少米」，那是**物理事实**：
+    /// Web Mercator 的地面分辨率 = `cos(lat)·2πR / (tileEdge·2^z)`
+    /// ⇒ **高纬 1 投影单位覆盖的地面更少**（Mercator 把高纬拉伸，故同样的
+    /// 投影长度在高纬对应的地面距离更短）。旧实现除以 cos，方向相反。
+    ///
+    ///⚠️ **这个 bug 为什么藏了这么久**：唯一的交叉验证
+    /// `testZoomScaleChainReproducesAnalyticMetersPerPoint` **只在赤道跑**
+    ///（`atLatitude: 0`），而 `cos(0) = 1` ⇒ `× cos` 与 `÷ cos` 在赤道
+    /// **取值完全相同**，那条自洽性证明对 cos 的方向**完全没有鉴别力**。
+    /// 后果：高纬参考点的平移量被系统性低估 `1/cos²` 倍（北京 0.348→0.592 px@1x），
+    /// 进而让「z7@2x 全中国都看不见」这个**产品级结论**变假。
+    ///
+    /// 独立复算（Python，不依赖本实现）：
+    /// `40075016.686 / 2^28 = 0.14929107087105511`（赤道）；
+    /// `× cos(40°) = 0.11436359524805330`，比值恰为 `cos 40° = 0.766044443118978`。
     ///
     /// - Parameter latitude: 纬度（度）。
     /// - Returns: 1 mapPoint 覆盖的米数；纬度非法返回 0。
@@ -491,7 +508,7 @@ enum CoordinateTransform {
         guard (-90.0...90.0).contains(latitude) else { return 0 }
         let cosLat = cos(latitude * .pi / 180.0)
         guard abs(cosLat) > 1e-12 else { return 0 }
-        return 40_075_016.686 / MKMapSizeWorldWidth / abs(cosLat)
+        return 40_075_016.686 / MKMapSizeWorldWidth * abs(cosLat)
     }
 
     /// 某纬度上「1 米等于多少 mapPoint」（`metersPerMapPoint` 的倒数）。
@@ -515,12 +532,14 @@ enum CoordinateTransform {
     ///
     /// ⚠️ **曾经的 bug**：签名里带 `contentScaleFactor` 且乘了进去，而
     /// `PixelShiftProbe.magnitudeDevicePixels` **又乘了一遍**
-    /// → `csf` 被平方。后果：@2x 读数是正确值的 **2 倍**
-    /// （北京 1.393 px，而正确值 0.697），@3x 是 3 倍。
+    /// → `csf` 被平方。后果：@2x 读数是正确值的 **2 倍**，@3x 是 3 倍。
     /// 那会让`isVisuallyDetectable` 在 @2x 就误报"可见"，也会让真正落到
     /// `context.translateBy` 的量多挪一倍（`shiftVector` 同样走这条链）。
     /// ⇒ 现在 `zoomScale` **只**给「点 / mapPoint」，缩放因子由
     /// `magnitudeDevicePixels` **恰好施加一次**。
+    /// ⚠️ 当时记录的那个"正确值 0.697 px"**本身也是错的**—— 它基于`cos` 方向
+    /// 反了的 `metersPerMapPoint`；`cos` 修正后北京 z7@2x 的真值是 **1.184 px**
+    /// （见 `metersPerMapPoint`）。本条只管"csf 恰好施加一次"，不承载绝对量值。
     ///
     /// 依据：`MKZoomScale` 的单位是**点 / mapPoint**（见 `Evidence` 的 MapKit
     /// 引文），而 `context.translateBy` 收的也是**点** —— 二者都不含设备像素比。
@@ -631,11 +650,14 @@ enum CoordinateTransform {
     ///   - contentScaleFactor: 内容缩放因子。
     /// - Returns: `true` = 在`RadarTileZoomRange` 全区间、所有参考点都 < 1 px。
     ///
-    /// ⚠️ **实测（2026-10-07 修正 `csf` 平方之后）**：
-    /// @1x 与 @2x 均为 `true`（z7@2x 最大 0.933 px = 广州）；
-    /// **@3x 为 `false`**（z7 广州 1.400 px）。
-    /// ⇒ 只能说「在默认档（@1x/@2x）下用户看不出差别」，**不能**声称
-    /// 「任何设备上都看不见」—— @3x 真机上是看得见的。
+    /// ⚠️ **实测（2026-10-07 修正 `csf` 平方 + `cos` 方向之后）**：
+    /// 本函数对 `csf = 1 / 2 / 3` **一律返回 `false`**。
+    /// ⚠️⚠️ **注意 `csf <= 1.0` 会被展开成 `[1.0, 2.0]`**（下一行）——
+    /// 本意是"按常见档位保守估计"，但它意味着**传 1 也会连@2x 一起测**。
+    /// 而修 cos 后 @2x 已有参考点越过 1 px（北京 1.184 px）⇒ 传 1 也返回 `false`。
+    /// ⇒ **本函数不能用来回答「@1x 是否全不可见」**（那是 `false` 的另一半原因）；
+    /// 「@1x 全不可见」须逐参考点断言（见 `testNoReferencePointReachesOnePixelAcrossRadarZooms`）。
+    /// ⇒只能说「@1x 下用户看不出差别」，**不能**声称「任何设备上都看不见」。
     static func pixelShiftIsBelowOnePixelEverywhere(tileEdge: Double,
                                                      contentScaleFactor: Double) -> Bool {
         let scales: [Double] = contentScaleFactor <= 1.0 ? [1.0, 2.0] : [contentScaleFactor]
