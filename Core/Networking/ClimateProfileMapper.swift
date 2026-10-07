@@ -85,16 +85,42 @@ enum ClimateProfileMapper {
         return array[index]
     }
 
-    /// 将 "yyyy-MM-dd" 按 calendar 的时区解析为 Date；格式不符返回 nil。
+    /// 将 "yyyy-MM-dd" 按 calendar 的时区解析为 Date；格式不符**或分量非法**返回 nil。
+    ///
+    /// 🔴 **必须显式校验**（2026-10-07 普查发现，与已修的 `NmcIssueTimeDecoder`同型）：
+    /// 旧实现把合法性**委托**给 `calendar.date(from:)`。**那不行** ——
+    /// Foundation 的 `Calendar.date(from:)` 对越界分量**不做校验、按自然溢出归一化
+    /// 并返回非 nil**（2 月 30 日 → 3 月 2 日、13 月 → 次年 1 月）。
+    /// 而调用侧 `:41-45` 的回读只比对**月/日/年**、且要求「等于今日月/日」，
+    /// 于是 `"2025-02-30"` 在**今日为 3 月 2 日**时会被归一化成 `2025-03-02`
+    /// 并**通过全部 guard**，作为一条**凭空编造的**历史同日快照进入
+    /// `sameDateLastYear` / 五年 / 十年均值 —— 形态完全合法、不触发任何兜底、
+    /// 无人能察觉。故此处采用与 `NmcIssueTimeDecoder` 相同的两招：
+    /// **范围 guard** + **回读自证**（后者一次性覆盖「范围合法但日历上不存在」，
+    /// 只查 `1...31` 拦不住，而逐日查 `range(of:.day,in:.month)` 又需先造日期（自举））。
+    /// ⚠️ 依据 = 仓库既有实测记录（`ISOTimeStringDecoderTests` CI run12 /
+    /// `NmcIssueTimeDecoder` CI 失败值）+ Python 复刻，**未在 Swift 上实跑**。
     private static func date(from dateString: String, calendar: Calendar) -> Date? {
         let parts = dateString.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
+        guard (1...12).contains(parts[1]), (1...31).contains(parts[2]) else { return nil }
+
         var components = DateComponents()
         components.year = parts[0]
         components.month = parts[1]
         components.day = parts[2]
         components.timeZone = calendar.timeZone
-        return calendar.date(from: components)
+        guard let date = calendar.date(from: components) else { return nil }
+
+        // 回读自证：Calendar 一旦做过任何归一化（2 月 30 日 / 4 月 31 日 /
+        // 平年 2 月 29 日），回读分量就与输入不等 ⇒ 判 nil。
+        let roundTrip = calendar.dateComponents([.year, .month, .day], from: date)
+        guard roundTrip.year == parts[0],
+              roundTrip.month == parts[1],
+              roundTrip.day == parts[2] else {
+            return nil
+        }
+        return date
     }
 
     private static func averageHigh(_ snapshots: [DailyClimateSnapshot]) -> Double? {

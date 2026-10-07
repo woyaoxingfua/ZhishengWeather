@@ -46,9 +46,17 @@ enum ISOTimeStringDecoder {
     ///   以覆盖 RFC 3339 的宽容变体；无分隔 → nil）。
     /// - 日期段按 `-` 切出年/月/日；时间段按 `:` 切出时/分（/秒）。
     ///   全部分量必须为纯数字，否则 nil。
-    /// - 有效性交给 `DateComponents` → `Date` 的构造：Calendar 会对
-    ///   13 月 / 32 日等非法组合返回 nil（`date(from:)` 的确定性语义），
-    ///   不再自行写月份天数表。
+    /// - 有效性由**本函数显式校验**，**不**委托 `Calendar.date(from:)`：
+    ///   逐分量范围 guard + 造出日期后**回读比对**（见 ⑤）。
+    ///   🔴 更正记录：原文此处写「有效性交给 `DateComponents` → `Date` 的构造：
+    ///   Calendar 会对 13 月 / 32 日等非法组合返回 nil（`date(from:)` 的确定性
+    ///   语义）」——**那是错的**。Foundation 的 `Calendar.date(from:)` 对越界分量
+    ///   **不做裁剪，按自然溢出归一化并返回非 nil**（13 月 → 次年 1 月、
+    ///   32 日 → 次月 2 日）。依据：本仓 `ISOTimeStringDecoderTests`
+    ///   的 `testNilWhenDateComponentsInvalid`（CI run12）早已实测记录同一事实，
+    ///   2026-10-07 又由 `NmcIssueTimeDecoder` 的同类真bug（13 月被编成
+    ///   2027-01-06，CI 实际失败值 `2027-01-06 12:28:00 +0000`）二次证实。
+    ///   ⚠️ 本条依据 = 仓库既有实测记录 + Python 复刻，**未在 Swift 上实跑**。
     /// - `TimeZone(secondsFromGMT:)` 恒非 nil（任意秒值合法），故
     ///   直接用 `!` 之外的写法：先解包为局部常量再使用（项目禁 `!`）。
     static func date(from string: String, utcOffsetSeconds: Int) -> Date? {
@@ -89,7 +97,35 @@ enum ISOTimeStringDecoder {
             second = parsedSecond
         }
 
-        // ⑤ 组装：有效性由 Calendar 裁定（13 月 / 32 日 / 25 时 → nil）。
+        // ⑤ 组装：合法性由**本函数显式校验**，**不**依赖 `Calendar.date(from:)`。
+        //
+        // 🔴 **真实 bug**（2026-10-07 普查发现，与已修的 `NmcIssueTimeDecoder`
+        // 同型）：旧实现把分量合法性**委托**给 `calendar.date(from:)`，并在
+        // 文件头写「13 月 / 32 日 / 25 时 → nil」。**那是错的**：Foundation 的
+        // `Calendar.date(from:)` 对越界分量**不做校验、按自然溢出归一化并返回
+        // 非 nil**（13 月 → 次年 1 月、32 日 → 次月 2 日、2 月 30 日 → 3 月 2 日、
+        // 25 时 → 次日 1 时、分 99 → 21:39、秒 61 → 20:29:01）。
+        // ⇒ 本解码器会把一个**编出来的**时刻当真值交给8 个 mapper
+        //   （EnsembleMapper / FloodMapper / MarineMapper / METNorwayMapper /
+        //   OpenMeteoMapper / SunriseSunsetMapper），进而污染预报点下标、
+        //   日出日落、洪水/海洋要素与「离 now 最近一格」的选择。
+        //
+        // 依据纪律「**时刻解析绝不猜，宁缺勿造**」：一个凭空编出的时刻比`nil`
+        // 糟糕得多 —— 它形态完全合法、**不触发任何 stale 兜底**，无人能察觉。
+        //
+        // 正解：**逐分量显式范围校验**（下面的 guard）+ **回读自证**。
+        // 后者一次性覆盖「范围合法但日历上不存在」的形态（2 月 30 日 / 4 月 31 日 /
+        // 平年 2 月 29 日）—— 只查 `1...31` 是拦不住的，而逐日查
+        // `range(of:.day, in:.month, for:)` 又要先造出一个日期来（自举）。
+        // **回读是唯一既总括又无自举的写法。**
+        guard (1...12).contains(month),
+              (1...31).contains(day),
+              (0...23).contains(hour),
+              (0...59).contains(minute),
+              (0...59).contains(second) else {
+            return nil
+        }
+
         var components = DateComponents()
         components.year = year
         components.month = month
@@ -100,7 +136,21 @@ enum ISOTimeStringDecoder {
 
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        return calendar.date(from: components)
+        guard let date = calendar.date(from: components) else { return nil }
+
+        // 回读自证：Calendar 一旦做过任何归一化（13 月 / 2 月 30 日 / 25 时 / 分 99），
+        // 回读的分量就与输入不等 ⇒ 判 nil，绝不把归一化后的时刻当合法时刻。
+        let roundTrip = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date)
+        guard roundTrip.year == year,
+              roundTrip.month == month,
+              roundTrip.day == day,
+              roundTrip.hour == hour,
+              roundTrip.minute == minute,
+              roundTrip.second == second else {
+            return nil
+        }
+        return date
     }
 
     // MARK: - Private
