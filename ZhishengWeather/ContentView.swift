@@ -48,6 +48,21 @@ struct ContentView: View {
     /// 塞进主 VM 会污染主 `state`（失败隔离纪律）。
     @State private var radarModel = RadarCardModel()
 
+    /// 台风卡状态（第七链路：台风网独立域名 + 独立失败域）。
+    ///
+    /// 持有方式与 `radarModel` **同款**（`@State`，因为 `@Observable` 宏
+    /// **不合成 `$` 投影**，用 `@StateObject` 会编译失败 —— 见上方radarModel
+    /// 注释里记录的 run 37463237543 / 37458644694 实证）。
+    @State private var typhoonModel = TyphoonCardModel()
+
+    /// 台风卡的年份选择器所需的「当前年」。
+    ///
+    /// ⚠️ 由 `Date()` 在**视图构造期**取值并显式传给卡片（卡片自己不读时钟），
+    /// 与本仓「Core/ 不读内部Date()」的纪律一致，且可被单测固定。
+    private var currentYearValue: Int {
+        Date().currentYearValue
+    }
+
     var body: some View {
         // Handoff / Siri 建议：先把「当前城市」取成**局部值**再交给下面的
         // userActivity 闭包 —— 该闭包是 @escaping 且非主 actor 隔离，若直接
@@ -326,6 +341,27 @@ struct ContentView: View {
                                        now: snapshot.fetchedAt,
                                        timeZone: viewModel.selectedTimeZone)
                 }
+                // 台风卡（第七链路· 中央气象台台风网）。
+                //
+                // **插入位置**：官方预警卡之后、可排序区块 `ForEach(orderedVisibleSections)`
+                // **之前**（与 `RadarMapCard` / `UVIndexCard` / `OfficialWarningCard` 同款：
+                // **不占用 `HomeSection`**，避免老用户持久化顺序把它补到尾部）。
+                //
+                // ⚠️ **无条件挂载**：四态（`.idle` / `.none` / `.active` / `.unavailable`）
+                // 由 `TyphoonCardModel` 派生，卡内**各自**渲染可见内容 ——
+                // 尤其「当前无活跃台风」是**如实显示的文字**，绝不留空白页。
+                //
+                // ⚠️ **加载只做一次**：用 `.task`（**不绑任何 id**）——
+                // 台风是**全App 唯一**的一条链路，既不随城市切换而变，
+                // 也不随快照刷新而变；绑`id:` 会让它在切城时无谓重取。
+                // 卡内年份选择器是**另一条**入口（用户主动切年份才重取）。
+                TyphoonCard(model: typhoonModel,
+                            currentYear: currentYearValue)
+                    .task {
+                        // 仅在**尚未取过数**时拉一次（`.idle` 判据）。
+                        guard case .idle = typhoonModel.state else { return }
+                        await typhoonModel.load(year: nil)
+                    }
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in

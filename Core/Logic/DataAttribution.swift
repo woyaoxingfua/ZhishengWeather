@@ -208,6 +208,7 @@ enum DataAttribution {
         case .basicNumericFields: return "温度/气压/湿度/云量/风速/风向"
         case .marineWaveConditions: return "海浪要素（浪高/浪向/周期）"
         case .riverDischarge: return "河道流量"
+        case .typhoonTrack: return "台风路径与官方预报（含风圈）"
         @unknown default: return "（未命名能力）"
         }
     }

@@ -220,7 +220,44 @@ enum SourceDirectory {
                          // API 授权 / 许可协议签署** —— 无账号、无 Key、无协议。
                          // 故如实告知「未获官方授权 + 仅供个人自用」，
                          // **不得**写「官方授权」或任何暗示已获授权的字样。
-                         usageNote: "数据来自中国气象局官网公开预警接口，未经官方 API 授权，仅供个人自用。预警信息请以官方发布为准。")
+                         usageNote: "数据来自中国气象局官网公开预警接口，未经官方 API 授权，仅供个人自用。预警信息请以官方发布为准。"),
+
+        // 第七源：台风路径（中央气象台台风网 `typhoon.nmc.cn`，免 Key、零鉴权）。
+        //
+        // ⚠️ 与第六源 `nmcAlarm` **同机构、不同服务、不同数据形态**：
+        //   第六源 `www.nmc.cn/rest/findAlarm` → 预警信号（文本 + 颜色）；
+        //   本源 `typhoon.nmc.cn/.../jsons/view_<id>` → 台风路径点序列 + 官方预报。
+        // 两者失败域独立，故是两个独立 SourceID（见 `SourceID.nmcTyphoon` 注释）。
+        SourceDescriptor(id: .nmcTyphoon,
+                         displayName: "中央气象台台风网",
+                         role: .auxiliary,
+                         capabilities: [.typhoonTrack],
+                         // ⚠️ **诚实留空**：台风路径要素（经纬度 / 强度 / 气压 /
+                         // 风速 / 风圈半径 / 预报时效）**不在 `WeatherFieldKey` 域内**
+                         // （它们属于 `TyphoonTrack` 模型，且含坐标维度）。
+                         // 塞几个天气字段进来充数只会让 EV-1 判"永远缺字段"
+                         // → 后果：与 air / marine / flood / warning 同处境，
+                         // **无 EV-1 信号源**。
+                         requiredFields: [],
+                         // 实测 2026-10-07：`https://typhoon.nmc.cn/…/list_default`
+                         // → **HTTP 200/ 2797B**，无Key、无需 Referer、无需特定 UA
+                         // （三种 UA 实测字节数一致）→ false。
+                         needsCredential: false,
+                         // 同 marine / air：接线走独立链路（不经`FieldSupplying`），
+                         // 无调用点上报 `recordMissingFields` / `recordHTTPStatus`
+                         // → 诚实置false，不在设置页给一个「点了没反应」的开关。
+                         participatesInAutoExclusion: false,
+                         // 实测 2026-10-07：`https://typhoon.nmc.cn/` → **HTTP 200**。
+                         // CC BY 4.0 署名义务要求可追溯的 credit，故填官网首页。
+                         websiteURLString: "https://typhoon.nmc.cn/",
+                         // ⚠️⚠️ **许可状态必须如实写，不得美化**（与第六源同款要求）。
+                         // 我们调用的是**公开网页前端接口**，**未获中国气象局任何形式
+                         // 的 API 授权 / 许可协议签署** —— 无账号、无 Key、无协议。
+                         // 且本源是**非承诺的开放 API**（网页前端随时可能改结构），
+                         // 两条都必须让用户知道。
+                         usageNote: "数据来自中国气象局台风网公开接口，未经官方 API 授权，"
+                             + "仅供个人自用。该接口为网站前端数据、非承诺的开放 API，"
+                             + "结构可能变动；台风路径与预报请以中央气象台官方发布为准。")
     ]
 
     /// 按 id 取描述符（未登记 → nil；调用方按「未知源一律不参与自动摘除」处理）。

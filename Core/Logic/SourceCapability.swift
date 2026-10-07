@@ -44,4 +44,13 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
                                  //   单列的另一个理由：预警的领域模型是**列表**而非
                                  //   `WeatherFieldKey` 域内的标量，混进既有能力枚举
                                  //   会逼出一个假字段（见 `SourceCapability` 文件头）。
+    case typhoonTrack           // 台风路径与官方预报（路径点/ 强度 / 风圈 / BABJ 预报）
+                                 //   ← 第七源 NMC 台风网。
+                                 //   ⚠️ **不复用 `.officialWarning`**（预警是**信号**，
+                                 //   台风是**连续轨迹 + 预报序列**，语义完全不同）；
+                                 //   也**不复用 `.dailyForecast`**（台风路径是**逐 3~6 小时**
+                                 //   的高频轨迹，不是逐日预报，且含经纬度坐标 ——
+                                 //   那是 `WeatherFieldKey` 域里根本没有的维度）。
+                                 //   与预警同款：领域模型是**列表**且在 `WeatherFieldKey`
+                                 //   域之外 → `requiredFields` 诚实留空。
 }

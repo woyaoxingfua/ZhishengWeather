@@ -53,6 +53,16 @@ enum SourceID: String, CaseIterable, Sendable {
     /// ⚠️ rawValue 用 `nmc-alarm`：与前五个源不同，本源**不是**数值预报，
     /// 而是**预警信号**本身（其余五家都是气象要素）。
     case nmcAlarm = "nmc-alarm"
+    /// 第七源：**台风路径**（中央气象台台风网 `typhoon.nmc.cn`，免 Key、零鉴权）
+    /// —— 仅补**台风路径与官方预报**能力（路径点 / 强度 / 风圈 / BABJ 预报）。
+    ///
+    /// ⚠️ rawValue 用 `nmc-typhoon`：与第六源 `nmc-alarm` **同域名不同服务**
+    /// （`www.nmc.cn/rest/findAlarm` 是预警信号，本源是
+    /// `typhoon.nmc.cn/weatherservice/typhoon/jsons/…` 的台风路径），
+    /// 但二者是**完全不同的数据形态**（一个是预警条目，一个是路径点序列），
+    /// 故**必须**是两个独立 SourceID —— 否则健康账本会把台风故障
+    /// 记到预警源头上（两个源的失败域是独立的）。
+    case nmcTyphoon = "nmc-typhoon"
 }
 
 // MARK: - Codable
