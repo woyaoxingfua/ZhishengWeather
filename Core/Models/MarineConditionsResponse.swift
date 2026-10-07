@@ -85,6 +85,41 @@ struct MarineConditionsResponse: Decodable, Sendable {
     /// `current` 块。marine 端点实测**只有** `current`（无 `hourly`）。
     let current: Current?
 
+    /// `minutely_15` 块（15 分钟粒度）—— **潮汐来源**。
+    ///
+    /// ⚠️ 该块与 `current` **共存于同一次响应**（实测 combined 探针 HTTP 200，
+    ///   顶层同时出现 `current_units/current` 与 `minutely_15_units/minutely_15`），
+    ///   故"marine 实测只有 current"这句话**只适用于不请求潮汐变量时**。
+    ///
+    /// ── 实测形态（2026-10-07 探针，大连 38.9,121.6，`forecast_days=7`,
+    ///    `timeformat=unixtime`）────────────────────────────────────────
+    ///    "minutely_15_units":{"time":"unixtime",
+    ///                      "sea_level_height_msl":"m",
+    ///                      "invert_barometer_height":"m"},
+    ///    "minutely_15":{"time":[1791302400, 1791303300, 1791304200, ...],
+    ///                  "sea_level_height_msl":[-0.54,-0.54,-0.52, ...],
+    ///                  "invert_barometer_height":[-0.10,-0.10,-0.10, ...]}
+    ///
+    ///  · `time` 实测 **672 个 epoch 整数**（7 天 × 96 点/天），步长 **900 秒**；
+    ///  · 两个高度字段实测各 672 点、**零 null**（沿海坐标）；
+    ///  · 单位逐字是 **`m`**（不是 cm、不是 ft）。
+    ///
+    /// ⚠️ **数组长度必须按"各自独立"处理**：`time` 与两个高度数组**不保证同长**
+    ///   （服务端任一字段缺测就会是 `null` 占位）。mapper 里按下标 `guard let`
+    ///   逐点取，**不**做 `zip`（zip 遇不等长会静默截断，那是丢数据）。
+    struct Minutely15: Decodable, Sendable {
+        /// 时刻序列（端点已钉死 `timeformat=unixtime` → epoch 秒）。
+        /// 元素可为 nil（该点缺测）→ **不参与**配对，绝不与错位的值配对。
+        var time: [FlexibleTime?]?
+        /// 海平面高度（m，**含倒压效应**，见 `TideForecast` 语义说明）。
+        var sea_level_height_msl: [Double?]?
+        /// 倒压效应高度（m，气压高时海面被压低 → 负值）。
+        var invert_barometer_height: [Double?]?
+    }
+
+    /// `minutely_15` 块（潮汐）。整键可选：缺失 → nil（ inland / 变量被省略）。
+    let minutely_15: Minutely15?
+
     /// 该响应的 UTC 偏移（**秒**）。
     ///
     /// 存在的唯一理由：让 `ISOTimeStringDecoder` 能正确解释 ISO 形态的时刻

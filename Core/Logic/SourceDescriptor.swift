@@ -154,7 +154,7 @@ enum SourceDirectory {
         SourceDescriptor(id: .marineForecast,
                          displayName: "Open-Meteo 海浪",
                          role: .auxiliary,
-                         capabilities: [.marineWaveConditions],
+                         capabilities: [.marineWaveConditions, .marineTide],
                          // ⚠️ **诚实留空**：浪高 / 浪向 / 周期 / 涌浪**不在**
                          // `WeatherFieldKey` 域内（它们属于 `MarineConditions` 模型），
                          // 塞几个天气字段进来充数只会让 EV-1 判"永远缺字段"。

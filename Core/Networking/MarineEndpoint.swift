@@ -23,7 +23,22 @@
 //    → 这是本文件 `requestEligibility` 存在的**根本原因**。
 //  · ⚠️ **`hourly` 支持、但 `current` 才是我们要的形态**：`current` 单点即够，
 //    浪况是**瞬时**要素（用户要的是"现在浪多高"），逐时序列留给未来图表需求。
-//    本轮**只取 `current`**，不请求 `hourly`（少拉一个数组，响应体更小）。
+//    本轮浪况**只取 `current`**，不请求 `hourly`（少拉一个数组，响应体更小）。
+//
+// ── 潮汐扩展（2026-10-07 实测，同一次请求零额外开销）──────────────────────
+//  · `minutely_15=sea_level_height_msl,invert_barometer_height`
+//    与既有 `current=` **共存于同一次请求**（实测 combined 探针 HTTP 200，
+//    响应体同时含 `current` 与 `minutely_15`），故潮汐是**零成本扩展**。
+//  · 实测样本（大连 38.9,121.6，`timeformat=unixtime`）：
+//    `minutely_15.time` = **672 个 epoch 整数**（= 7 天 × 96 点/天），
+//    `sea_level_height_msl` 与 `invert_barometer_height` 各 168…672 点、**零 null**；
+//    前 24 点天文潮（msl − ibp）= `-0.44, -0.44, -0.42, -0.40, -0.36, -0.32,
+//    -0.26, -0.20, -0.13, -0.06, 0.03, 0.12, 0.21, 0.31, 0.43, 0.54, 0.65,
+//    0.76, 0.88, 0.99, 1.08, 1.16, 1.24, 1.30`（单位 m）。
+//  · ⚠️ **潮汐的 null 分布与浪况逐点一致**（实测，见 `MarineCoverage`）：
+//    沿海有值（大连/青岛/威海/厦门/深圳/长江口）、内陆与"网格吸附到陆地"的
+//    城市全 null（北京/天津/杭州/广州/上海/乌鲁木齐/成都）。故**沿用同一判据**，
+//    不另造第二套"沿海"定义 —— 那必然与既有判据漂移。
 //
 //  ── ⚠️ Open-Meteo 的「静默失败」规则（已实测，与直觉相反）──────────────
 //  · 变量名**在全局词表里存在、但该端点不支持** → **HTTP 200 且整块被静默省略**
@@ -67,6 +82,44 @@ enum MarineEndpoint {
         "swell_wave_period"
     ].joined(separator: ",")
 
+    /// 潮汐字段（`minutely_15` 块，15 分钟粒度，**实测**）。
+    ///
+    /// ═══════════════════════════════════════════════════════════════════
+    /// ⚠️ 变量名**实测**（2026-10-07 真实 curl 探针，经代理，大连 38.9,121.6）：
+    ///   · `sea_level_height_msl` → **HTTP 200**，实测 672 点（`forecast_days=7`
+    ///     × 96 点/天），`hourly_units`/`minutely_15_units` 逐字给出 **`m`**；
+    ///   · `invert_barometer_height` → **HTTP 200**，同块共存，单位同为 `m`。
+    ///
+    /// ⚠️ **两个名字不存在，误写必 400**（实测响应体逐字）：
+    ///   `tide_height` / `sea_surface_height` → **HTTP 400**，
+    ///   `{"error":true,"reason":"Invalid value: Cannot initialize
+    ///   SurfacePressureAndHeightVariable<...> from invalid String value
+    ///   tide_height"}`。故**绝不可**按"望文生义"猜名字。
+    ///
+    /// ⚠️ **为什么取 `minutely_15` 而不是 `hourly`**（两者实测都能取到同一变量名）：
+    ///   潮汐是**周期约 12.4h 的半日潮**（实测大连振幅约 ±1.3m），
+    ///   高低潮**极值时刻**是这张卡的核心信息。`hourly`（24 点/天）定不出
+    ///   比"±1 小时"更细的极值时刻；`minutely_15`（**实测 672 点 = 96 点/天**）
+    ///   可把极值时刻收敛到 **±15 分钟**，且曲线更平滑（实测曲线点数实测见
+    ///   `TideForecast` 文件头）。
+    ///
+    /// ⚠️ **`minutely_15` 不带 `forecast_days` 时实测只回 288 点（3 天）**
+    ///   （与 `hourly` 默认 7 天不同！）。故 `url(latitude:longitude:)` 里
+    ///   **必须显式带 `forecast_days=7`**，否则曲线只有 3 天。
+    ///
+    /// 为什么两个变量都要：`sea_level_height_msl` **本身已包含倒压效应**
+    /// （Open-Meteo 官方文档逐字：*"The sea level height accounts for ocean
+    /// tides, the inverted barometer effect, sea surface height, global mean
+    /// steric variation, and global mean mass volume variation"*）。
+    /// 要拿到**纯天文潮**必须**减去** `invert_barometer_height`
+    /// （文档逐字：*"Invert barometer effect ... is already considered in
+    /// sea_level_height_msl"*）。实测大连倒压项为 `-0.13…-0.01`（即 1–13 cm），
+    /// 量级不大但**方向明确**，不扣就把气象噪声当成潮汐信号展示。
+    static let tideFields = [
+        "sea_level_height_msl",
+        "invert_barometer_height"
+    ].joined(separator: ",")
+
     /// 依据坐标拼装请求 URL；失败返回 nil（由调用方收敛为 `WeatherError.badURL`）。
     ///
     /// - Note: **不**做坐标判据拦截 —— 那是 `requestEligibility` 的职责，
@@ -77,6 +130,13 @@ enum MarineEndpoint {
             URLQueryItem(name: "latitude", value: String(latitude)),
             URLQueryItem(name: "longitude", value: String(longitude)),
             URLQueryItem(name: "current", value: currentFields),
+            // 潮汐走 `minutely_15`（15 分钟粒度）。与 `current` **同一次请求**取回
+            // —— 实测二者共存互不干扰（combined 探针HTTP 200，响应体同时含
+            // `current` 与 `minutely_15` 两块），故**零额外请求**。
+            URLQueryItem(name: "minutely_15", value: tideFields),
+            // ⚠️ `minutely_15` **必须**显式带 forecast_days：实测省略时只回
+            // 288 点（3 天），带 7 才回 672 点（见 tideFields 注释）。
+            URLQueryItem(name: "forecast_days", value: "7"),
             // 跟随坐标时区（与主链路一致）。
             URLQueryItem(name: "timezone", value: "auto"),
             // `current.time` 为 epoch 秒 → 沿用既有 unixtime 解码纪律，
@@ -224,12 +284,25 @@ enum MarineCoverage {
         (minLat: -25.0, maxLat: 25.0, minLon: 150.0, maxLon: 210.0)
     ]
 
-    /// 该坐标**可能**有海浪数据（允许发请求）。
+    ///该坐标**可能**有海浪数据（允许发请求）。
     ///
     /// ⚠️ 返回 true **不保证**真的有数据 —— marine 的网格吸附会使部分沿海城市
     /// （实测上海）落到陆地网格点上而返回 null。**权威判据在响应之后的
     /// `MarineConditions.isEffectivelyEmpty`**，本函数只是**发请求前**的一道
     /// 配额闸门。
+    ///
+    /// ── 潮汐**复用本判据**的依据（2026-10-07 实测，非推断）──────────────
+    /// 逐点探测 `sea_level_height_msl`（大连/青岛/威海/厦门/深圳/长江口外海/
+    /// 上海近海 vs 北京/天津/杭州/广州/上海/成都/乌鲁木齐），结果：
+    /// **有值 / 全 null 的城市与上表浪况的分布逐点一致**：
+    ///   · 有值：大连 (min -1.06 max 1.75)、青岛 (-1.47/1.95)、
+    ///     威海 (-0.58/1.31)、厦门 (-2.32/3.25)、深圳 (-0.26/2.13)、
+    ///     长江口 (31.77,121.62) (-0.99/1.99)、上海近海 (31.23,121.90) (-0.86/1.99)；
+    ///   · 全 null：北京、成都、乌鲁木齐（内陆）、**以及上海/天津/杭州/广州**
+    ///     （这四座是沿海城市，但 marine 网格吸附到陆地网格点 → null，
+    ///      与上方浪况实测结论**完全吻合**，同源同因）。
+    /// 故潮汐**不另造判据**：另造一套必然与本表漂移，且实测证明两者同源。
+    /// 潮汐的"实质无数据"另由 `TideForecast.isEffectivelyEmpty` 兜住。
     ///
     /// - Returns: 落在任一沿海包围盒内 → true。
     static func mayHaveWaveConditions(latitude: Double, longitude: Double) -> Bool {

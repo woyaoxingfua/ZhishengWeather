@@ -76,4 +76,23 @@ enum SnapshotCompleteness {
     static func isEffectivelyEmpty(_ discharge: RiverDischarge) -> Bool {
         !discharge.daily.contains { $0.cubicMetresPerSecond != nil }
     }
+
+    /// 潮汐是否**实质无数据**：序列里没有一个点带天文潮分量。
+    ///
+    /// ⚠️ 判据是「**有没有非 nil 的天文潮分量**」而非「序列是否为空」：
+    ///   实测内陆坐标（北京 39.90,116.41/ 成都 30.57,104.07 / 乌鲁木齐 43.83,87.62）
+    ///   以及上海 / 天津 / 杭州 / 广州，返回的是
+    ///   **HTTP 200 + `minutely_15` 键在+ 长度 672 正常 + 元素全 null**。
+    ///   只判"空数组"会把那种响应当成有效数据，画出一条
+    ///   **"潮高恒为 0 m" 的假平直线** —— 那是在凭空造一片静止海面。
+    ///
+    /// ⚠️ 同 flood 判据的坑：这里也**不能**用"值是否为零"作判据 ——
+    ///   潮高 `0.00 m` 是**合法读数**（天文潮恰好过平均海平面），
+    ///   把"恰好为 0"说成"缺测"是另一种谎报。
+    ///
+    /// - Parameter forecast: 映射后的潮汐领域模型。
+    /// - Returns: 无任何非 nil 天文潮分量 → true。
+    static func isEffectivelyEmpty(_ forecast: TideForecast) -> Bool {
+        !forecast.points.contains { $0.astronomical != nil }
+    }
 }

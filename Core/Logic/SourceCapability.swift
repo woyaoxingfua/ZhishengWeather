@@ -53,4 +53,13 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
                                  //   那是 `WeatherFieldKey` 域里根本没有的维度）。
                                  //   与预警同款：领域模型是**列表**且在 `WeatherFieldKey`
                                  //   域之外 → `requiredFields` 诚实留空。
+    case marineTide             // 潮汐（`sea_level_height_msl`，逐 15 分钟）← 第四源 marine。
+                                 //   ⚠️ **不复用 `.hourlyForecast`**（那隐含温度/降水/风量纲，
+                                 //   潮高是**米**、且是相对全球平均海平面的**水位**，
+                                 //   复用即虚报能力）。
+                                 //   也**不复用 `.marineWaveConditions`**：浪是**瞬时**标量、
+                                 //   潮是**逐时序列**且基准面完全不同（一个是波高，一个是水位）。
+                                 //   单列的第三个理由：潮汐有独立的**语义边界**
+                                 //   （数值含倒压效应、基准面为全球平均海平面），
+                                 //   必须能被单独署名 —— 见 `TideForecast` 文件头。
 }

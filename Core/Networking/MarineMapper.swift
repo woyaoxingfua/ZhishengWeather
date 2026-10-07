@@ -61,7 +61,83 @@ enum MarineMapper {
         )
     }
 
+    // MARK: - 潮汐（`minutely_15` 块）
+
+    /// 映射潮汐序列（**逐点按类型解析**，单点失败不拖垮整批）。
+    ///
+    /// ⚠️ **按下标配对，绝不 `zip`**（实测依据）：`time` / `sea_level_height_msl` /
+    ///   `invert_barometer_height` 三者**不保证同长** —— 服务端任一字段缺测就会
+    ///   用 `null` 占位，而 `null` 占位**仍然占一个数组下标**。
+    ///   `zip` 遇不等长会**静默截断到最短那个**（把后面的点悄悄丢掉且无报错），
+    ///   那正是"编造/丢数据"。故逐个下标 `guard let` 取，缺则该点跳过。
+    ///
+    /// ⚠️ **天文潮分量 = 两个被减项都有值时才计算**：
+    ///   任一缺 → 该点 `astronomical = nil`（曲线断开），
+    ///   绝不输出"只扣了一半倒压效应"的数 —— 那会让气象噪声混进潮汐曲线。
+    ///
+    /// - Parameters:
+    ///   - block: `minutely_15` 块（可能为 nil = 整块被静默省略）。
+    ///   - utcOffsetSeconds: 该响应的偏移（ISO 形态时刻的解释依据）。
+    /// - Returns: 潮汐领域模型；块缺失 → `TideForecast.empty`。
+    static func mapTide(_ block: MarineConditionsResponse.Minutely15?,
+                        utcOffsetSeconds: Int?) -> TideForecast {
+        guard let block,
+              let times = block.time,
+              let mslSeries = block.sea_level_height_msl else {
+            return .empty
+        }
+        let ibpSeries = block.invert_barometer_height ?? []
+
+        var points: [TidePoint] = []
+        points.reserveCapacity(times.count)
+
+        for (index, rawTime) in times.enumerated() {
+            // 时刻缺失 → 该点无法定位，丢弃（保留它只会造出一个"无时间的点"）。
+            guard let time = absoluteDate(from: rawTime, utcOffsetSeconds: utcOffsetSeconds) else {
+                continue
+            }
+            // 下标越界说明两个数组长度不一致（服务端形态异常）→ 停止，
+            // 绝不"用最后一个值补齐"（那是编造）。
+            guard index < mslSeries.count else { break }
+
+            let msl = finite(mslSeries[index])
+            let ibp = index < ibpSeries.count ? finite(ibpSeries[index]) : nil
+
+            // 两项都有值才做差；否则天文潮分量为 nil（缺口，不补0）。
+            var astronomical: Double?
+            if let mslValue = msl, let ibpValue = ibp {
+                // ⚠️ **相减后再判一次有限性**：两项各自有限**不代表**差值有限
+                //   （实测可构造：msl = -1.797e308、ibp = +1.797e308 → 差值 -inf）。
+                //   那个 -inf 会一路画到 UI，把整张曲线顶出画布。
+                let difference = mslValue - ibpValue
+                astronomical = difference.isFinite ? difference : nil
+            }
+
+            points.append(TidePoint(time: time,
+                                   astronomical: astronomical,
+                                   seaLevelMSL: msl,
+                                   invertBarometer: ibp))
+        }
+
+        // 按时刻升序：服务端实测本已升序，但**不假设**它永远升序
+        // （排序错了会让"未来 24 小时窗"截出错误区间）。
+        points.sort { $0.time < $1.time }
+        return TideForecast(points: points, totalPoints: times.count)
+    }
+
     // MARK: - Private
+
+    /// 潮汐净化：nil 透传；非有限值 → nil。
+    ///
+    /// ⚠️ **潮高允许为负、且 `0` 是合法读数**，故这里**只**挡非有限值
+    /// （NaN / ±inf —— 那是服务端异常，不是水位）。
+    /// 绝不能复用浪况那套 `nonNegative`（它把负值判为非法）：
+    /// 实测大连天文潮分量范围 **-0.53…+1.40 m** —— **负值是常态**
+    /// （半日潮每天两次越过平均海平面），当成非法值会把半张曲线删掉。
+    private static func finite(_ raw: Double?) -> Double? {
+        guard let value = raw, value.isFinite else { return nil }
+        return value
+    }
 
     /// 非负净化：nil 透传；负值 / 非有限值 → nil。
     ///

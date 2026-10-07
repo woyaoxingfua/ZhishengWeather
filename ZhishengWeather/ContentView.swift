@@ -416,6 +416,22 @@ struct ContentView: View {
                 // 本轮：空气链路**取数失败**时如实说明「该链路失败」，不再静默消失。
                 noticeRow("空气质量暂不可用：\(message)")
             }
+            // 海洋第四源 · 潮汐卡（`sea_level_height_msl` 15 分钟序列）。
+            // ⚠️ **内陆城市整卡不渲染**：`displayedTide` 对内陆坐标返回 nil
+            //   （判据不通过 → 不联网；即便放行，实测服务端也回**全 null**
+            //   → `isEffectivelyEmpty` → nil），
+            //   故此处**不是**渲染"暂无潮汐"——那会让内陆用户以为数据缺失。
+            // ⚠️ 窗内有效点不足时`TideCard` 自身返回 `EmptyView`（不留空槽）。
+            // ⚠️ 曲线窗**从"现在"起算**（注入 Date()）：`TideForecast.pointsInNext24Hours`
+            //   按注入时刻截取，Core 层禁内部取时钟，故 now 由视图注入。
+            if let tide = viewModel.displayedTide {
+                TideCard(points: tide.pointsInNext24Hours(now: Date()),
+                         timeZone: viewModel.selectedTimeZone)
+            } else if case .failed(let message) = viewModel.marineState {
+                // 海洋链路**真失败**时如实说明（与空气链路同款可见性纪律）；
+                // 内陆城市走不到这里 —— 那是"正常无此数据"，不是故障，不提示。
+                noticeRow("潮汐暂不可用：\(message)")
+            }
         case .hourly:
             hourlySection(snapshot: snapshot)
         case .daily:

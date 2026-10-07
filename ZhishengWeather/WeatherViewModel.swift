@@ -143,6 +143,34 @@ final class WeatherViewModel {
     /// 绝不反噬天气刷新（与雨伞提醒副链路同款纪律）。
     private let activityManager: WeatherActivityManager
 
+    // MARK: - 海洋第四源（海浪 + 潮汐，一次请求两样）
+
+    /// 海洋链路服务（`marine-api.open-meteo.com`，免 Key、独立子域名）。
+    private let marineService: MarineProviding
+
+    /// 潮汐领域模型（**仅存于 VM**，不进 `WeatherSnapshot`/共享容器 ——
+    /// 与 `AirQuality`/`EnsembleForecast` 同纪律，Widget 载荷契约零改动）。
+    /// nil = 未加载/ 取数失败 / 该城市无潮汐数据。
+    private(set) var tide: TideForecast? = nil
+
+    /// 海洋链路的**独立状态**（同 `airState`：失败可见，但不触碰主 `state`）。
+    private(set) var marineState: SourceState = .idle
+
+    /// `tide` 归属的城市 id（跨城串号守卫，同 `ensembleCityID` 纪律）。
+    private var tideCityID: String? = nil
+
+    /// 仅当潮汐结果归属当前选中城市时返回（防切城后旧城潮汐串号）。
+    ///
+    /// ⚠️ 这里**同时**是"内陆城市不显示潮汐卡"的**唯一**闸门：
+    /// 内陆坐标由 `MarineEndpoint.requestEligibility` 判据**不联网**、
+    /// 服务端即便放行也回**全 null** → `TideForecast.isEffectivelyEmpty == true`
+    /// → 本处返回 nil → `TideCard` 根本不渲染（**不是**渲染"暂无潮汐"）。
+    var displayedTide: TideForecast? {
+        guard let id = directory.selectedID, id == tideCityID else { return nil }
+        guard let tide, !tide.isEffectivelyEmpty else { return nil }
+        return tide
+    }
+
     /// 仅当集合结果归属当前选中城市时返回（防切城后旧城集合串号，P1-A 纪律平移）。
     var displayedEnsemble: EnsembleForecast? {
         guard let id = directory.selectedID, id == ensembleCityID else { return nil }
@@ -203,6 +231,7 @@ final class WeatherViewModel {
          ensembleService: EnsembleProviding = EnsembleService(),
          alarmService: NmcAlarmProviding = NmcAlarmService(),
          alarmDetailService: WeatherCnAlarmProviding = WeatherCnAlarmService(),
+         marineService: MarineProviding = MarineService(),
          reminderScheduler: UmbrellaReminderScheduler? = nil,
          activityManager: WeatherActivityManager? = nil) {
         self.service = service
@@ -210,6 +239,9 @@ final class WeatherViewModel {
         self.locationProvider = locationProvider ?? LocationProvider()
         self.airService = airService
         self.ensembleService = ensembleService
+        // ⚠️ `MarineService` 是普通 actor（非 @MainActor 隔离 init），
+        // 故可作 default 参数直接求值（同 `airService` / `ensembleService`）。
+        self.marineService = marineService
         // ⚠️ `NmcAlarmService` 是普通 actor（非 @MainActor 隔离 init），
         // 故可作 default 参数直接求值（同 `airService` / `ensembleService`）。
         self.alarmService = alarmService
@@ -351,6 +383,9 @@ final class WeatherViewModel {
             // 官方预警第六链路（独立 Task；失败绝不反噬天气，且失败在屏上可见为 .stale）。
             let alarmCity = selectedCity
             Task { await loadOfficialWarnings(for: alarmCity) }
+            // 海洋第四源（海浪 + 潮汐，一次请求两样；内陆城市判据不通过则不联网）。
+            let marineCity = selectedCity
+            Task { await loadMarine(for: marineCity) }
             // 雨伞提醒副链路（本地通知；纯副作用，绝不触碰 state，失败静默降级）。
             scheduleUmbrellaReminderIfNeeded(for: snapshot, city: selectedCity)
             // 过期丢弃（P1-A）：刷新期间用户若切换城市，当前结果已非选中城市，丢弃不应用，
@@ -513,6 +548,9 @@ final class WeatherViewModel {
             // 官方预警第六链路（独立 Task；同 loadAir 的失败隔离与跨城守卫）。
             let alarmCity = city
             Task { await loadOfficialWarnings(for: alarmCity) }
+            // 海洋第四源（独立 Task；同 loadAir 的失败隔离与跨城守卫）。
+            let marineCity = city
+            Task { await loadMarine(for: marineCity) }
             // 过期丢弃（P1-A）：取数期间用户若又切换城市，仅当选中项仍是本次目标城市才应用，
             // 否则丢弃，交由对应的 select/addAndSelect/remove 取数流程修正界面。
             guard directory.selectedID == city.id else { return }
@@ -601,6 +639,38 @@ final class WeatherViewModel {
             airQuality = nil
             // 本轮：失败在屏上**可见**（该链路自己的降级位），文案取自 FaultDomain 单一真源。
             airState = .failed(Self.message(for: error))
+        }
+    }
+
+    // MARK: - 海洋第四源（海浪 + 潮汐，一次请求两样）
+
+    /// 拉取海洋要素（独立 Task，R5 失败隔离，形状照 `loadAir`）。
+    ///
+    /// ⚠️ **绝不触碰 `state`**：海洋链路挂掉不影响天气主屏。
+    /// ⚠️ **一次请求两样**：海浪（`current`）与潮汐（`minutely_15`）在**同一响应体**里
+    ///   （实测），故**不**开第二条链路 —— 那会多烧一次配额。
+    /// ⚠️ **内陆城市不联网**：`MarineEndpoint.requestEligibility` 判据不通过时
+    ///   service 直接回空（不抛错），`tide` 落`TideForecast.empty`
+    ///   → `displayedTide` 返回 nil → **潮汐卡根本不渲染**
+    ///   （**不是**渲染"暂无潮汐"，那会让内陆用户以为数据缺失）。
+    ///
+    /// - Parameter city: 本次取数目标城市。
+    private func loadMarine(for city: City) async {
+        do {
+            let result = try await marineService.fetch(latitude: city.latitude,
+                                                        longitude: city.longitude)
+            // 跨城守卫：丢弃滞后于切城的过期结果（P1-A 纪律平移，同 loadAir）。
+            guard directory.selectedID == city.id else { return }
+            // ⚠️ 海浪（`result.wave`）本轮**不接UI**：既有 marine 链路从未接进主屏
+            //   （实测全仓无`WaveCard`），本轮只把潮汐落地。仍保留 wave 槽位，
+            //   以免将来接海浪卡时再改一次 service 签名。
+            tide = result.tide
+            marineState = .loaded
+            tideCityID = city.id
+        } catch {
+            // 海洋失败 = 无潮汐卡，天气 state 不动（R5隔离）。
+            tide = nil
+            marineState = .failed(Self.message(for: error))
         }
     }
 

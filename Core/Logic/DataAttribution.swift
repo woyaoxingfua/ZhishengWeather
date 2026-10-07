@@ -209,6 +209,7 @@ enum DataAttribution {
         case .marineWaveConditions: return "海浪要素（浪高/浪向/周期）"
         case .riverDischarge: return "河道流量"
         case .typhoonTrack: return "台风路径与官方预报（含风圈）"
+        case .marineTide: return "潮汐（逐15 分钟潮高，含高低潮极值）"
         @unknown default: return "（未命名能力）"
         }
     }

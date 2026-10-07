@@ -556,20 +556,26 @@ final class MarineFloodSourcesTests: XCTestCase {
             SourceDirectory.descriptor(for: .floodForecast),
             "flood 源必须登记在 SourceDirectory.all")
 
-        for (descriptor, expectedCapability) in [
-            (marineDescriptor, SourceCapability.marineWaveConditions),
-            (floodDescriptor, SourceCapability.riverDischarge)
+        // ⚠️ 每个源期望的能力集**逐源不同**，故带上完整期望集合而不是单个能力：
+        //   marine 自接潮汐后是**两项**（海浪 + 潮汐，两者来自同一次 marine 响应），
+        //   flood 仍只有河道流量一项。
+        // 断言"恰好等于期望集合"而不是 `contains` —— 前者能抓住**虚报**，
+        // 后者抓不住（多声明一项照样绿）。
+        for (descriptor, expectedCapabilities) in [
+            (marineDescriptor, Set([SourceCapability.marineWaveConditions,
+                                    .marineTide])),
+            (floodDescriptor, Set([SourceCapability.riverDischarge]))
         ] {
             XCTAssertEqual(descriptor.role, .auxiliary, "\(descriptor.id.rawValue) 是辅助源")
             XCTAssertFalse(descriptor.needsCredential,
                            "\(descriptor.id.rawValue) 免 Key，绝不标成需要凭据")
-            XCTAssertTrue(descriptor.capabilities.contains(expectedCapability))
 
-            // ⚠️ 能力不得虚报：只声明自己真正提供的那一项。
+            // ⚠️ 能力不得虚报：只声明自己真正提供的那几项。
             // 显式写 Set([...]) 而不是数组字面量 —— 避免类型推断歧义
             //（Set 也是 ExpressibleByArrayLiteral，两种写法都能过但意图不清）。
-            XCTAssertEqual(descriptor.capabilities, Set([expectedCapability]),
-                           "\(descriptor.id.rawValue) 只应声明一项能力")
+            XCTAssertEqual(descriptor.capabilities, expectedCapabilities,
+                           "\(descriptor.id.rawValue) 的能力集与实际提供的不符"
+                           + "（多了= 虚报能力，少了 = 署名页漏项）")
 
             // ⚠️ requiredFields 必须**诚实留空**：海浪 / 流量字段不在
             // WeatherFieldKey 域内，塞假字段会让 EV-1 判"永远缺字段"。

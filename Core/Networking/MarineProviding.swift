@@ -36,7 +36,13 @@ protocol MarineProviding: Sendable {
     ///
     /// - Note: 内陆坐标（判据不通过）**不**抛错，返回
     ///   `isEffectivelyEmpty == true` 的空模型（见类型注释）。
-    func fetch(latitude: Double, longitude: Double) async throws -> MarineConditions
+    /// - Returns: 海浪领域模型 + **同一次请求**顺带回的潮汐序列。
+    ///
+    /// ⚠️ 潮汐与浪况**共用一次 HTTP 请求**（实测：同一响应体里
+    ///   `current` 与 `minutely_15` 两块共存），故它挂在返回值里而**不是**
+    ///   另开一条链路 —— 另开就是第二次请求、多一次配额，违背"零成本扩展"。
+    func fetch(latitude: Double,
+               longitude: Double) async throws -> (wave: MarineConditions, tide: TideForecast)
 }
 
 /// 基于 Open-Meteo Marine API 的取数实现。
@@ -51,13 +57,17 @@ actor MarineService: MarineProviding {
     }
 
     /// 取回海浪要素；所有**真故障**路径收敛为 `WeatherError`。
-    func fetch(latitude: Double, longitude: Double) async throws -> MarineConditions {
+    func fetch(latitude: Double,
+               longitude: Double) async throws -> (wave: MarineConditions, tide: TideForecast) {
         // 坐标判据：**不联网**地挡掉内陆坐标（省配额，且不给用户空卡片）。
         // 判据刻意保守 —— 放行不代表有数据，权威判据在响应后的
-        // `MarineConditions.isEffectivelyEmpty`（见 MarineEndpoint 类型注释）。
+        // `MarineConditions.isEffectivelyEmpty` / `TideForecast.isEffectivelyEmpty`
+        // （见 MarineEndpoint 类型注释）。
+        // ⚠️ 实测依据：潮汐的 null 分布与浪况**逐点一致**（沿海有值、内陆全 null），
+        //   故**同一个判据**同时管两者，不另造第二套"沿海"定义。
         guard MarineEndpoint.requestEligibility(latitude: latitude,
                                                 longitude: longitude) else {
-            return .empty
+            return (.empty, .empty)
         }
 
         guard let url = MarineEndpoint.url(latitude: latitude, longitude: longitude) else {
@@ -85,6 +95,11 @@ actor MarineService: MarineProviding {
         let dto = try ResponseDecoding.decode(MarineConditionsResponse.self, from: data)
 
         // mapper 逐字段判非空：全 null → empty（不冒充"浪高 0"）。
-        return MarineMapper.map(dto)
+        // ⚠️ 两个映射**各自独立**：浪况块缺失不该连累潮汐块，反之亦然
+        //（实测内陆城市是**两块同时**全 null，但那是服务端行为，不是可依赖的契约）。
+        let wave = MarineMapper.map(dto)
+        let tide = MarineMapper.mapTide(dto.minutely_15,
+                                        utcOffsetSeconds: dto.utc_offset_seconds)
+        return (wave, tide)
     }
 }
