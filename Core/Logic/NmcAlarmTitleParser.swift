@@ -333,10 +333,13 @@ enum NmcAlarmTitleParser {
         // 非直辖市：在残余里找**最早**出现的地级后缀，取到该后缀末尾为市，
         // 其后为区县。（实测 161/161 正确 —— 「最早」而非「最后」是关键：
         // `泉州市石狮市` 有两个「市」，取最早才得到市=`泉州市`、区=`石狮市`。）
+        // ⚠️ `earliestSuffixEnd` 返回的是 **`String.Index`**（不是偏移量Int）——
+        // `String.Index` 可直接用 `>` 比较、可直接切片，**但不能当整数用**
+        // （`index(_:offsetBy:)` 要求它 conform BinaryInteger，不conform）。
         guard let cityEnd = earliestSuffixEnd(in: rest, suffixes: prefectureSuffixes),
-              cityEnd > 0 else { return nil }
+              cityEnd > rest.startIndex else { return nil }
         let city = String(rest[rest.startIndex..<cityEnd])
-        var county = String(rest[rest.index(rest.startIndex, offsetBy: cityEnd)...])
+        var county = String(rest[cityEnd...])
 
         // 脏数据 ②：区县段以重复的省名开头 → 剥掉那一份。
         county = strippingDuplicatedProvinceName(county)
