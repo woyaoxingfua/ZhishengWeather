@@ -99,7 +99,16 @@ enum ClimateProfileMapper {
     /// **范围 guard** + **回读自证**（后者一次性覆盖「范围合法但日历上不存在」，
     /// 只查 `1...31` 拦不住，而逐日查 `range(of:.day,in:.month)` 又需先造日期（自举））。
     /// ⚠️ 依据 = 仓库既有实测记录（`ISOTimeStringDecoderTests` CI run12 /
-    /// `NmcIssueTimeDecoder` CI 失败值）+ Python 复刻，**未在 Swift 上实跑**。
+    /// `NmcIssueTimeDecoder` CI 失败值）+ Python 复算**验证闰年规则本身**，
+    /// **未在 Swift 上实跑**。
+    /// 📌 依据修正（2026-10-07）：本注释此前称「Python 复刻确认归一化规则同构」
+    /// ——**不成立**。实测 Python `datetime` 对越界日一律抛 `ValueError`、从不归一化，
+    /// 与 `Calendar.date(from:)` **并不同构**。归一化一侧只能依据 Swift 实测记录；
+    /// Python 仅能证明「拒绝」这一侧可实现、以及 2000 接受 / 1900 拒绝的闰年规则。
+    ///
+    /// ✅ 本函数对**真实闰日**（2024-02-29 / 2000-02-29）是**接受**的，
+    /// 无需任何放宽：范围 guard 放行 2 与 29，且 2 月 29 日在闰年经`Calendar`
+    /// 构造后回读分量不变 ⇒ 通过。已被 `ClimateProfileMapperTests` 固化。
     private static func date(from dateString: String, calendar: Calendar) -> Date? {
         let parts = dateString.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
