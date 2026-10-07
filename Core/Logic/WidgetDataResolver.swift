@@ -60,6 +60,8 @@ enum WidgetDataResolver {
     ///   - weather: 取数器（生产传短超时 `WeatherService`；测试传 Fake）。
     ///   - staleThreshold: 陈旧阈值（秒）；默认 `StalePolicy.defaultThreshold`。
     ///   - fetchBudget: L1 硬上限（秒）；默认 `fetchBudget`（测试可注入极小值验证超时收敛）。
+    ///   - seq: `WidgetTrace` 的关联序号（可诊断性用；默认 0 = 不打日志，
+    ///     单测直接调本函数时无需关心日志）。
     /// - Returns: 收敛值；**永不抛错**（失败一律成为带 `emptyReason` 的返回值）。
     static func resolve(cityOutcome: WidgetCityOutcome,
                         containerAvailable: Bool,
@@ -68,7 +70,8 @@ enum WidgetDataResolver {
                         allowNetwork: Bool,
                         weather: WeatherProviding,
                         staleThreshold: TimeInterval = StalePolicy.defaultThreshold,
-                        fetchBudget: TimeInterval = WidgetDataResolver.fetchBudget) async -> WidgetEntryResolution {
+                        fetchBudget: TimeInterval = WidgetDataResolver.fetchBudget,
+                        seq: Int = 0) async -> WidgetEntryResolution {
 
         // ── L0：共享容器（本地、快路径、零配额）──────────────────────────────
         // 复用 WidgetPayloadResolver（已被单测覆盖的纯函数），保证「容器不可用 /
@@ -118,7 +121,13 @@ enum WidgetDataResolver {
         }
 
         // ── L1：自力取数（原样复用 WeatherService；本函数内唯一一次请求）──────
-        let outcome = await fetchWithBudget(weather: weather, city: city, budget: fetchBudget)
+        // 可诊断性：请求前一行（含**脱敏后**的地址），与`WeatherService` 内部
+        // 打出的状态码行配对 —— 这两行合起来才能回答「发了什么请求、服务器答了什么」。
+        WidgetTrace.fetchStart(seq: seq, url: OpenMeteoEndpoint.url(latitude: city.latitude,
+                                                                    longitude: city.longitude))
+        let outcome = await fetchWithBudget(weather: weather, city: city, budget: fetchBudget, seq: seq)
+        WidgetTrace.fetchOutcome(seq: seq,
+                                 error: outcome.failureError)
         switch outcome {
         case .snapshot(var snapshot):
             // 城市名覆盖（对齐 WeatherViewModel 的 R-3 事实更正）：服务层只知坐标，
@@ -184,10 +193,12 @@ enum WidgetDataResolver {
     ///   - weather: 取数器（Sendable）。
     ///   - city: 目标城市（坐标来源）。
     ///   - budget: 硬上限（秒）。
+    ///   - seq: `WidgetTrace` 关联序号（用于在超时分支也打一条日志）。
     /// - Returns: 首个子任务结果；超时 / 任务组异常 → `.failure(.timeout)`。
     private static func fetchWithBudget(weather: WeatherProviding,
                                         city: City,
-                                        budget: TimeInterval) async -> FetchRaceResult {
+                                        budget: TimeInterval,
+                                        seq: Int) async -> FetchRaceResult {
         let nanoseconds = UInt64(max(budget, 0) * 1_000_000_000)
         return await withTaskGroup(of: FetchRaceResult.self,
                                    returning: FetchRaceResult.self) { group in
@@ -221,5 +232,11 @@ enum WidgetDataResolver {
         case snapshot(WeatherSnapshot)
         /// 取数失败（含硬上限超时 / 任务组异常）。
         case failure(WeatherError)
+
+        /// 失败原因；成功为 nil（供日志取token）。
+        var failureError: WeatherError? {
+            if case .failure(let error) = self { return error }
+            return nil
+        }
     }
 }

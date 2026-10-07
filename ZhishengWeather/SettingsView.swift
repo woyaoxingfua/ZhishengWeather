@@ -131,6 +131,8 @@ struct SettingsView: View {
     @State private var liveActivityLastResult: AppDiagnosticEntry?
     /// 小组件时间线重载的最近一次结果（**持久**记录）。
     @State private var widgetLastResult: AppDiagnosticEntry?
+    /// 小组件系统登记探针的最近一次结果（**持久**记录）。
+    @State private var widgetProbeResult: AppDiagnosticEntry?
 
     /// 本安装换图标是否因 LaunchServices 拒绝（-54）而不可用（判据单一真源在
     /// `AppIconSwitcher.isUnavailableDueToLaunchServicesRejection()`；本页只读取）。
@@ -314,7 +316,19 @@ struct SettingsView: View {
                 if let widgetLastResult {
                     diagnosticResultRow(widgetLastResult)
                 }
+                // 可诊断性：问系统「你到底登记了几个小组件实例」。
+                // 这是**主 App 能自己观察到**的事实，与Console 里的 timeline 日志
+                // 互补（后者在小组件进程内，主 App 读不到）。
+                Button("查询系统登记的小组件") {
+                    probeWidgetSystemRegistration()
+                }
+                if let widgetProbeResult {
+                    diagnosticResultRow(widgetProbeResult)
+                }
                 Text(sharedContainerAvailable ? Self.widgetContainerOKHint : Self.widgetManualCityHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                Text(Self.widgetTraceHint)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -667,6 +681,20 @@ struct SettingsView: View {
         widgetLastResult = entry
     }
 
+    // MARK: - 小组件系统登记探针
+
+    /// 问系统「当前登记了几个小组件实例」，结果同时落盘 + 立即显示。
+    ///
+    /// ⚠️ 它**不能**回答「系统调没调 `timeline`」—— 那发生在小组件扩展进程里，
+    /// 主 App 读不到（沙盒边界，与 App Group 是否可用无关）。那一半要看 Console，
+    /// 见 `widgetTraceHint`。
+    private func probeWidgetSystemRegistration() {
+        Task { @MainActor in
+            await AppDiagnosticsStore.probeWidgetSystemRegistration(store: diagnostics)
+            widgetProbeResult = diagnostics.latest(for: .widgetSystemProbe)
+        }
+    }
+
     // MARK: - 应用图标切换
 
     /// 切换应用图标（副作用出口走注入的 AppIconSwitcher）。
@@ -825,6 +853,22 @@ struct SettingsView: View {
 
     /// 诊断记录里「时间线重载」的操作对象名（用方法名，便于一眼对上代码）。
     private static let widgetReloadTargetName: String = "reloadAllTimelines"
+
+    /// 提示「另一半可观测性在Console 里」，并给出确切命令。
+    ///
+    /// ⚠️ 为什么这段话必须在 App 里出现（而不是只写在 docs 里）：
+    /// 用户在真机上看到「小组件没数据」时，**手边没有 Mac**，
+    /// 而「先把包发给我看看日志」这类反馈拿不到任何判定信息。
+    /// 故这里明确区分两个问题分别去哪里查，避免用户把两者混为一谈：
+    ///   · 「系统登记了几个实例」→ 上面那个按钮（App 内，本页）；
+    ///   · 「系统调没调timeline / 取数成没成功」→ Mac + Console（小组件进程内）。
+    private static let widgetTraceHint: String =
+        """
+        「系统调没调小组件」这另一半只能连Mac 看：\
+        终端跑 log stream --predicate 'subsystem == "com.zhisheng.weather.core" \
+        AND category == "widget"'，\
+        看有没有 ENTER/EXIT 行。详见 docs/handover/DEVICE-VERIFICATION.md 第 10 节。
+        """
 
     /// 小组件自查：共享容器**可用**时的说明。
     private static let widgetContainerOKHint: String =

@@ -72,16 +72,35 @@ struct WeatherProvider: AppIntentTimelineProvider {
 
     /// 占位条目（系统首次渲染 / 画廊预览）；示例数据路径不变。
     func placeholder(in context: Context) -> WeatherEntry {
-        WeatherEntry(date: Date(), resolution: .placeholder)
+        // 可诊断性：占位也打一行。
+        // 判读价值：若Console 里**只有** placeholder 而**没有** timeline，
+        // 说明系统从未真正拉过时间线（用户看到的是画廊/占位渲染），
+        // 这与「拉了时间线但取数失败」是两回事 —— 没有这一行就分不出来。
+        //
+        // ⚠️ 此处**打不出城市配置**：`placeholder(in:)` 的签名里**没有** Intent
+        //（对比 `timeline(for:in:)` 的第一个参数），系统此时还没把用户配置给我们。
+        // 故本行只带 family / preview，mode 恒为 "none"。
+        WidgetTrace.placeholder(family: Self.familyToken(context.family),
+                                isPreview: context.isPreview)
+        return WeatherEntry(date: Date(), resolution: .placeholder)
     }
 
     /// 快速快照（画廊 / 瞬时展示）：**只走 L0，不联网**（避免昂贵 IO 与配额）。
     func snapshot(for configuration: WidgetCitySelectionIntent,
                   in context: Context) async -> WeatherEntry {
         let now = Date()
-        let resolution = await makeResolution(configuration: configuration,
-                                              now: now,
-                                              allowNetwork: false)
+        let seq = WidgetTrace.enter(call: "snapshot",
+                                    family: Self.familyToken(context.family),
+                                    isPreview: context.isPreview,
+                                    mode: WidgetCityResolver.mode(forEntityID: configuration.city.id))
+        // `withSeq`：让 seq 顺着调用链传播（`WeatherService` 靠它给状态码行编号）。
+        let resolution = await WidgetTrace.withSeq(seq) {
+            await makeResolution(configuration: configuration,
+                                 now: now,
+                                 allowNetwork: false,
+                                 seq: seq)
+        }
+        WidgetTrace.exit(seq: seq, call: "snapshot", resolution: resolution)
         return WeatherEntry(date: now,
                             resolution: resolution,
                             backgroundStyle: configuration.backgroundStyle)
@@ -95,10 +114,23 @@ struct WeatherProvider: AppIntentTimelineProvider {
     func timeline(for configuration: WidgetCitySelectionIntent,
                   in context: Context) async -> Timeline<WeatherEntry> {
         let now = Date()
+        // ── 可诊断性：ENTER 行 ────────────────────────────────────────────
+        // 「系统到底有没有调我们」的唯一判据。真机上「小组件没数据」时，
+        // 先看有没有这一行：没有 = 系统侧/AppIntents 侧问题，不是我们的代码。
+        let seq = WidgetTrace.enter(call: "timeline",
+                                    family: Self.familyToken(context.family),
+                                    isPreview: context.isPreview,
+                                    mode: WidgetCityResolver.mode(forEntityID: configuration.city.id))
         // 唯一的阶梯调用点：一次 timeline = 至多一次网络请求。
-        let resolution = await makeResolution(configuration: configuration,
-                                              now: now,
-                                              allowNetwork: true)
+        // `withSeq`：让 seq 顺着调用链传播（`WeatherService` 靠它给状态码行编号）。
+        let resolution = await WidgetTrace.withSeq(seq) {
+            await makeResolution(configuration: configuration,
+                                 now: now,
+                                 allowNetwork: true,
+                                 seq: seq)
+        }
+        // ── 可诊断性：EXIT 行（与 ENTER 成对）────────────────────────────
+        WidgetTrace.exit(seq: seq, call: "timeline", resolution: resolution)
 
         // 45 分钟后请求下一次刷新；主 App 每次成功取数后也会 reloadAllTimelines() 提前刷新。
         let refreshDate = now.addingTimeInterval(45 * 60)
@@ -142,10 +174,12 @@ struct WeatherProvider: AppIntentTimelineProvider {
     ///   - configuration: 系统按实例持久化的配置 Intent。
     ///   - now: 当前时刻（注入给 Core 的新鲜度判定，Core 禁内部 `Date()`）。
     ///   - allowNetwork: 是否允许 L1 自力取数与定位（`snapshot` 传 false）。
+    ///   - seq: `WidgetTrace.enter` 返回的关联序号（贯穿本轮各层日志）。
     /// - Returns: 城市 + 载荷 + 状态 + 来源 + 空因的收敛值。
     private func makeResolution(configuration: WidgetCitySelectionIntent,
                                 now: Date,
-                                allowNetwork: Bool) async -> WidgetEntryResolution {
+                                allowNetwork: Bool,
+                                seq: Int) async -> WidgetEntryResolution {
         let container = WidgetContainerSnapshot(
             cities: WidgetCityCatalog.rawCities(from: store.loadCities()),
             selectedID: store.selectedCityID,
@@ -167,12 +201,35 @@ struct WeatherProvider: AppIntentTimelineProvider {
                                                                  container: container,
                                                                  builtIn: WidgetBuiltInCities.cities,
                                                                  location: locationSource)
+        // 城市阶梯产出（配置读回是否成功、解析出哪个城市 id）。
+        WidgetTrace.city(seq: seq,
+                         outcome: cityOutcome,
+                         cityID: cityOutcome.city?.id)
 
         return await WidgetDataResolver.resolve(cityOutcome: cityOutcome,
                                                 containerAvailable: container.containerAvailable,
                                                 loadResult: store.loadResult(),
                                                 now: now,
                                                 allowNetwork: allowNetwork,
-                                                weather: weather)
+                                                weather: weather,
+                                                seq: seq)
+    }
+
+    /// `WidgetFamily` → 日志用的稳定短串。
+    ///
+    /// ⚠️ 不直接打 `family` 的 `description`：那是 Apple 的 `CaseIterable`
+    /// 合成描述，**格式不保证跨版本稳定**，而判读表要按字面查。
+    /// 穷尽 switch（不留 `default`）：新增 family 时编译器会指出漏改处。
+    private static func familyToken(_ family: WidgetFamily) -> String {
+        switch family {
+        case .systemSmall: return "small"
+        case .systemMedium: return "medium"
+        case .systemLarge: return "large"
+        case .systemExtraLarge: return "xl"
+        case .accessoryCircular: return "accCircular"
+        case .accessoryRectangular: return "accRect"
+        case .accessoryInline: return "accInline"
+        @unknown default: return "unknown"
+        }
     }
 }

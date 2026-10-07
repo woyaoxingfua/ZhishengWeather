@@ -49,6 +49,12 @@ actor WeatherService: WeatherProviding {
         guard let http = response as? HTTPURLResponse else {
             throw WeatherError.network("非 HTTP 响应")
         }
+        // 可诊断性：**状态码与字节数**在此处才拿得到，是「取数失败」最重要的一条
+        // 判据（403/429 与 5xx 与「非 HTTP 响应」的处置完全不同）。
+        // ⚠️ 只打状态码与字节数，**不打 body**（body 可能含上游的账户/配额信息）。
+        WidgetTrace.fetchResponse(seq: WidgetTrace.currentSeq,
+                                   statusCode: http.statusCode,
+                                   byteCount: data.count)
         guard (200..<300).contains(http.statusCode) else {
             throw WeatherError.badStatus(http.statusCode)
         }

@@ -601,6 +601,196 @@ N 应 ≤ 20（超过则不显示，这是阈值设计）。
    只是**旁证**，不是对 tile overlay 的直接断言。**此项在本清单里没有结论。**
 2. **真机上 AppIntents 重签后配置是否真送达 widget 进程** —— 代码里没有任何可观测点能回答。
    2.3 / 2.5 只能观察「读回来是什么」，无法区分「系统没存」与「存了但没送达」。
-3. **系统是否真调用过 `timeline(for:)`** —— 无日志、无埋点、无计数器。
-   只能由 2.3 的结果**反推**：若显示了真实温度，则 `timeline` 必被调用过（唯一数据来源）。
+3. **系统是否真调用过 `timeline(for:)`** —— ✅ **本轮已解决**，见第 10 节。
+   此前「无日志、无埋点、无计数器」；现每次调用必成对产出 `ENTER` / `EXIT` 两行
+   （`Core/Logic/WidgetDiagnostics.swift` 的 `WidgetTrace`），
+   缺哪一行都能直接判出问题层级。
 4. **小组件定位失败是代码问题还是 Apple 不给定位** —— 见 5.3 的诚实标注。
+
+---
+
+## 10. 小组件「没数据」的三态判读（**本节是 2.3 的根因定位工具**）
+
+> 为什么有这一节：2.3 只能看「屏幕上显示什么」，**分不清问题在哪一层**。
+> 本节给出的是**可执行的判读表** —— 把三种可能区分开：
+> **系统没调我们** / **调了但取数失败** / **取到了但渲染不出来**。
+
+### 10.1 前置：这些日志是本轮（`dce9875` 之后）才有的
+
+⚠️ 手上装的包若 `head_sha` 早于引入 `WidgetTrace` 的那一版，
+**Console 里会一条日志都没有** —— 那不代表小组件正常，只代表**包太老**。
+先用 4.1 核对构建号。
+
+### 10.2 怎么抓日志（两条路，各管一半）
+
+**路 A — 连 Mac 抓（管「系统调没调timeline / 取数成没成功」）**
+
+手机与 Mac 连线后，在 Mac 终端：
+
+```bash
+# 实时跟（推荐：先跑命令，再去手机上点小组件的 ⟳ 强制刷新）
+log stream --predicate 'subsystem == "com.zhisheng.weather.core" AND category == "widget"' --level info
+
+# 或者：抓一段历史（手机没连着、或想看刚才那次）
+log collect --last 30m --output /tmp/zs.log
+log show /tmp/zs.log --predicate 'subsystem == "com.zhisheng.weather.core" AND category == "widget"'
+```
+
+- Console.app 里等价操作：搜 `category == "widget"`（或 subsystem `com.zhisheng.weather.core`）。
+- ⚠️ `--level info` 不能省：`ENTER/EXIT` 打的是 `notice` 级，
+  而 `log stream` 默认**只显示 `default` 及以上**，漏掉这个参数会一条都看不到
+  （这是最容易踩空的一步 —— 看到「空日志」先确认自己加了 `--level info`）。
+
+**路 B — 不连 Mac，在 App 内看（管「系统认不认这个实例」）**
+
+设置 →「小组件自查」→点**「查询系统登记的小组件」**。
+
+这一条查的是 `WidgetCenter.currentConfigurations()`，即**系统认为存在几个实例、
+各自什么尺寸**（设备事实，不是我们对自己代码的假设）。
+
+⚠️ **两路管的事不一样，不能互相替代**：
+小组件进程的执行轨迹**写不进 App 的诊断存储** ——
+扩展的 `UserDefaults.standard` 落在扩展自己的沙盒里，主 App 读不到
+（这是**沙盒边界本身**，与 App Group 是否可用无关）。
+所以「timeline 到底跑没跑」**只能**靠路A。
+
+### 10.3 日志长什么样（真实格式，逐字段）
+
+一次成功的 timeline 会打出这几行（`#N` 是本次调用的关联序号）：
+
+```
+#7 timeline ENTER family=small preview=0 mode=fixed(30.28,120.16)
+#7 CITY outcome=resolved cityID=30.28,120.16
+#7 FETCH start endpoint=https://api.open-meteo.com/v1/forecast?latitude=30.28&longitude=120.16&current&hourly&daily&minutely_15&forecast_minutely_15&wind_speed_unit&forecast_days&past_days&timezone&timeformat
+#7 FETCH http=200 bytes=48213
+#7 FETCH end result=ok
+#7 timeline EXIT status=available source=selfFetched empty=- hasPayload=1
+```
+
+**只有 6 行**，且每个 timeline 恒定 6 行（`FETCH` 三行只在真的发请求时出现）。
+系统对每实例的刷新预算是每小时数次量级，故不构成刷屏。
+
+### 10.4 判读表（**这是本节的核心**）
+
+**第一刀：有没有 `timeline ENTER`？**
+
+| 观察 | 结论 | 下一步 |
+|---|---|---|
+| **完全没有 `timeline ENTER`** | ⚠️ **系统根本没调我们的 timeline** | **不是我们取数的问题**。见 10.5 |
+| 只有 `placeholder ENTER`，没有 `timeline ENTER` | 系统只在渲染画廊/占位，从未真正拉时间线 | 同上，10.5 |
+| 有 `timeline ENTER`，且 `EXIT` 里 `hasPayload=1` | **取数成功了** → 若屏幕仍空，问题在**渲染层** | 见 10.6 |
+
+**第二刀：`ENTER` 行的 `mode=`（配置有没有送达）**
+
+| `mode=` | 含义 | 下一步 |
+|---|---|---|
+| `fixed(30.28,120.16)` | ✅ 用户选的城市**已送达** | 配置没问题，看 `CITY` 行 |
+| `followApp` | 配置被读回成「跟随 App」= **用户的具体城市没送达** | `Core/Logic/WidgetCityIntent.swift:314` `init()`；`:247` 的 `.followApp` 兜底 |
+| `currentLocation` | 配的是「当前位置」 | 看 `CITY` 行的 `outcome` |
+| —（`placeholder` 行恒为 `none`） | 占位渲染本来就没有配置 | 正常 |
+
+**第三刀：`CITY` + `FETCH` + `EXIT` 的组合**
+
+| `CITY outcome` | `FETCH` | `EXIT empty` | 结论 |
+|---|---|---|---|
+| `needsConfig` | 无 | `noCity` | **无城市**（容器空且配置无效）→ 按提示手动选城市 |
+| `resolved` | `http=200` + `result=ok` | `-`（`hasPayload=1`） | ✅ **数据到手**。屏幕仍空 → **渲染层**问题 |
+| `resolved` | `http=4xx` | `fetchFailed` | 上游拒绝（401/403 = 凭据/配额，429 = 限流） |
+| `resolved` | `http=5xx` | `fetchFailed` | 上游故障，稍后重试 |
+| `resolved` | `http=200 bytes=0` | `cityHasNoData` | 上游返回空体 → **换城市** |
+| `resolved` | `result=decodeFail(path=…)` | `fetchFailed` | **字段路径变了**（上游改结构），照 path 定位 |
+| `resolved` | `result=timeout` | `fetchFailed` | 8s 内没拿到（`WidgetWeatherService.requestTimeout`） |
+| `resolved` | `result=network` | `fetchFailed` | 传输层失败（飞行模式/弱网） |
+| `locNotAuthorized` | 无 | `locNotAuthorized` | 「当前位置」未获授权 → 去设置里授权 |
+| `locUnavailable` | 无 | `locUnavailable` | 已授权但本轮没点（Apple 常态）→ 改选具体城市 |
+
+### 10.5 ⭐ 「日志为空」的确切含义（用户最该先看这条）
+
+**若 `log stream` 开着、命令行加了 `--level info`、手机连着，
+点过小组件的 ⟳ 强制刷新，而日志里一条 `category == "widget"` 都没有 ——
+那么结论只有一个：**
+
+> **系统从来没有调用过我们的 `timeline(for:)`。**
+> 问题**不在**我们的取数代码上（取数代码压根没被执行过）。
+> 排查方向是**系统侧 / AppIntents 侧**，不是本仓库的 Swift 逻辑。
+
+具体可能（按可能性排序，**均未在真机验证，属推测**）：
+
+| 可能 | 怎么进一步确认 |
+|---|---|
+| 系统把该实例的刷新**预算耗尽**了（预算按 widget kind 计） | 隔很久（如 1 小时）后再点 ⟳，看是否突然出现日志 |
+| 侧载重签后 AppIntents 的配置**没能送达**扩展进程 | 走 2.2 / 2.5：编辑界面里能否看到并保存城市 |
+| 该实例处于**智能堆叠**且当时不可见 | 把小组件拖回桌面主屏，再点 ⟳ |
+| 系统认为该实例不需要更新（内容未过期） | 强制刷新后仍无日志，等过45 分钟再看 |
+
+⚠️ **这一档不要改 Swift 代码去「试」。** 本项目的既有教训是
+「注释说实测但没实测」（见 8.2）—— 日志为空时能确定的只有
+「系统没调我们」这一件事，**具体是哪一种原因，日志答不了**，
+需要社区侧或更高层的信息（如设备 Console 的完整 WidgetKit 报错）。
+
+### 10.6 「数据到手但屏幕空」的排查
+
+若 `EXIT hasPayload=1`（数据确实到手）而屏幕仍是空态，
+则问题在**视图层**，按此顺序查：
+
+1. `ZhishengWeatherWidget/WeatherEntry.swift:55` `payload` 转发 —— 确认 entry 带的是真载荷。
+2. `ZhishengWeatherWidget/LargeWeatherView.swift:74` 的 `hasPayload` 门控 —— 空态整段不渲染。
+3. `Core/Logic/WidgetCopy.swift` 的 `cityText` / `conditionText` —— 文案是否与实际状态一致。
+
+### 10.7 日志里绝不含凭据（可以放心把日志发出来）
+
+用户可能想把日志贴给社区，故这里明确承诺：**日志里不可能出现凭据**。
+
+保证方式是**白名单式脱敏**（`WidgetTrace.redactedEndpoint`），
+不是「记得别打 key」这种靠自觉的做法：
+
+- URL 的 **query值只有名字在白名单里时才输出**，白名单当前**只有
+  `latitude` / `longitude` 两项**（`WidgetDiagnostics.swift` 的
+  `diagnosticQueryKeys`，单测钉死）；
+- 其余参数（`current` / `hourly` / `apikey` / 任何未来新增的）
+  **一律只输出参数名，值无条件丢弃**；
+- 错误只打**自定义 token**（如 `timeout` / `badStatus(429)`），
+  **绝不打 `localizedDescription`**（`URLError` 的描述可能回显请求 URL）；
+- 响应**只打状态码与字节数，不打 body**。
+
+单测见 `ZhishengWeatherTests/WidgetTraceRedactionTests.swift`，
+其中 `testWhitelistIsExactlyCoordinates` 会在有人往白名单里加东西时**强制变红**，
+逼他确认那到底算不算凭据。
+
+⇒ **日志可以直接贴到 issue / 社区**，无需打码。
+
+### 10.8 读代码确认 / 推测 / 无法确定
+
+**读代码确认**（有 `文件:行号`）：
+
+- 本仓 widget 时间线**此前无任何日志**：`ZhishengWeatherWidget/WeatherProvider.swift`
+  在本轮之前没有 `print` / `os_log`；`DEVICE-VERIFICATION.md` §8.3 第 3 条原文
+  「无日志、无埋点、无计数器」可复核。
+- `Core/` 被**两个 target 同时编译**（`project.yml:84` 主 App、`:124` Widget），
+  故 `Core/Logic/WidgetDiagnostics.swift` 里的 `WidgetTrace` 对小组件进程可用。
+- `AppDiagnosticsStore` 在 `ZhishengWeather/`（`project.yml:83`，**仅主App target**），
+  故小组件进程**用不到**它 —— 这是「日志只能走 os_log」的**结构性**原因。
+- 小组件请求地址由 `Core/Networking/OpenMeteoEndpoint.swift:161` 拼装，
+  **当前不带任何 key**（参数只有经纬度与字段列表）。
+- `FETCH http=` 那行打在 `Core/Networking/WeatherService.swift` 的
+  `(200..<300).contains(http.statusCode)` 判定**之前** ——
+  所以**非 2xx 也能看到状态码**，这是判读表里 4xx/5xx 分得开的前提。
+
+**推测**（**未在真机验证**，当作假设对待）：
+
+- 10.5 表里「系统没调我们」的四条原因及排序，**均未在真机复现过**。
+  它们是「按WidgetKit 公开行为 + 社区常见现象」列出的候选，不是结论。
+- 「`placeholder ENTER` 只出现而不出现 `timeline`」的触发条件
+  （画廊预览 vs 桌面首屏渲染的区分）**未在真机观察过**，
+  这条判读是**基于代码结构**（`placeholder(in:)` 与 `timeline(for:in:)` 是两个入口）
+  推出的可用信号。
+
+**无法确定**：
+
+1. `os_log` 在**发布版（Release）**下是否仍全部保留 ——
+   本项目 CI 出的 IPA 是 `Release` 归档（`project.yml` 的 `archive: config: Release`），
+   `Logger` 的日志**不依赖调试器**，但系统对 `notice` 级日志有速率限制，
+   高频调用下**是否被节流丢弃未实测**。若 10.3 的行偶尔缺失，先怀疑这一点，
+   别急着判「系统没调」。
+2. AppIntents 配置在侧载重签后**是否真送达**扩展进程 ——
+   本节只能看到「送达与否」（`mode=`），**看不到送达机制为何失败**。

@@ -27,4 +27,12 @@ enum WeatherLog {
 
     /// App Group 共享容器读 / 写。
     static let storage = Logger(subsystem: subsystem, category: "storage")
+
+    /// 小组件时间线追踪（`WidgetDiagnostics` 的唯一出口）。
+    ///
+    /// 为什么单列一个 category（而不是并进 storage）：真机排障要按
+    /// 「组件到底被调了没有」过滤，而小组件时间线的日志与容器日志的
+    /// 触发源完全不同（前者由 WidgetKit 进程驱动，后者由 App 驱动），
+    /// 混在一起就分不清是谁写的。
+    static let widget = Logger(subsystem: subsystem, category: "widget")
 }

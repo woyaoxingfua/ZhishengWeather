@@ -24,8 +24,18 @@
 //  - **可注入**：`defaults` 可注入，单测用独立 suite，不污染 standard。
 //  - 仅 import Foundation（不引 UIKit），与偏好层同款纯度。
 //
+//  ⚠️ **本轮新增 `import WidgetKit`（唯一一处对上面那条纪律的例外）**：
+//  「小组件系统探针」（`probeWidgetSystemRegistration`）要向系统问
+//  「当前登记了几个小组件实例」，那是 `WidgetCenter` 的 API，而
+//  `WidgetFamily` 这个枚举类型也出自WidgetKit。不引它就写不出这段。
+//  为什么可接受：① `WidgetKit` 是**系统框架**，不是第三方依赖，
+//  且本类型**零网络、零 UI**（只用 `WidgetCenter` 的查询 API，
+//  不用任何 view / provider）；② 本文件仍**不引 UIKit**。
+//  故把它记在这里而不是默默破例—— 纪律的价值在于「例外必须可见」。
+//
 
 import Foundation
+import WidgetKit
 
 /// 诊断记录的来源（落盘用 `rawValue` 作字典键，新增来源只改这一处）。
 enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
@@ -38,6 +48,15 @@ enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
     case widgetTimeline
     /// 雷达纠偏探针（R1：`CoordinateTransform` 的偏移量实测落盘）。
     case radarOffsetProbe
+    /// 小组件系统登记探针（`WidgetCenter.getCurrentConfigurations` 的实测结果）。
+    ///
+    /// ⚠️ 为什么**只能**在主 App 侧采集：`WidgetCenter` 是**主 App 进程**的 API，
+    /// 小组件扩展进程调它拿不到主 App 的视角；而小组件进程自己的执行轨迹
+    /// （`timeline` 有没有被调）**写不进本存储**（`UserDefaults.standard` 在扩展
+    /// 沙盒里，主 App 读不到—— 与 App Group 是否可用无关，是沙盒边界本身）。
+    /// 故本 case 记的是**系统认为存在几个小组件实例、各自什么尺寸**，
+    /// 它与Console 里的 timeline 日志互补，合起来才能定位问题层级。
+    case widgetSystemProbe
 
     /// 面向用户的来源名（设置页展示用）。
     var displayName: String {
@@ -50,6 +69,8 @@ enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
             return "小组件时间线"
         case .radarOffsetProbe:
             return "雷达纠偏探针"
+        case .widgetSystemProbe:
+            return "小组件系统探针"
         }
     }
 }
@@ -301,6 +322,92 @@ final class AppDiagnosticsStore {
                      succeeded: true,
                      target: "pixelShift",
                      message: message)
+    }
+
+    // MARK: - 小组件系统登记探针（真机「小组件没数据」的第一手设备事实）
+
+    /// 向系统查询「当前登记了几个小组件实例」，并把结果**如实**落进诊断记录。
+    ///
+    /// ── 它能回答什么（这是它存在的唯一理由）────────────────────────────
+    /// 用户在真机上的核心症状是「小组件能加到桌面、但一直空数据」。
+    /// 排查第一刀该切在哪一层，取决于两个**互相独立**的事实：
+    ///   1. **系统认不认这个实例？** —— 本探针回答（`WidgetCenter` 是设备事实，
+    ///      不是我们对代码的假设）。
+    ///   2. **系统到底调不调 `timeline`？** —— 由 Console 里的
+    ///      `WidgetTrace` ENTER/EXIT 行回答（小组件进程内的事，主 App 读不到）。
+    /// 两者合起来才能把「系统侧问题」与「我们的代码问题」分开。
+    ///
+    /// ⚠️ **诚实边界**：本探针**看不到**小组件进程的执行轨迹，也**看不到**
+    /// AppIntents 配置有没有送达（`configuration` 字段对本项目这种
+    /// 自定义 AppIntent 不保证可读，故此处**只取 kind / family 两个字段**，
+    /// 不去解读配置内容—— 解读不了就不解读，绝不编造）。
+    ///
+    /// - Parameter store: 诊断层（默认 `.shared`）。
+    static func probeWidgetSystemRegistration(store: AppDiagnosticsStore = .shared) async {
+        let message: String
+        let succeeded: Bool
+        do {
+            let configurations = try await WidgetCenter.shared.currentConfigurations()
+            succeeded = true
+            if configurations.isEmpty {
+                // 空数组 ≠ 失败：它意味着「系统当前没有登记任何本App 的小组件实例」，
+                // 这与「实例在但空数据」是完全不同的两件事，必须分开说。
+                message = """
+                系统登记的小组件实例数：0
+                ⇒ 系统当前**没有**任何本 App 的小组件实例。
+                若你确实在桌面上看到小组件卡片，说明系统侧登记与桌面显示不一致。
+                """
+            } else {
+                // ⚠️ 不写死返回值的类型名：Apple 文档在不同版本里把这个元素类型
+                // 分别写成 `WidgetInfo` / `WidgetConfiguration`，故此处只靠类型推断
+                // （`let configurations = try await ...`），**不出现任何字面类型名** ——
+                // 写死一个名字就可能在某个 SDK 上编译不过。
+                let lines = configurations
+                    .map { conf in
+                        "kind=\(conf.kind) family=\(Self.familyName(conf.family))"
+                    }
+                    .joined(separator: "\n")
+                message = """
+                系统登记的小组件实例数：\(configurations.count)
+                \(lines)
+                ⇒ 实例已被系统登记。若桌面仍空数据，请看Console 里 category=widget 的 \
+                ENTER/EXIT 日志，判断 timeline 是否被调用、请求是否发出。
+                """
+            }
+        } catch {
+            succeeded = false
+            // 带domain + code：侧载场景下 localizedDescription 常是泛化的一句。
+            message = "查询系统小组件登记失败：\(error.localizedDescription)"
+        }
+        store.record(source: .widgetSystemProbe,
+                     succeeded: succeeded,
+                     target: "WidgetCenter.currentConfigurations",
+                     message: message,
+                     error: succeeded ? nil : WidgetProbeError.queryFailed)
+    }
+
+    /// 探针失败时的占位错误。
+    ///
+    /// ⚠️ 为什么要造一个 error 而不是直接传 nil：`record` 的 error 参数只为把
+    /// domain + code 带进落盘记录，而「查询失败」这个事实必须有 domain/code
+    /// 才判得出来（`AppDiagnosticEntry` 的既有纪律，见文件头）。
+    /// 它**不对外抛出**，也**不代表**底层真实错误（真实错误在 message 里）。
+    private enum WidgetProbeError: Error {
+        case queryFailed
+    }
+
+    /// `WidgetFamily` → 稳定短串（穷尽 switch，不留 `default`）。
+    private static func familyName(_ family: WidgetFamily) -> String {
+        switch family {
+        case .systemSmall: return "small"
+        case .systemMedium: return "medium"
+        case .systemLarge: return "large"
+        case .systemExtraLarge: return "xl"
+        case .accessoryCircular: return "accCircular"
+        case .accessoryRectangular: return "accRect"
+        case .accessoryInline: return "accInline"
+        @unknown default: return "unknown"
+        }
     }
 
     // MARK: - 内部
