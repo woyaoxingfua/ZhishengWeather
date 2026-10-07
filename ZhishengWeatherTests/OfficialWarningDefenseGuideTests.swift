@@ -182,7 +182,7 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
         // 传Behavior（不是构造好的 stub）—— makeViewModel 内部负责构造。
         let vm = try makeViewModel(
             items: [makeItem(id: id)],
-            detail: .success([id: makeDetail(identifier: id, guide: measuredGuide)])
+            detail: .success([id: try makeDetail(identifier: id, guide: measuredGuide)])
         )
 
         await vm.addAndSelect(makeCity())
@@ -238,8 +238,8 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
         let vm = try makeViewModel(
             items: [makeItem(id: "DIFFERENT_ID")],
             detail: .success(["65402641600000_20261006212927":
-                              makeDetail(identifier: "65402641600000_20261006212927",
-                                         guide: measuredGuide)]))
+                              try makeDetail(identifier: "65402641600000_20261006212927",
+                                             guide: measuredGuide)]))
 
         await vm.addAndSelect(makeCity())
         await waitUntil { vm.displayedOfficialWarning != nil }
@@ -297,7 +297,8 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
         let tricky = "  某县气象台2026年10月6日22时20分发布“大雾黄色预警信号”，"
             + "预计能见度小于500米，请注意防范。（预警信息来源：国家预警信息发布中心）  "
         let id = "65402641600000_20261006212927"
-        let detail = makeDetail(identifier: id, guide: tricky)
+        // ⚠️ `makeDetail` 是 throws（内部用 XCTUnwrap 抛错，SC-31 禁 try!/fatalError）
+        let detail = try makeDetail(identifier: id, guide: tricky)
 
         // Core 层：逐字相等（含首尾空格，绝不 trim）。
         let out = OfficialWarningEnrichment.enrich([makeItem(id: id)],
@@ -310,7 +311,8 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
     /// 空正文按缺失处理（**不留空串**，UI 才能如实显示"暂无正文"）。
     func testEmptyGuideTreatedAsMissingNotBlankString() throws {
         let id = "65402641600000_20261006212927"
-        let detail = makeDetail(identifier: id, guide: "")
+        // 同上：makeDetail throws，调用处必须 try
+        let detail = try makeDetail(identifier: id, guide: "")
         let out = OfficialWarningEnrichment.enrich([makeItem(id: id)],
                                                    with: [id: detail],
                                                    timeZone: nil)
