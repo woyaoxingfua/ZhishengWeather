@@ -799,8 +799,13 @@ final class NmcAlarmTests: XCTestCase {
     // MARK: - 夹具工具
 
     /// 造一条条目（默认新鲜，落在窗口内）。
+    /// - Note:`issuedAt` 默认给一个**固定**时间戳。
+    /// ⚠️ 之前它是**必填**，但三处调用（颜色排序 / 稳定排序 / 四态互异）
+    /// 根本不关心发布时间 —— Swift 把每个参数都视为可选时，
+    /// 实际编译器报的是 `missing argument for parameter 'issuedAt'`。
+    /// 给默认值比逐处补`issuedAt: nil` 更稳：**新增调用点不会再编译失败**。
     private static func item(color: NmcAlarmColor,
-                             issuedAt: Date?,
+                             issuedAt: Date? = Date(timeIntervalSince1970: 1_000_000),
                              id: String = "stub") -> OfficialWarningItem {
         OfficialWarningItem(id: id, region: "福建省 / 泉州市",
                             cityName: "泉州市", administrativeCode: "350581",
