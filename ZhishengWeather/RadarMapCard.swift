@@ -107,12 +107,24 @@ final class RadarTileOverlay: MKTileOverlay {
         maximumZ = RadarTileZoomRange.maximum
         // 盖在 Apple 底图之上，不替换底图内容。
         canReplaceMapContent = false
-        // `.loadBeforeDisplay`：瓦片中位数仅 ~4 KB，预加载成本可接受；
-        // `.loadAsync` 会让拖动时出现空白格子闪烁，对天气图观感伤害大。
         //
-        // ⚠️ `loadingPolicy` 声明在 **MKTileOverlay** 上，**不在**
-        // `MKTileOverlayRenderer` 上 —— 设到 renderer 上编译不过。
-        loadingPolicy = .loadBeforeDisplay
+        // ⚠️ **此处曾有一行 `loadingPolicy = .loadBeforeDisplay`（已删）**
+        //
+        // 那是个**不存在的 API**：2026-10-07 逐页核对 Apple 官方文档确认 ——
+        //  · `MKTileOverlay` 的全部属性：tileSize / isGeometryFlipped /
+        //    minimumZ / maximumZ / canReplaceMapContent / urlTemplate
+        //    —— **无 loadingPolicy**
+        //  · `MKTileOverlayRenderer` 只有 `init(tileOverlay:)` 与 `reloadData()`
+        //    —— **无 loadingPolicy**
+        //  · `MKMapView` 属性里也**无 loadingPolicy**
+        //
+        // CI 报 `cannot find 'loadingPolicy' in scope` 就是这么来的。
+        // 教训：这不是「设错了对象」，而是**属性根本不存在**——
+        // 它是我们照着「应该有这个开关」的直觉编出来的。
+        //
+        // 瓦片加载时机因此**保持 MapKit 默认行为**，不做任何自定义。
+        // 若将来确需控制，唯一可靠的入口是自控的 `loadTile(at:result:)`
+        // 里自己做预取/节流（本次不做：无实测依据表明默认行为有问题）。
     }
 
     /// 纠偏后的瓦片请求坐标。
@@ -478,12 +490,13 @@ struct RadarMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
-                // 注意：`loadingPolicy` 是在 `RadarTileOverlay.init` 里设的
-                // （它属于 MKTileOverlay，不属于 renderer）。这里只造 renderer。
                 //
                 // ⚠️ 平移**只能**在这里做 —— `MKTileOverlayRenderer` 没有平移 API
                 // （实测查证，见 `Evidence.tileRendererExposesTranslationAPI`），
                 // 唯一途径是覆写 `draw(_:zoomScale:in:)`。
+                //
+                // （另：此处曾注释「loadingPolicy 在 overlay 上设」——那是错的，
+                //  该 API 不存在，见 `RadarTileOverlay.init` 里的详细更正。）
                 guard let shift, shift.dx != 0 || shift.dy != 0 else {
                     // 不平移 → 用原生类，**完全不改渲染行为**。
                     return MKTileOverlayRenderer(tileOverlay: tileOverlay)
@@ -548,6 +561,12 @@ struct RadarMapCard: View {
     /// 「平移量 = N px · 纠偏方向未验证 · 切档不影响请求」。
     ///
     /// `.off` 时只显示"未平移"，**不**谎称任何纠偏状态。
+    ///
+    /// ⚠️ 文案**拆成局部变量**而非一个大三元表达式：
+    /// 编译器在单个表达式里遇到两个多段 `+` 拼接的 String 分支时
+    /// 会报 "unable to type-check this expression in reasonable time"
+    /// （类型检查器在字符串运算符上指数爆炸）。这是编译期问题，
+    /// **不是**性能问题 —— 拆开后语义完全不变。
     @ViewBuilder
     private var pixelShiftNote: some View {
         let mode = model.pixelShiftMode
@@ -557,12 +576,11 @@ struct RadarMapCard: View {
             zoom: RadarTileZoomRange.maximum,
             tileEdge: Double(RadarTileURLBuilder.tileEdge),
             contentScaleFactor: Double(UIScreen.main.scale))
-        Text(mode.appliesShift
-             ? "平移量 " + CoordinateTransform.decimal2(probe.magnitudeDevicePixels)
-                + " px@" + String(RadarTileZoomRange.maximum) + " · " + mode.displayName
-                + " · 纠偏方向未验证"
-             : "未平移 · " + mode.displayName
-                + " · 纠偏方向未验证")
+        let amount = CoordinateTransform.decimal2(probe.magnitudeDevicePixels)
+        let zoomLabel = String(RadarTileZoomRange.maximum)
+        let suffix = " · " + mode.displayName + " · 纠偏方向未验证"
+        let line = mode.appliesShift ? "平移量 " + amount + " px@" + zoomLabel : "未平移"
+        Text(line + suffix)
             .font(.system(size: Theme.FontSize.caption))
             .foregroundStyle(Theme.secondaryText)
             .fixedSize(horizontal: false, vertical: true)

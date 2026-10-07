@@ -326,12 +326,18 @@ struct OfficialWarningCard: View {
         }
     }
 
-    // MARK: - 格式化（纯函数，`nonisolated` 便于直接单测）
+    // MARK: - 格式化（`View` 的成员天然落在主 actor；纯静态逻辑，可直接单测）
 
     /// 分档语义色：复用 AQI 六档（`AirQualityCard.color(for:)`）。
     ///
     /// ⚠️ **蓝色不复用 `.good`（绿）** —— 理由见文件头：预警的蓝**仍是预警**，
     /// 用绿色会读成"一切正常"，那是**误导**。
+    ///
+    /// ⚠️ **不可标 `nonisolated`**：`AirQualityCard` 是 `View`，
+    /// 它的 `static func color(for:)` 继承类型级 `@MainActor` 隔离，
+    /// 本函数调它就必须在主actor 上。标了`nonisolated` CI 会报
+    /// "call to main actor-isolated static method 'color(for:)'"。
+    /// 「能被单测直接调」不需要 `nonisolated` —— 测试方法标 `@MainActor` 即可。
     static func color(for color: NmcAlarmColor) -> Color {
         switch color {
         case .red: return AirQualityCard.color(for: .medium)     // 红
@@ -346,7 +352,17 @@ struct OfficialWarningCard: View {
     ///
     /// ⚠️ 未来时刻（`age < 0`，时区/时钟问题）**不**显示「-3 分钟前」这种
     /// 荒谬文案，改为显示钟点（让用户自己判断）。
-    nonisolated static func issueTimeText(_ issuedAt: Date,
+    ///
+    /// ⚠️ **刻意不是 `nonisolated`**：`WeatherTimeFormatter` 是类型级
+    /// `@MainActor`（未加锁的 formatterCache），本函数调它就必然落在主actor 上。
+    /// 若强行标 `nonisolated`，CI 报
+    /// "call to main actor-isolated static method 'string(from:format:timeZone:)'
+    /// in a synchronous nonisolated context"。
+    /// 同文件 :335 的 `color(for:)` 同理（调 `AirQualityCard.color(for:)`，
+    /// 那是 View 的 static 成员）。**对比**：同仓 `UVIndexCard` 的
+    /// `uvText`/`visText` 能标 nonisolated，是因为它们只做纯字符串拼接、
+    /// 不触碰任何 MainActor 成员 —— 隔离标注必须与实际依赖一致。
+    static func issueTimeText(_ issuedAt: Date,
                                           now: Date,
                                           timeZone: TimeZone) -> String {
         let age = now.timeIntervalSince(issuedAt)
