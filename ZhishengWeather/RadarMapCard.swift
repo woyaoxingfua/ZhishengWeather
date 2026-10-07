@@ -341,11 +341,14 @@ final class ShiftedTileOverlayRenderer: MKTileOverlayRenderer {
     /// 1. **方向未验证**：本函数只实现「沿/反纠偏方向」两种**符号约定**，
     ///    哪个约定对应"看起来对齐了"**只能真机确定**（R1）。故档位名里
     ///    直接写「方向未验证」，UI 也如实显示 —— **不得**写成"已纠偏"。
-    /// 2. **平移量不足 1 设备像素**（实测 z7 @2x 全中国境内最大 0.931 pt，
-    ///    552 瓦片 0 个 ≥ 1 px）→ 开了**也看不出**差别。
+    /// 2. **平移量在 @1x/@2x 不足 1 设备像素**（实测 z7@2x 全中国境内最大
+    ///    **0.933 设备像素** = 广州；552 瓦片 0 个 ≥ 1 px）⇒ 开了**也看不出**
+    ///    差别。
+    ///    ⚠️ **按倍率分档，不可无条件转述**：@3x + z7 有 3 个参考点越过 1 px
+    ///    （广州 1.400 px），@3x 上是**看得见的**。
     /// 3. `zoomScale` 实际由**相机**决定，此处按「瓦片 1:1 显示」估算。
     ///    MapKit overzoom 时真实值会偏大，平移量同比例放大 ——
-    ///    但方向与"看不见"这两条结论不受影响（量级仍 < 数 px）。
+    ///    但方向这条结论不受影响；"看不见"那条**只对 @1x/@2x 成立**。
     ///
     /// - Parameters:
     ///   - center: 地图中心（WGS84），偏移量在此点上取。
@@ -406,8 +409,9 @@ final class ShiftedTileOverlayRenderer: MKTileOverlayRenderer {
             return
         }
         // ⚠️ **代价（如实记录）**：MapKit 只渲染与 `mapRect` 相交的瓦片，
-        // 平移后边缘会露出与平移量等宽的空隙。实测 z7 @2x 最大约 **1.9 设备像素**
-        // （见报告）。该空隙由 `alpha`/底图透出，不是灰块 —— 但**确实是副作用**。
+        // 平移后边缘会露出与平移量等宽的空隙。实测 z7@2x 最大约 **0.93 设备像素**
+        // （广州，见 `PixelShiftMagnitudeTests`；@3x 约 1.40 px）。
+        // 该空隙由 `alpha`/底图透出，不是灰块 —— 但**确实是副作用**。
         context.saveGState()
         context.translateBy(x: shiftX, y: shiftY)
         super.draw(mapRect, zoomScale: zoomScale, in: context)
@@ -557,9 +561,14 @@ struct RadarMapCard: View {
 
     /// 平移档位的一行读数。
     ///
-    /// ⚠️ **本行的存在理由**：平移量实测不足 1 设备像素，用户**看不出**差别；
-    /// 而方向又**未验证**。若不显示，用户会以为"纠偏已生效"。故必须写出来：
+    /// ⚠️ 本行的存在理由：平移量在**@1x/@2x** 实测不足 1 设备像素，用户**看不出**
+    /// 差别；而方向又**未验证**。若不显示，用户会以为"纠偏已生效"。故必须写出来：
     /// 「平移量 = N px · 纠偏方向未验证 · 切档不影响请求」。
+    ///
+    /// 🔴 **可辨性必须按倍率分档如实标注**（2026-10-07 修正）：本机
+    /// `UIScreen.main.scale` 可能是 **3**，而 @3x + z7 的平移量确实越过 1 px
+    /// （广州 1.400 px）⇒ 若此处无条件写"肉眼不可辨"就是**假话**。
+    /// 故直接用探针的 `isVisuallyDetectable`（阈值 = 1 设备像素）分支。
     ///
     /// `.off` 时只显示"未平移"，**不**谎称任何纠偏状态。
     ///
@@ -580,7 +589,13 @@ struct RadarMapCard: View {
         let amount = CoordinateTransform.decimal2(probe.magnitudeDevicePixels)
         let zoomLabel = String(RadarTileZoomRange.maximum)
         let suffix = " · " + mode.displayName + " · 纠偏方向未验证"
-        let line = mode.appliesShift ? "平移量 " + amount + " px@" + zoomLabel : "未平移"
+        // ⚠️ 同样受上面的类型检查器约束：可辨性单独成一个局部变量，
+        // **不**把三元表达式嵌进 `+` 链里。
+        let detectability = probe.isVisuallyDetectable
+            ? "（已达 1 px，本机倍率下可能可辨）"
+            : "（不足 1 px，肉眼不可辨）"
+        let shiftedLine = "平移量 " + amount + " px@" + zoomLabel + detectability
+        let line = mode.appliesShift ? shiftedLine : "未平移"
         Text(line + suffix)
             .font(.system(size: Theme.FontSize.caption))
             .foregroundStyle(Theme.secondaryText)

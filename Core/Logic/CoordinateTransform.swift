@@ -70,14 +70,22 @@
 //    但 `MKOverlayRenderer.draw(_:zoomScale:in:)` 是 Apple 文档明写的子类钩子
 //    （"Subclasses need to override the `draw(_:zoomScale:in:)` method"），
 //    在该方法内 `context.translateBy` 即可整体平移瓦片内容。
-//  · **但平移量在真机上不足一个像素**（实测，见 `subtileShiftPoints` 注释）：
-//    z7 全中国境内瓦片穷举，@1x/@2x 下最大 **0.933 设备像素**（z7@2x，广州），
-//    552 个瓦片里**0 个**达到 1.0 px。即：**平移了也看不见**。
-//    ⚠️ **@3x 是例外**：z7@3x 广州 1.400 px、海口 1.398 px，**看得见**。
+//  · **但平移量在真机上不足一个像素**（实测，见 `PixelShiftProbe` 注释）——
+//    **但这句话只在 @1x/@2x 成立，@3x 不成立**，不可笼统转述：
+//    z7 全中国境内瓦片穷举，@1x/@2x 下最大 **0.933 设备像素**（z7@2x，广州；
+//    552 个瓦片中心的独立穷举最大值是 0.9313 px @113.906°E/28.304°N），
+//    552 个瓦片里**0 个**达到 1.0 px。即：**@1x/@2x 下平移了也看不见**。
+//    ⚠️ **@3x 是例外**：z7@3x 参考点里**3 个**越过 1 px
+//    （广州 1.400、上海 1.004、北京 1.045px），**看得见**。
 //    （2026-10-07 修正：此前 `zoomScale` 把 `contentScaleFactor` 也乘了进去，
 //    与 `magnitudeDevicePixels` 重复 → `csf` 被平方，@2x 读数虚高一倍，
 //    曾把本就 < 1 px 的量误报为「可见」。现缩放因子只施加一次。）
 //    ⚠️ 「0.933」这个数**是设备像素（@2x）**，不是点量 —— 点量是 0.4665。
+//  · **性质**：`设备像素 = 基量 × 2^(z−7) × csf` —— 对 z 与 csf 都**线性**。
+//    故「是否≥ 1 px」**不是**与倍率无关的常数，而是存在阈值
+//    `csf* = 1 / 基量`（广州 2.14、上海 2.99、北京 2.87、成都 3.92）。
+//    @2x 恰好全在阈值下方、@3x 越过后三个 ⇒ **必须按倍率分档表述**，
+//    任何"平移量恒不足 1 px"的无条件说法都是错的。
 //  ⇒ 所以本轮实现的是**机制 + 可读的量化读数**，而不是"用户能看出对齐了"。
 //    详见 `PixelShiftProbe` 与 `RadarMapCard` 里的 `ShiftedTileOverlayRenderer`。
 //
@@ -391,7 +399,10 @@ enum CoordinateTransform {
         ///   （见 `overlayRendererSubclassHookQuote`），且方法签名收 `CGContext`，
         ///   故可用 Core Graphics 的 `translateBy` 平移绘制内容。
         /// - ⚠️ **这只证明「机制存在」，不证明「平移量看得见」** —— 实测平移量
-        ///   不足 1 px（见 `PixelShiftProbe`），故它**不是**用户可感知的纠偏。
+        ///   在 **@1x/@2x** 不足 1 设备像素（见 `PixelShiftProbe`）⇒ 在默认档下
+        ///   它**不是**用户可感知的纠偏。
+        ///   ⚠️ **该判断必须按倍率分档、不可无条件转述**：@3x + z7 有 3 个参考点
+        ///   越过 1 px（广州 1.400 px），是看得见的（见文件头「性质」段）。
         static let translationViaDrawHookAvailable: Bool = true
     }
 

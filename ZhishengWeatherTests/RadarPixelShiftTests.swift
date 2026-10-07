@@ -74,7 +74,9 @@ final class MapKitTranslationCapabilityTests: XCTestCase {
                       "引文应含 draw(_:zoomScale:in:) 子类钩子原文")
     }
 
-    /// 🔴 **能力 ≠ 有用**：机制可行，但平移量 < 1 px（见下节）。
+    /// 🔴 **能力 ≠ 有用**：机制可行，但平移量在**默认档（@1x/@2x）**不足 1 px（见下节）。
+    ///
+    /// ⚠️ 不可无条件转述为「平移量恒不足 1 px」—— **@3x 不成立**（z7 广州 1.400 px）。
     ///
     /// 这条测试防止后来者只看到"机制可行"就宣称"纠偏已实现"。
     ///
@@ -85,14 +87,24 @@ final class MapKitTranslationCapabilityTests: XCTestCase {
     /// 昨天那份"552 瓦片穷举最大 0.931 px、0 个 ≥ 1"的结论**是对的**
     /// （它按"缩放因子只施加一次"算的），代码与它不一致⇒ 改代码。
     /// 本条断言与全部量级期望值**一个字符都没改**。
+    ///
+    /// ⚠️⚠️ **2026-10-07 二次修正：断言成立，但「@2x」这个选择的理由是错的。**
+    /// 原文把 @2x 称作「最有利于看得见的档位」—— **该前提不成立**。
+    /// 独立复算（Python，不依赖被测实现）给出 z7 参考点最大值：
+    /// @1x 0.467 px / @2x 0.933 px / **@3x 1.400 px**
+    /// ⇒ **@3x 才是最有利于看得见的档位**，@2x 反而属于「仍不可见」的一档。
+    /// 断言本身（@2x 全区间 < 1 px）经复算**为真**，故保留；
+    /// 「最有利」这个说法已按实测改写，@3x 的可见性由
+    /// `testAt3xSomePointsDoBecomeVisible` 单独钉住。
     func testTranslationCapabilityDoesNotImplyVisibleCorrection() {
         XCTAssertTrue(CoordinateTransform.Evidence.translationViaDrawHookAvailable)
-        // 在最有利于"看得见"的档位（@2x，雷达最大 zoom）上，
-        // 全中国境内参考点仍**没有一个**达到 1 设备像素。
+        // 在 @2x（雷达最大 zoom）上，全中国境内参考点仍**没有一个**达到 1 设备像素。
+        // ⚠️ 不可读成「任何倍率下都看不见」—— @3x 不成立（见上）。
         XCTAssertTrue(
             CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(tileEdge: 256,
                                                                     contentScaleFactor: 2),
-            "即便@2x，平移量也应全区间 < 1 设备像素 —— 机制可行 ≠ 用户看得见")
+            "@2x 下平移量应全区间 < 1 设备像素 —— 机制可行 ≠ 用户看得见"
+            + "（⚠️ 该结论只对 @1x/@2x 成立；@3x + z7 有 3 个参考点越过 1 px）")
     }
 }
 
@@ -280,7 +292,76 @@ final class PixelShiftMagnitudeTests: XCTestCase {
             "@3x 不该再声称全不可见")
     }
 
-    /// 平移量随 zoom 线性翻倍（z4 → z7 共 8 倍）。
+    /// 🔴 **回归护栏**：可辨性是**按倍率分档**的性质，不是无条件常数。
+    ///
+    /// ── 这条守的是什么 ──────────────────────────────────────────────
+    /// 代码里多处文案曾笼统写"平移量不足 1 px ⇒ 看不见"。**@1x/@2x 成立，
+    /// @3x 不成立**（z7 广州 1.400 px）。一旦有人把@3x 也算进来、或把
+    /// `csf` 重复施加一次，无条件说法就会悄悄变回假话。
+    ///
+    /// ── 性质本身 ────────────────────────────────────────────────────
+    /// `magnitudeDevicePixels = 基量 × 2^(z−7) × csf` —— 对 z、对 csf 都**线性**。
+    /// 故"是否 ≥ 1 px"等价于 `csf ≥ csf* = 1 / 基量`，是一个**阈值**问题。
+    /// 实测 z7 各参考点的 `csf*`：广州 2.14/ 上海 2.99 / 北京 2.87 /
+    /// 成都 3.92 / 乌鲁木齐 6.37⇒ **@2x 恰好全在阈值下方、@3x 越过后三个**。
+    ///
+    /// 期望值来源：Python 独立复刻同一套公式（不 import 被测实现）。
+    func testDetectabilityIsTieredByScaleNotAConstant() {
+        // ① 严格线性：对每个参考点，@3x 读数应恰好是 @1x 的 3 倍。
+        for point in CoordinateTransform.probeReferencePoints {
+            let at1x = CoordinateTransform.pixelShiftProbe(
+                longitude: point.longitude, latitude: point.latitude,
+                zoom: 7, tileEdge: 256, contentScaleFactor: 1)
+            let at2x = CoordinateTransform.pixelShiftProbe(
+                longitude: point.longitude, latitude: point.latitude,
+                zoom: 7, tileEdge: 256, contentScaleFactor: 2)
+            let at3x = CoordinateTransform.pixelShiftProbe(
+                longitude: point.longitude, latitude: point.latitude,
+                zoom: 7, tileEdge: 256, contentScaleFactor: 3)
+            XCTAssertEqual(at2x.magnitudeDevicePixels,
+                           at1x.magnitudeDevicePixels * 2, accuracy: 0.000001,
+                           "\(point.name)：@2x 应恰好是 @1x 的 2倍")
+            XCTAssertEqual(at3x.magnitudeDevicePixels,
+                           at1x.magnitudeDevicePixels * 3, accuracy: 0.000001,
+                           "\(point.name)：@3x 应恰好是 @1x 的 3 倍")
+            // ② 阈值单调：一旦某倍率可辨，更高倍率必可辨（csf* 存在且唯一）。
+            if at2x.isVisuallyDetectable {
+                XCTAssertTrue(at3x.isVisuallyDetectable,
+                              "\(point.name)：@2x 已可辨则 @3x 必可辨（单调性）")
+            }
+        }
+        // ③ 分档结论钉死：@1x/@2x 全不可见，@3x 至少广州可见。
+        XCTAssertTrue(CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(
+            tileEdge: 256, contentScaleFactor: 1), "@1x 应全区间不可辨")
+        XCTAssertTrue(CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(
+            tileEdge: 256, contentScaleFactor: 2), "@2x 应全区间不可辨")
+        XCTAssertFalse(CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(
+            tileEdge: 256, contentScaleFactor: 3), "@3x 不应再声称全不可辨")
+    }
+
+    /// 🔴 **摘要必须随倍率改口**：@3x 不能还写"肉眼不可辨"。
+    ///
+    /// 依据：`UIScreen.main.scale` 在真机上是 3，此时 z7 广州 1.400 px
+    /// **确实可见**。若摘要无条件写"肉眼不可辨"，就是对用户说假话。
+    func testSummaryStatesDetectabilityPerScale() {
+        let at2x = CoordinateTransform.pixelShiftProbe(
+            longitude: 113.2640, latitude: 23.1290,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 2)
+        let at3x = CoordinateTransform.pixelShiftProbe(
+            longitude: 113.2640, latitude: 23.1290,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 3)
+        XCTAssertTrue(at2x.summary.contains("肉眼不可辨"),
+                      "@2x 广州应标肉眼不可辨，实际：\(at2x.summary)")
+        XCTAssertTrue(at3x.summary.contains("可见"),
+                      "@3x 广州（1.400 px）必须标可见，"
+                      + "不得写『肉眼不可辨』，实际：\(at3x.summary)")
+        XCTAssertFalse(at3x.summary.contains("肉眼不可辨"),
+                       "@3x 广州不得声称肉眼不可辨 —— 那是假话，实际：\(at3x.summary)")
+        // 读数本身也必须随倍率变化（否则等于没施加缩放因子）。
+        XCTAssertNotEqual(at2x.summary, at3x.summary)
+    }
+
+    /// 平移量随 zoom 线性翻倍（z4 → z7 共 8倍）。
     func testShiftScalesWithZoom() {
         let atZ4 = CoordinateTransform.pixelShiftProbe(
             longitude: 116.3970, latitude: 39.9090,
