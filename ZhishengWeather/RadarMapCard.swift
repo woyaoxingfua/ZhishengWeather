@@ -385,10 +385,11 @@ final class ShiftedTileOverlayRenderer: MKTileOverlayRenderer {
                                             center: CLLocationCoordinate2D,
                                             eastward: Bool) -> Double {
         let perMeter = CoordinateTransform.mapPointsPerMeter(atLatitude: center.latitude)
+        // ⚠️ `zoomScale` 不收contentScaleFactor（2026-10-07 修正）：
+        // `translateBy` 收的是**点**，缩放因子只在 `magnitudeDevicePixels` 施加一次。
         let scale = CoordinateTransform.zoomScale(
             atZoom: probe.zoom,
-            tileEdge: CGFloat(RadarTileURLBuilder.tileEdge),
-            contentScaleFactor: probe.contentScaleFactor)
+            tileEdge: CGFloat(RadarTileURLBuilder.tileEdge))
         return (eastward ? probe.eastMeters : probe.northMeters) * perMeter * scale
     }
 

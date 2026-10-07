@@ -541,6 +541,65 @@ final class NmcAlarmTests: XCTestCase {
                                               timeZone: shanghai))
     }
 
+    /// 🔴 **回归护栏**：日期/时间的分界只能是空格或 `T`，**不能**是日期内部的 `/`、`-`。
+    ///
+    /// ⚠️ **曾经的真实 bug**：`date(from:timeZone:)` 取「串里第一个分隔符」
+    /// 来切日期段，而分隔符集合含 `/`、`-`、`T`、`t` ⇒
+    /// `"2026/10/06 20:28"` 的首个命中是**日期内部的 `/`**，
+    /// `datePart` 只拿到 `"2026"` → 1 个分量 → **返回 nil**。
+    /// ⇒ **实测形态（`/` 分隔）全军覆没**，每条NMC 预警的 `issuedAt` 都是 nil。
+    ///
+    /// 本测试把**每一种被声称支持的形态**逐个钉住：任一形态退回 nil 即失败。
+    /// （旧注释辩解"只认首个分隔符"是错的 —— 错在**分界字符选错集合**，
+    ///   不是"切几次"。）
+    func testIssueTimeAcceptsEveryDocumentedSeparatorVariant() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+
+        // 形态1：`/` 分隔 + 空格分界（**实测上游形态**，2026-10-06 逐字，161 条一致）
+        let slash = try XCTUnwrap(
+            NmcIssueTimeDecoder.date(from: "2026/10/06 20:28", timeZone: zone),
+            "🔴 实测形态 `/` 分隔必须能解析")
+        // 形态 2：`-` 分隔 + 空格分界（实测 `ISSUETIME` 形态，2026-10-07 21:29:27）
+        let dash = try XCTUnwrap(
+            NmcIssueTimeDecoder.date(from: "2026-10-06 21:29:27", timeZone: zone),
+            "`-` 分隔的日期必须能解析（d1ISSUETIME 就是这个形态）")
+        // 形态 3：`T` 分界（向前兼容）
+        let isoLike = try XCTUnwrap(
+            NmcIssueTimeDecoder.date(from: "2026/10/06T20:28", timeZone: zone),
+            "`T` 分界必须能解析")
+        // 形态 4：`-` 分隔 + `T` 分界
+        XCTAssertNotNil(NmcIssueTimeDecoder.date(from: "2026-10-06T20:28", timeZone: zone),
+                        "`-` + `T` 组合必须能解析")
+
+        let slashParts = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second],
+                                                 from: slash)
+        XCTAssertEqual(slashParts.year, 2026)
+        XCTAssertEqual(slashParts.month, 10)
+        XCTAssertEqual(slashParts.day, 6)
+        XCTAssertEqual(slashParts.hour, 20)
+        XCTAssertEqual(slashParts.minute, 28)
+        XCTAssertEqual(slashParts.second, 0, "实测形态无秒段 → 秒必须是 0 而非 nil")
+
+        // 形态 2 走的是 d1 的秒级通道，秒必须来自串本身。
+        let dashParts = calendar.dateComponents([.hour, .minute, .second], from: dash)
+        XCTAssertEqual(dashParts.hour, 21)
+        XCTAssertEqual(dashParts.minute, 29)
+        XCTAssertEqual(dashParts.second, 27, "秒段必须被解析（d1 的增量就在这 27 秒）")
+
+        let isoParts = calendar.dateComponents([.hour, .minute], from: isoLike)
+        XCTAssertEqual(isoParts.hour, 20)
+        XCTAssertEqual(isoParts.minute, 28)
+
+        // 🔴 只有日期、没有时间 → nil（**绝不**猜一个 00:00）。
+        XCTAssertNil(NmcIssueTimeDecoder.date(from: "2026/10/06", timeZone: zone),
+                     "缺时间分量必须返回 nil，绝不猜 00:00")
+        // 分隔符位置非法（串以分隔符开头 / 以分隔符结尾）→ nil。
+        XCTAssertNil(NmcIssueTimeDecoder.date(from: " 20:28", timeZone: zone))
+        XCTAssertNil(NmcIssueTimeDecoder.date(from: "2026/10/06 ", timeZone: zone))
+    }
+
     // MARK: - 7．四态触发条件（各自独立）
 
     /// `.none`：取数成功 + 上游确实为空 → `.none`（**不是** stale）。

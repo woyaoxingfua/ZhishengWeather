@@ -42,6 +42,10 @@ enum NmcIssueTimeDecoder {
     ///    空格或 `T` 分隔日期与时间、有/无秒段（实测上游恒为前两种形态，
     ///     后两种为**向前兼容**，不构成本仓对未实测行为的依赖 ——
     ///     解析失败一律返回 nil，绝不猜）。
+    ///     🔴 四种形态**都**必须真能解析，由
+    ///     `NmcAlarmTests.testIssueTimeAcceptsEveryDocumentedSeparatorVariant` 钉住
+    ///     —— 2026-10-07 发现本函数曾因**两个**叠加 bug（日期分界字符选错、
+    ///     无条件剥"秒"段）导致实测形态 100% 返回 nil。
     ///   - timeZone: 该预警**发布地**的时区（由调用方按选中城市注入，
     ///     见 D-4 纪律）。**不传则返回 nil** —— 宁可不解析，
     ///     也不拿设备时区把发布时刻算错。
@@ -50,22 +54,34 @@ enum NmcIssueTimeDecoder {
         // ① 时区必须显式注入（绝不 `.current`、绝不硬编码 +8）。
         guard let timeZone else { return nil }
 
-        // ② 切分日期段 / 时间段（接受 `/`、`-`、空格、`T` 四种分隔）。
-        let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        let separators: Set<Character> = ["/", "-", " ", "T", "t"]
-        guard let separatorIndex = normalized.firstIndex(where: { separators.contains($0) }),
-              separatorIndex != normalized.startIndex,
-              normalized.index(after: separatorIndex) < normalized.endIndex else {
+        // ② 切分日期段 / 时间段。
+        //
+        // 🔴 **日期与时间之间的分隔符只能是空格 / `T`**（2026-10-07 修正的真实 bug）。
+        //
+        // ⚠️ **曾经的 bug**：这里取「串里出现的**第一个**分隔符」来切，
+        // 而分隔符集合里同时含 `/`、`-`、`T`、`t`。于是：
+        //   "2026/10/06 20:28"    → 首个命中是**日期内部**的 `/` → datePart = "2026"
+        //   "2026-10-06 21:29:27" → 首个命中是日期内部的 `-` → datePart = "2026"
+        // 两者都被切成 1 个分量 → `count == 3` 不成立 → **返回 nil**。
+        // ⇒ **实测形态 `2026/10/06 20:28` 全部解析失败**，
+        // 每一条 NMC 预警的 `issuedAt` 都是 nil（→ 四态判定把真实预警当 stale）。
+        // ⚠️ 注意：旧注释里"只认首个分隔符"的辩解**是错的** ——
+        // 问题不在"切几次"，而在**把日期内部的 `/`、`-` 误当成了日期/时间的分界**。
+        // 正解是分两层：**先**按 空格/`T`/`t` 切出日期段与时间段，
+        // **再**在日期段内部按 `/` 或 `-` 切出年月日。
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let boundarySeparators: Set<Character> = [" ", "T", "t"]
+        guard let boundaryIndex = trimmed.firstIndex(where: { boundarySeparators.contains($0) }),
+              boundaryIndex != trimmed.startIndex,
+              trimmed.index(after: boundaryIndex) < trimmed.endIndex else {
             return nil
         }
-        let datePart = String(normalized[normalized.startIndex..<separatorIndex])
-        var timePart = String(normalized[normalized.index(after: separatorIndex)...])
-        // ⚠️ **只认首个分隔符**：日期段 `2026/10/06` 本身含 `/`，
-        //    若按"所有分隔符"切会碎成 `2026` / `10` / `06 20:28`。
-        //    故这里只切一次，再各自按各自的字符集切分。
+        let datePart = String(trimmed[trimmed.startIndex..<boundaryIndex])
+        let timePartRaw = String(trimmed[trimmed.index(after: boundaryIndex)...])
 
-        // ③ 日期段：yyyy-MM-dd（3 分量、纯数字）。
-        let dateComponents = datePart.split(whereSeparator: { separators.contains($0) })
+        // ③ 日期段：`yyyy/MM/dd` 或 `yyyy-MM-dd`（3 分量、纯数字）。
+        let dateSeparators: Set<Character> = ["/", "-"]
+        let dateComponents = datePart.split(whereSeparator: { dateSeparators.contains($0) })
         guard dateComponents.count == 3 else { return nil }
         guard let year = Self.scalarInt(dateComponents[0], digits: 4),
               let month = Self.scalarInt(dateComponents[1]),
@@ -73,24 +89,32 @@ enum NmcIssueTimeDecoder {
             return nil
         }
 
-        // ④ 时间段：HH:mm 或 HH:mm:ss（秒段可选，实测上游恒无秒段）。
-        //    秒段识别：取**最后一个** `:`，其后非空内容即秒。
+        // ④ 时间段：`HH:mm` 或 `HH:mm:ss`（**秒段可选**，实测上游恒为前者）。
+        //
+        // 🔴 **第二个真实 bug**（2026-10-07 修正）：原实现**无条件**取
+        // 「**最后一个** `:`」把尾段当**秒**剥掉，再要求剩下的是 2 段。
+        // 但实测形态 `20:28`（**无秒段**）的尾段是**分钟** `28`：
+        //   "20:28" → 误把 "28" 当秒剥掉 → 剩 "20" → 只有 1 段 → `count == 2`
+        //   不成立 → **返回 nil**。
+        // ⚠️ 旧注释写着"实测上游恒无秒段"，代码却恰恰**只**在有秒段时才正确
+        // —— 注释与实现自相矛盾，正是这个 bug 的藏身处。
+        // ⇒ 即便修好 ② 的日期分界，`"2026/10/06 20:28"` 仍会返回 nil。
+        // 两个 bug **叠加**才导致实测形态 100% 解析失败。
+        //
+        // 正解：**先**按 `:` 切，再**按段数**裁定 —— 2 段 = HH:mm，3 段 = HH:mm:ss。
         var second = 0
-        if let lastColon = timePart.lastIndex(of: ":") {
-            let tail = String(timePart[timePart.index(after: lastColon)...])
-            if !tail.isEmpty {
-                guard let parsedSecond = Self.scalarInt(Substring(tail)) else { return nil }
-                second = parsedSecond
-                timePart = String(timePart[timePart.startIndex..<lastColon])
-            }
-        }
+        var timePart = timePartRaw
         // 去掉可能存在的毫秒小数部分（`20:28:30.123`）：实测上游不会出现，
         // 这里兼容它只是因为「解析失败返回 nil」已足够安全，不需要更多保证。
         if let dotIndex = timePart.firstIndex(of: ".") {
             timePart = String(timePart[timePart.startIndex..<dotIndex])
         }
         let timeComponents = timePart.split(separator: ":", omittingEmptySubsequences: false)
-        guard timeComponents.count == 2 else { return nil }
+        guard timeComponents.count == 2 || timeComponents.count == 3 else { return nil }
+        if timeComponents.count == 3 {
+            guard let parsedSecond = Self.scalarInt(timeComponents[2]) else { return nil }
+            second = parsedSecond
+        }
         guard let hour = Self.scalarInt(timeComponents[0]),
               let minute = Self.scalarInt(timeComponents[1]) else {
             return nil

@@ -95,8 +95,20 @@ final class MarineFloodSourcesTests: XCTestCase {
                       + "（写在主站 api.open-meteo.com 上一律 404），实际=\(absolute)")
         XCTAssertEqual(absolute.components(separatedBy: "marine-api.open-meteo.com").count - 1, 1,
                        "不得新增第二条 marine 请求 URL")
-        XCTAssertFalse(absolute.contains("api.open-meteo.com/v1/marine"),
-                       "不得把 marine 请求挂到主站路径上（实测 404）")
+        // 🔴 锚**host**，不用子串（2026-10-07 修正的测试缺陷）。
+        //
+        // ⚠️ 旧写法`!absolute.contains("api.open-meteo.com/v1/marine")`
+        // **永远为假**：正确 host 是 `marine-api.open-meteo.com`，它本身就
+        // **包含**子串 `api.open-meteo.com/v1/marine` ⇒ 该断言与本函数
+        // 第一条 `hasPrefix("https://marine-api...")` 断言**自相矛盾**，
+        // 两条不可能同时通过。这不是 marine 端点写错了，是**守卫写法错了**。
+        //
+        // 意图（"不得把 marine 挂到主站路径上，实测 404"）的正确表达是
+        // **host 精确等于 marine 子域**，而不是子串否定。
+        XCTAssertEqual(url.host, "marine-api.open-meteo.com",
+                       "marine 请求必须打到独立子域（主站 api.open-meteo.com上一律 404）")
+        XCTAssertNotEqual(url.host, "api.open-meteo.com",
+                          "🔴 不得把 marine 请求挂到主站 host 上（实测 404）")
 
         let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         let names = items.map(\.name)

@@ -10,6 +10,7 @@
 //    ② 平移量换算链正确（米 → mapPoint → 点），且与解析式交叉一致；
 //    ③ **平移量在 z4–z7 全区间都 < 1 设备像素**（@1x/@2x）——
 //       即"平了也看不见"这个结论是可执行的，不是口头断言；
+//       ⚠️ **@3x + z7 是例外**（广州 1.400 px，确实看得见），故不能一概声称。
 //    ④ 惰性证明 `correctionIsInertAcrossRadarZooms` **仍然为真**
 //       （像素级平移**不改变瓦片请求**，故三档 URL 仍相同 —— 这正是
 //        平移与"切档"两条路的关键区别）。
@@ -76,6 +77,14 @@ final class MapKitTranslationCapabilityTests: XCTestCase {
     /// 🔴 **能力 ≠ 有用**：机制可行，但平移量 < 1 px（见下节）。
     ///
     /// 这条测试防止后来者只看到"机制可行"就宣称"纠偏已实现"。
+    ///
+    /// ⚠️ **2026-10-07：这条断言曾经是红的（CI 报"即便 @2x 也 ≥1 px"），
+    /// 而错的是实现、不是这条断言。** 根因：`zoomScale` 把
+    /// `contentScaleFactor` 也乘了进去，`magnitudeDevicePixels` 又乘一遍
+    /// ⇒ `csf` 被平方，@2x 读数虚高一倍（北京 1.393 px，真值 0.697）。
+    /// 昨天那份"552 瓦片穷举最大 0.931 px、0 个 ≥ 1"的结论**是对的**
+    /// （它按"缩放因子只施加一次"算的），代码与它不一致⇒ 改代码。
+    /// 本条断言与全部量级期望值**一个字符都没改**。
     func testTranslationCapabilityDoesNotImplyVisibleCorrection() {
         XCTAssertTrue(CoordinateTransform.Evidence.translationViaDrawHookAvailable)
         // 在最有利于"看得见"的档位（@2x，雷达最大 zoom）上，
@@ -135,35 +144,62 @@ final class PixelShiftUnitConversionTests: XCTestCase {
             7: 1_222.992
         ]
         for (zoom, analytic) in expected {
-            let scale = CoordinateTransform.zoomScale(atZoom: zoom,
-                                                     tileEdge: 256,
-                                                     contentScaleFactor: 1)
+            let scale = CoordinateTransform.zoomScale(atZoom: zoom, tileEdge: 256)
             let metersPerPoint = 1.0 / (CoordinateTransform.mapPointsPerMeter(atLatitude: 0) * scale)
             XCTAssertEqual(metersPerPoint, analytic, accuracy: 0.5,
                            "z\(zoom) 换算链与解析式不吻合（赤道处）")
         }
     }
 
-    /// `zoomScale` 随 zoom 线性翻倍、随 contentScaleFactor 线性放大。
-    func testZoomScaleScalesLinearly() {
-        let z7 = CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256, contentScaleFactor: 1)
-        let z4 = CoordinateTransform.zoomScale(atZoom: 4, tileEdge: 256, contentScaleFactor: 1)
+    /// `zoomScale` 随 zoom 线性翻倍。
+    ///
+    /// ⚠️ **它不随 `contentScaleFactor` 变**（2026-10-07 修正的实现 bug）。
+    /// 缩放因子由 `PixelShiftProbe.magnitudeDevicePixels` **恰好施加一次**；
+    /// 若`zoomScale` 里也乘一遍，`csf` 会被平方（@2x 读数虚高一倍）。
+    /// `testMagnitudePointsAreIndependentOfContentScale` 是这条的端到端 counterpart。
+    func testZoomScaleScalesLinearlyWithZoomOnly() {
+        let z7 = CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256)
+        let z4 = CoordinateTransform.zoomScale(atZoom: 4, tileEdge: 256)
         XCTAssertEqual(z7 / z4, 8.0, accuracy: 0.0001)
-        let z7At2x = CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256, contentScaleFactor: 2)
-        XCTAssertEqual(z7At2x / z7, 2.0, accuracy: 0.0001)
+    }
+
+    /// 🔴 **回归护栏**：`csf` 只能被施加**一次**（这是 2026-10-07 修掉的真实 bug）。
+    ///
+    /// 曾经的 `zoomScale` 把 `contentScaleFactor` 乘了进去，而
+    /// `magnitudeDevicePixels` 又乘一次⇒ @2x 读数是正确值的 2 倍
+    /// （北京 1.393 px，真值 0.697）。本测试从**两个方向**钉住"恰好一次"：
+    ///① 点量不随 csf 变（缩放因子不该进 `zoomScale`）；
+    /// ② 设备像素量 = 点量 × csf，且严格线性。
+    func testMagnitudePointsAreIndependentOfContentScale() {
+        let at1x = CoordinateTransform.pixelShiftProbe(longitude: 116.3970, latitude: 39.9090,
+                                                       zoom: 7, tileEdge: 256,
+                                                       contentScaleFactor: 1)
+        let at2x = CoordinateTransform.pixelShiftProbe(longitude: 116.3970, latitude: 39.9090,
+                                                       zoom: 7, tileEdge: 256,
+                                                       contentScaleFactor: 2)
+        let at3x = CoordinateTransform.pixelShiftProbe(longitude: 116.3970, latitude: 39.9090,
+                                                       zoom: 7, tileEdge: 256,
+                                                       contentScaleFactor: 3)
+        //① 点量与 csf 无关 —— `zoomScale` 的单位是点/mapPoint，不含设备像素比。
+        XCTAssertEqual(at2x.magnitudePoints, at1x.magnitudePoints, accuracy: 0.000001,
+                       "🔴 点量不得随 contentScaleFactor 变（csf 被平方的征兆）")
+        XCTAssertEqual(at3x.magnitudePoints, at1x.magnitudePoints, accuracy: 0.000001)
+        // ② 设备像素量 = 点量 × csf，严格线性一次。
+        XCTAssertEqual(at2x.magnitudeDevicePixels, at1x.magnitudeDevicePixels * 2,
+                       accuracy: 0.000001,
+                       "🔴 设备像素量应恰好是点量的 2 倍（@2x），不得是 4 倍")
+        XCTAssertEqual(at3x.magnitudeDevicePixels, at1x.magnitudeDevicePixels * 3,
+                       accuracy: 0.000001,
+                       "🔴 设备像素量应恰好是点量的 3 倍（@3x），不得是 9 倍")
     }
 
     /// 非法输入 → 0（不崩、不 NaN）。
     func testInvalidInputsReturnZero() {
-        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: -1, tileEdge: 256,
-                                                    contentScaleFactor: 1), 0)
-        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 0,
-                                                    contentScaleFactor: 1), 0)
-        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256,
-                                                    contentScaleFactor: 0), 0)
+        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: -1, tileEdge: 256), 0)
+        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 0), 0)
         XCTAssertEqual(CoordinateTransform.metersPerMapPoint(atLatitude: 91), 0)
         XCTAssertEqual(CoordinateTransform.metersPerMapPoint(atLatitude: 90), 0,
-                       "极点处 cos=0，米/点趋无穷 → 必须夹成 0 防除零")
+                       "极点处cos=0，米/点趋无穷 → 必须夹成 0 防除零")
     }
 }
 
@@ -193,8 +229,13 @@ final class PixelShiftMagnitudeTests: XCTestCase {
 
     /// z7 @2x：广州 0.933 px —— 参考点里最大，**仍未达 1 px**。
     ///
-    /// 实测（Python 穷举）：全中国境内 552 个z7 瓦片中心里最大的是
-    /// 113.906°E/28.304°N 的 **0.931 px**，**0 个** ≥ 1.0 px。
+    /// 实测（Python 独立复算，2026-10-07）：全中国境内 z7 瓦片中心 @2x 里最大的是
+    /// 113.906°E/28.304°N 的 **0.9313 px**，**0 个** ≥ 1.0 px。
+    /// ⚠️ 这些期望值在 2026-10-07 之前**一直是红的**（CI 报 1.38 px）——
+    /// 原因是实现在 `zoomScale` 里把 `csf` 也乘了，与 `magnitudeDevicePixels`
+    /// 重复（`csf` 被平方，@2x 虚高一倍）。**是实现错了，不是期望值错了**，
+    /// 故修实现、期望值**一个都没改**。见
+    /// `testMagnitudePointsAreIndependentOfContentScale`。
     func testLargestReferenceShiftAtZ7At2xIsStillUnderOnePixel() {
         let probe = CoordinateTransform.pixelShiftProbe(
             longitude: 113.2640, latitude: 23.1290,
@@ -221,9 +262,11 @@ final class PixelShiftMagnitudeTests: XCTestCase {
     /// 🆕 反向边界：**@3x + z7** 时部分参考点**确实越过** 1 px。
     ///
     /// ⚠️ 诚实记录：不是"任何设备上都看不见"。@3x 屏上 z7 可见
-    /// （实测海口 1.167 px、深圳 1.372 px、广州 1.400 px）。
-    /// 这让 `pixelShiftIsBelowOnePixelEverywhere` 的 @3x 判定**为false** ——
+    /// （Python 独立复算：广州 **1.4002 px**；海口/深圳同量级）。
+    /// 这让 `pixelShiftIsBelowOnePixelEverywhere` 的 @3x 判定**为 false** ——
     /// 故该函数只对 @1x/@2x 断言"全不可见"，**不**对 @3x 声称。
+    /// ⚠️ 注意这些 @3x 数值同样是在 `csf` 平方修正**之后**才成立的
+    /// （修正前是 4.2006 px —— 错的）。
     func testAt3xSomePointsDoBecomeVisible() {
         let probe = CoordinateTransform.pixelShiftProbe(
             longitude: 113.2640, latitude: 23.1290,
@@ -381,6 +424,12 @@ final class PixelShiftDiagnosticsTests: XCTestCase {
     }
 
     /// 定点格式辅助函数不得产出"-0.00" 这类看起来像 bug 的读数。
+    ///
+    /// ⚠️ **2026-10-07：`decimal2(1.4)` 曾返回 "1.39"（CI 报 1.39 ≠ 1.40）。
+    /// 错的是实现** —— 它对已经四舍五入过的定点数再做一次**截断**
+    /// （`Int((scaled - whole) * 100)`）：1.4 - 1.0 在二进制下是
+    /// 0.3999999999999999 → ×100 = 39.99999999999999 → 截断成 **39**。
+    /// ⇒ 期望值 "1.40" 是对的（1.4 就该显示 1.40），修实现。
     func testDecimalHelpersAvoidNegativeZero() {
         XCTAssertEqual(CoordinateTransform.decimal2(0.0), "0.00")
         XCTAssertEqual(CoordinateTransform.decimal2(0.004), "0.00")
@@ -390,6 +439,36 @@ final class PixelShiftDiagnosticsTests: XCTestCase {
         XCTAssertEqual(CoordinateTransform.decimal2(-1.4), "-1.40")
         XCTAssertEqual(CoordinateTransform.decimal1(2.0), "2.0")
         XCTAssertEqual(CoordinateTransform.decimal1(3.0), "3.0")
+    }
+
+    /// 🔴 **回归护栏**：`decimal2` / `decimal1` 的小数位必须**四舍五入**，不能截断。
+    ///
+    /// 截断会在"定点数的二进制表示略小于十进制直觉值"时集体下偏一格：
+    /// `1.4 - 1.0 == 0.3999999999999999` → ×100 = 39.999... → `Int(...)` = 39
+    /// → "1.39"。这在诊断面板上表现为**读数与真值差 0.01**，会被误当成"测量抖动"。
+    ///
+    /// 本测试把这批"看起来该进位"的边界值逐个钉住（Python 复刻同一套公式核对过）。
+    func testDecimalHelpersRoundRatherThanTruncate() {
+        // 二进制下略小于直觉值的经典样本 —— 截断实现全都会少1 格。
+        XCTAssertEqual(CoordinateTransform.decimal2(1.4), "1.40", "1.4 必须显示 1.40")
+        XCTAssertEqual(CoordinateTransform.decimal2(-1.4), "-1.40", "负值同样受影响")
+        XCTAssertEqual(CoordinateTransform.decimal2(1.1), "1.10")
+        XCTAssertEqual(CoordinateTransform.decimal2(2.9), "2.90")
+        XCTAssertEqual(CoordinateTransform.decimal2(1.393), "1.39", "修复前的实际读数")
+        XCTAssertEqual(CoordinateTransform.decimal2(0.7), "0.70")
+        // 三位输入按两位定点四舍五入，而非截断。
+        XCTAssertEqual(CoordinateTransform.decimal2(0.567), "0.57")
+        XCTAssertEqual(CoordinateTransform.decimal2(0.564), "0.56")
+        // 已在两位边界上的值不得被"进位"成 3 位（如 1.999 → 2.00，不是 2.100）。
+        XCTAssertEqual(CoordinateTransform.decimal2(1.999), "2.00")
+        XCTAssertEqual(CoordinateTransform.decimal2(9.999), "10.00")
+        XCTAssertEqual(CoordinateTransform.decimal2(-9.999), "-10.00")
+        // decimal1 同病：`1.4` 曾会显示成 "1.3"。
+        XCTAssertEqual(CoordinateTransform.decimal1(1.4), "1.4")
+        XCTAssertEqual(CoordinateTransform.decimal1(2.9), "2.9")
+        XCTAssertEqual(CoordinateTransform.decimal1(-1.4), "-1.4", "负号位也要保留")
+        XCTAssertEqual(CoordinateTransform.decimal1(0.25), "0.3", "0.25 → 四舍五入到 0.3")
+        XCTAssertEqual(CoordinateTransform.decimal1(1.0), "1.0")
     }
 }
 

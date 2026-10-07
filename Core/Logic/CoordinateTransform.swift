@@ -71,8 +71,13 @@
 //    （"Subclasses need to override the `draw(_:zoomScale:in:)` method"），
 //    在该方法内 `context.translateBy` 即可整体平移瓦片内容。
 //  · **但平移量在真机上不足一个像素**（实测，见 `subtileShiftPoints` 注释）：
-//    z7 全中国境内瓦片穷举，@2x 屏幕下最大 **0.931 pt**（深圳/广州一带），
-//    552 个瓦片里 **0个** 达到 1.0 pt。即：**平移了也看不见**。
+//    z7 全中国境内瓦片穷举，@1x/@2x 下最大 **0.933 设备像素**（z7@2x，广州），
+//    552 个瓦片里**0 个**达到 1.0 px。即：**平移了也看不见**。
+//    ⚠️ **@3x 是例外**：z7@3x 广州 1.400 px、海口 1.398 px，**看得见**。
+//    （2026-10-07 修正：此前 `zoomScale` 把 `contentScaleFactor` 也乘了进去，
+//    与 `magnitudeDevicePixels` 重复 → `csf` 被平方，@2x 读数虚高一倍，
+//    曾把本就 < 1 px 的量误报为「可见」。现缩放因子只施加一次。）
+//    ⚠️ 「0.933」这个数**是设备像素（@2x）**，不是点量 —— 点量是 0.4665。
 //  ⇒ 所以本轮实现的是**机制 + 可读的量化读数**，而不是"用户能看出对齐了"。
 //    详见 `PixelShiftProbe` 与 `RadarMapCard` 里的 `ShiftedTileOverlayRenderer`。
 //
@@ -432,11 +437,17 @@ enum CoordinateTransform {
         }
 
         /// 合成偏移折合多少**设备像素**（= 点 × contentScaleFactor）。
+        ///
+        /// 🔴 **这是全链路里唯一一处把 `contentScaleFactor` 乘进去的地方**
+        ///（2026-10-07 修正）。`zoomScale` 曾也乘了一遍 ⇒ `csf` 被平方，
+        /// @2x 读数虚高一倍。此处文档化的单位换算是**唯一真源**。
         var magnitudeDevicePixels: Double { magnitudePoints * contentScaleFactor }
 
         /// 🆕 **是否达到肉眼可辨的 1 设备像素**。
         ///
-        /// ⚠️ 这是本轮最要紧的判据：实测 `false` —— 即"平了也看不见"。
+        /// ⚠️ 这是本轮最要紧的判据。**实测（2026-10-07 修正 csf 平方后）**：
+        /// @1x / @2x 全区间为 `false`（最大 0.933 px@z7@2x，广州）；
+        /// **@3x + z7 为 `true`**（广州 1.400 px）—— 故不能一概声称"看不见"。
         var isVisuallyDetectable: Bool { magnitudeDevicePixels >= 1.0 }
 
         /// 单行摘要（进诊断面板；**必须**带"方向未验证"字样，见`summary`）。
@@ -489,6 +500,21 @@ enum CoordinateTransform {
     /// 一个层级 `z` 的世界宽 `2^z` 个瓦片，每瓦片 `tileEdge` 点
     /// → 世界宽 `2^z × tileEdge` 点，除以世界 mapPoint 宽度即得。
     ///
+    /// 🔴 **本函数与 `contentScaleFactor` 无关**（2026-10-07 修正的真实 bug）。
+    ///
+    /// ⚠️ **曾经的 bug**：签名里带 `contentScaleFactor` 且乘了进去，而
+    /// `PixelShiftProbe.magnitudeDevicePixels` **又乘了一遍**
+    /// → `csf` 被平方。后果：@2x 读数是正确值的 **2 倍**
+    /// （北京 1.393 px，而正确值 0.697），@3x 是 3 倍。
+    /// 那会让`isVisuallyDetectable` 在 @2x 就误报"可见"，也会让真正落到
+    /// `context.translateBy` 的量多挪一倍（`shiftVector` 同样走这条链）。
+    /// ⇒ 现在 `zoomScale` **只**给「点 / mapPoint」，缩放因子由
+    /// `magnitudeDevicePixels` **恰好施加一次**。
+    ///
+    /// 依据：`MKZoomScale` 的单位是**点 / mapPoint**（见 `Evidence` 的 MapKit
+    /// 引文），而 `context.translateBy` 收的也是**点** —— 二者都不含设备像素比。
+    /// 点 → 设备像素的换算**只**发生在 `magnitudeDevicePixels` 那一步。
+    ///
     /// ⚠️ `zoomScale` 实际由**相机**决定而非瓦片 z，故本函数只在
     /// 「瓦片恰好 1:1 显示」时精确；MapKit 在 overzoom 时会给出别的值。
     /// 但那不影响结论：平移量正比于 zoomScale（见 `pixelShiftProbe`）。
@@ -496,12 +522,11 @@ enum CoordinateTransform {
     /// - Parameters:
     ///   - zoom: Web Mercator 层级。
     ///   - tileEdge: 瓦片边长（点）。
-    ///   - contentScaleFactor: 内容缩放因子（1/@2x/@3x）。
     /// - Returns: 点 / mapPoint；参数非法返回 0。
-    static func zoomScale(atZoom zoom: Int, tileEdge: Double, contentScaleFactor: Double) -> Double {
-        guard zoom >= 0, tileEdge > 0, contentScaleFactor > 0 else { return 0 }
+    static func zoomScale(atZoom zoom: Int, tileEdge: Double) -> Double {
+        guard zoom >= 0, tileEdge > 0 else { return 0 }
         let shifted: Int = 1 << zoom
-        return Double(shifted) * tileEdge * contentScaleFactor / MKMapSizeWorldWidth
+        return Double(shifted) * tileEdge / MKMapSizeWorldWidth
     }
 
     /// 算「若在 `draw` 里平移内容，该平移多少点」。
@@ -527,9 +552,7 @@ enum CoordinateTransform {
                                 tileEdge: Double,
                                 contentScaleFactor: Double,
                                 name: String = "") -> PixelShiftProbe {
-        let scale = zoomScale(atZoom: zoom,
-                              tileEdge: tileEdge,
-                              contentScaleFactor: contentScaleFactor)
+        let scale = zoomScale(atZoom: zoom, tileEdge: tileEdge)
         let perMeter = mapPointsPerMeter(atLatitude: latitude)
         // 点 = 米 × mapPoint/米 × 点/mapPoint
         let eastPoints = eastMeters * perMeter * scale
@@ -597,8 +620,11 @@ enum CoordinateTransform {
     ///   - contentScaleFactor: 内容缩放因子。
     /// - Returns: `true` = 在`RadarTileZoomRange` 全区间、所有参考点都 < 1 px。
     ///
-    /// ⚠️ **实测为 `true`**（@1x/@2x；@3x 仅 z7 部分参考点越过 1 px）。
-    /// 这意味着「在 `draw` 里平移」虽然机制可行，但**默认档下用户看不出差别**。
+    /// ⚠️ **实测（2026-10-07 修正 `csf` 平方之后）**：
+    /// @1x 与 @2x 均为 `true`（z7@2x 最大 0.933 px = 广州）；
+    /// **@3x 为 `false`**（z7 广州 1.400 px）。
+    /// ⇒ 只能说「在默认档（@1x/@2x）下用户看不出差别」，**不能**声称
+    /// 「任何设备上都看不见」—— @3x 真机上是看得见的。
     static func pixelShiftIsBelowOnePixelEverywhere(tileEdge: Double,
                                                      contentScaleFactor: Double) -> Bool {
         let scales: [Double] = contentScaleFactor <= 1.0 ? [1.0, 2.0] : [contentScaleFactor]
@@ -626,7 +652,12 @@ enum CoordinateTransform {
         let scaled = (abs(value) * 100).rounded() / 100
         if scaled == 0 { return "0.00" }
         let whole = Int(scaled)
-        let frac = Int((scaled - Double(whole)) * 100)
+        // 🔴 小数位必须**四舍五入**，不能直接 `Int(...)` 截断（2026-10-07 修正）。
+        // 原因：`scaled - Double(whole)` 在二进制下常略小于整数，例如
+        // 1.4 → 1.4 - 1.0 = 0.3999999999999999 → ×100 = 39.99999999999999
+        // → `Int(...)` 截断成 **39** → 输出 "1.39"（真值 1.40）。
+        // 该值是**已四舍五入过两位**的定点数，故此处不会再引入新误差。
+        let frac = Int(((scaled - Double(whole)) * 100).rounded())
         return (value < 0 ? "-" : "") + String(whole) + "." + twoDigits(frac)
     }
 
@@ -638,8 +669,12 @@ enum CoordinateTransform {
         let scaled = (abs(value) * 10).rounded() / 10
         if scaled == 0 { return "0.0" }
         let whole = Int(scaled)
-        let frac = Int((scaled - Double(whole)) * 10)
-        return String(whole) + "." + String(frac)
+        // 同 `decimal2`：四舍五入而非截断（1.4 → "1.4" 而非 "1.3"）。
+        let frac = Int(((scaled - Double(whole)) * 10).rounded())
+        // ⚠️ 原实现**漏了负号**（只对 `decimal2` 处理了），负值会显示成 "-1.4"
+        // 被显示成 "1.4" —— 与 `decimal2` 行为不一致。2026-10-07 一并修正。
+        // （现生产调用点只传正的 `contentScaleFactor`，故此前无实际影响。）
+        return (value < 0 ? "-" : "") + String(whole) + "." + String(frac)
     }
 
     /// 两位补零（`decimal2` 的内部件）。
