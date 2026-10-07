@@ -100,6 +100,28 @@ struct SettingsView: View {
     /// 默认档与判断依据见 `CoordinateTransform.defaultMode`。
     @State private var radarCoordinateMode: CoordinateTransformMode
 
+    /// 雷达**像素级平移**档位（本页状态源）。
+    ///
+    /// ⚠️ **调试开关**，故与 `radarCoordinateMode` 同放设置页。
+    ///
+    /// ── 为什么本页必须有这个入口 ──────────────────────────────────────
+    /// `RadarPixelShiftStore.set` 若没有 UI 调用点，d715851 那套平移机制在真机上
+    /// 就是**死代码**：档位恒为 `.off`，`ShiftedTileOverlayRenderer` 的平移分支
+    /// 永远不执行，于是「纠偏方向对不对」连被回答的资格都没有。
+    /// 哪怕它平移量不足 1 像素、方向仍未验证 —— **能打开**是前提，
+    /// 否则那份诚实降级的注释也永远得不到实机检验。
+    ///
+    /// ⚠️ 与 `radarCoordinateMode` 是**两件事**：那三态改「请求哪个瓦片索引」，
+    /// 这里改「绘制时往哪挪」（`draw` 里 `translateBy`）。别混为一谈。
+    @State private var radarPixelShiftMode: RadarPixelShiftMode
+
+    /// 本机内容缩放因子（@1x/@2x/@3x），用于把平移量折成**设备像素**。
+    ///
+    /// ⚠️ 走 SwiftUI 的 `displayScale` 而**不**读 `UIScreen.main.scale`：
+    /// 后者需要 `import UIKit`，而本页只`import SwiftUI` + `WidgetKit`，
+    /// 且 `UIScreen.main` 是 `@MainActor` 隔离的。
+    @Environment(\.displayScale) private var displayScale: CGFloat
+
     /// 诊断记录读写层（App 本地 UserDefaults；换图标 / 实时活动 / 小组件共用一份）。
     private let diagnostics: AppDiagnosticsStore
 
@@ -116,6 +138,36 @@ struct SettingsView: View {
     /// 换了 Bundle Identifier 重签）→ 与现在完全一致，按钮照常可点。
     private var iconUnavailable: Bool {
         iconSwitcher.isUnavailableDueToLaunchServicesRejection()
+    }
+
+    /// 像素级平移的**当前读数**（档位 + 该档实际施加的平移量，设备像素）。
+    ///
+    /// ── 为什么读数取「参考点里的最大值」而不是某个城市──────────────────
+    /// 设置页没有地图中心（用户在主屏选城市），故无法给出"你这个位置"的读数。
+    /// 取参考点最大值是**偏保守**的一侧：它不会让平移量显得比实际更大，
+    /// 也避免用户以为自己那座城市特别大。
+    /// 实测最大为广州 z7@2x 的 **0.933 px**（`PixelShiftMagnitudeTests`）。
+    private var pixelShiftReading: String {
+        let scale = Double(displayScale)
+        let edge = Double(RadarTileURLBuilder.tileEdge)
+        let zoom = RadarTileZoomRange.maximum
+        var worst = 0.0
+        for point in CoordinateTransform.probeReferencePoints {
+            let probe = CoordinateTransform.pixelShiftProbe(longitude: point.longitude,
+                                                            latitude: point.latitude,
+                                                            zoom: zoom,
+                                                            tileEdge: edge,
+                                                            contentScaleFactor: scale)
+            worst = max(worst, probe.magnitudeDevicePixels)
+        }
+        let px = CoordinateTransform.decimal2(worst)
+        let base = "当前档位：" + radarPixelShiftMode.displayName
+            + " · 参考点最大平移量 " + px + " px@" + String(zoom)
+            + "/" + CoordinateTransform.decimal1(scale) + "x"
+        // 🔴 读数只报**事实**，不报效果判断：是否肉眼可辨由 `isVisuallyDetectable`
+        // 决定（@3x + z7 时部分参考点确实越过 1 px，故不能一概写「不可见」）。
+        return base + (worst >= 1.0 ? " · 已达 1 px，肉眼可能可辨"
+                                     : " · 不足 1 px，肉眼不可辨")
     }
 
     /// ⚠️ default 参数在调用方的非隔离上下文求值（Swift 并发模型），而
@@ -151,6 +203,8 @@ struct SettingsView: View {
         _liveActivityEnabled = State(initialValue: manager.isEnabled)
         // 雷达纠偏模式：读注入的 App 本地偏好（非法值已在 store 内回落默认档）。
         _radarCoordinateMode = State(initialValue: RadarCoordinateModeStore.current())
+        // 像素级平移档位：同一个理由（store 内回落 `.off` 这个安全默认档）。
+        _radarPixelShiftMode = State(initialValue: RadarPixelShiftStore.current())
     }
 
     var body: some View {
@@ -295,6 +349,35 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.secondaryText)
                 }
+
+                // ── 像素级平移（本轮新增的 UI 入口）─────────────────────────
+                //
+                // ⚠️ 下面是 d715851 那套机制的**唯一**写入口。它以前一个调用点都没有，
+                // 导致真机上档位恒为 `.off`、平移分支永不执行（死代码）。
+                //
+                // 🔴 文案纪律：本节的标题 / 说明**必须如实**——
+                // 平移量通常不足 1 像素（@2x 最大 0.93 px，见 `PixelShiftMagnitudeTests`），
+                // 且纠偏**方向尚未验证**。故这里**绝不**许诺「开启后回波会对齐」这类
+                // 误导描述；`RadarPixelShiftTests.testNoModeNameClaimsCorrectionIsApplied`
+                // 会把「声称纠偏已生效」那类措辞钉成断言禁区（下方说明文字同样受约束）。
+                Picker("像素平移（实验）", selection: $radarPixelShiftMode) {
+                    ForEach(RadarPixelShiftMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .onChange(of: radarPixelShiftMode) { _, newValue in
+                    // 🔴 接线点：`RadarPixelShiftStore.set` 全仓唯一调用点。
+                    RadarPixelShiftStore.set(newValue)
+                }
+                // 当前读数：档位 + 该档实际会施加的平移量（设备像素），开/关立刻可见。
+                Text(pixelShiftReading)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("平移量通常不足 1 像素，真机效果需自行确认；纠偏方向尚未验证，"
+                     + "两个平移档互为对照。平移只改绘制，不改请求的瓦片。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
             }
 
             Section("单位") {

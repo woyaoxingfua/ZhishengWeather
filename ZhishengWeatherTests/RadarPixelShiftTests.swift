@@ -533,3 +533,89 @@ final class PixelShiftPreservesInertnessTests: XCTestCase {
             "索引路径依旧惰性")
     }
 }
+
+// MARK: - 五、🔴 设置页接线：写入 → store 读回（本轮新增）
+
+/// **本轮要修的正是那个真阻塞**：`RadarPixelShiftStore.set` 全仓零调用点，
+/// 设置页没有平移 Picker ⇒ 真机上档位恒为 `.off`，d715851 的平移机制是死代码。
+///
+///⚠️ 下面两条测试分别锁「**能写进store**」与「**UI 里真有调用点**」——
+/// 后者防的正是本项目栽过的那次「组件交付了但没接进渲染路径」。
+final class PixelShiftSettingsWiringTests: XCTestCase {
+
+    /// 🔴 设置页写入 → `RadarPixelShiftStore.current()` 读回（**往返**）。
+    ///
+    /// ⚠️ `RadarPixelShiftStore` 写的是 `UserDefaults.standard`（**不接受注入 suite**，
+    /// 与 `UnitPreference` / `AppearanceStore` 不同）⇒ 本测试必须**快照-复原**，
+    /// 否则会污染单测宿主的真实偏好。复原放在 `defer`，失败也照样执行。
+    func testStoreWriteThenReadBackRoundTrips() {
+        let savedValue = UserDefaults.standard.string(forKey: RadarPixelShiftStore.key)
+        defer {
+            if let savedValue {
+                UserDefaults.standard.set(savedValue, forKey: RadarPixelShiftStore.key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: RadarPixelShiftStore.key)
+            }
+        }
+
+        for mode in RadarPixelShiftMode.allCases {
+            RadarPixelShiftStore.set(mode)
+            XCTAssertEqual(RadarPixelShiftStore.current(), mode,
+                           "设置页选「\(mode.displayName)」后应能读回同一档位")
+            XCTAssertEqual(UserDefaults.standard.string(forKey: RadarPixelShiftStore.key),
+                           mode.rawValue,
+                           "落盘值应逐字等于 rawValue（偏好键 \(RadarPixelShiftStore.key)）")
+        }
+    }
+
+    /// 🔴 **接线护栏**：设置页源码里必须真的调`RadarPixelShiftStore.set`。
+    ///
+    /// ── 为什么还要扫源码 ──────────────────────────────────────────────
+    /// 上一条只能证明 store 自身能往返，**证不了 UI 事件真的调了它**。
+    /// 而「交付了组件却没接进渲染路径」正是本项目栽过的大亏：
+    /// 编译过、测试全过、就是没人调用。故此处直接扫源码求证。
+    ///
+    /// 失败时**如实报错**不静默跳过（否则这条护栏退化为恒真）。
+    func testSettingsViewActuallyCallsTheStoreSetter() {
+        let path = Self.repositoryRoot() + "/ZhishengWeather/SettingsView.swift"
+        guard let source = try? String(contentsOfFile: path, encoding: .utf8) else {
+            return XCTFail("读不到设置页源码：\(path)")
+        }
+        XCTAssertTrue(source.contains("RadarPixelShiftStore.set("),
+                      "🔴 设置页没有调用 RadarPixelShiftStore.set( —— "
+                      + "平移档位真机恒为 .off，d715851 的机制是死代码")
+        // 平移 Picker 必须存在（否则上面的调用点也不可达）。
+        XCTAssertTrue(source.contains("RadarPixelShiftMode.allCases"),
+                      "设置页应遍历 RadarPixelShiftMode.allCases 渲染三档 Picker")
+        XCTAssertTrue(source.contains("$radarPixelShiftMode"),
+                      "设置页应有绑定 $radarPixelShiftMode 的 Picker 控件")
+    }
+
+    /// 🔴 诚实纪律**延伸到设置页**：本页新增的平移文案不得声称已纠偏/ 已对齐。
+    ///
+    /// `testNoModeNameClaimsCorrectionIsApplied` 只钉住 `displayName`；
+    /// 但说明文字是**另一处**能误导用户的地方，故同样划为禁区。
+    func testSettingsCopyDoesNotClaimCorrectionIsApplied() {
+        let path = Self.repositoryRoot() + "/ZhishengWeather/SettingsView.swift"
+        guard let source = try? String(contentsOfFile: path, encoding: .utf8) else {
+            return XCTFail("读不到设置页源码：\(path)")
+        }
+        for banned in ["已纠偏", "已对齐", "纠偏开关"] {
+            XCTAssertFalse(source.contains(banned),
+                           "🔴 设置页文案不得出现「\(banned)」—— 会让用户以为纠偏已生效")
+        }
+        // 反向：必须**如实**写明「不足 1 像素」与「方向未验证」这两条实情。
+        XCTAssertTrue(source.contains("不足 1 像素"),
+                      "设置页应如实写明平移量通常不足 1 像素")
+        XCTAssertTrue(source.contains("方向尚未验证"),
+                      "设置页应如实写明纠偏方向尚未验证")
+    }
+
+    /// 仓库根目录（`#filePath` 向上两级）。
+    private static func repositoryRoot() -> String {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // ZhishengWeatherTests
+            .deletingLastPathComponent()   // 仓库根
+            .path
+    }
+}
