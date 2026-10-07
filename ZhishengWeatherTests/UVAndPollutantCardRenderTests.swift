@@ -50,6 +50,7 @@ final class UVAndPollutantCardRenderTests: XCTestCase {
 
     // MARK: - 五档配色齐全（不允许有档位漏掉）
 
+    @MainActor
     func testEveryLevelHasAColor() {
         for level in UVIndexLevel.allCases {
             _ = UVIndexCard.color(for: level)
@@ -72,8 +73,8 @@ final class UVAndPollutantCardRenderTests: XCTestCase {
 
     // MARK: - 分项卡：整行全缺测的行被过滤
 
-    private func point(_ pm25: Double?, pm10: Double?, o3: Double?,
-                       no2: Double?, so2: Double?, co: Double?) -> AqiHourlyPoint {
+    private func point(_ pm25: Double?, _ pm10: Double?, _ o3: Double?,
+                       _ no2: Double?, _ so2: Double?, _ co: Double?) -> AqiHourlyPoint {
         AqiHourlyPoint(time: Date(timeIntervalSince1970: 1_789_833_600),
                        usAqi: 60, pm25: pm25, pm10: pm10,
                        carbonMonoxide: co, nitrogenDioxide: no2,

@@ -89,8 +89,8 @@ final class CoordinateTransformEvidenceTests: XCTestCase {
         XCTAssertTrue(dts.contains("government-mandated"),
                       "DTS 引文应含 government-mandated（法定坐标系）")
 
-        let internal = CoordinateTransform.Evidence.appleDTSInternalRepresentationQuote
-        XCTAssertTrue(internal.contains("EPSG:3857"),
+        let internalQuote = CoordinateTransform.Evidence.appleDTSInternalRepresentationQuote
+        XCTAssertTrue(internalQuote.contains("EPSG:3857"),
                       "内部表示引文应含 EPSG:3857")
 
         let guide = CoordinateTransform.Evidence.archivedGuideProjectionQuote

@@ -696,7 +696,7 @@ final class RadarDiskEvictionTests: XCTestCase {
             candidate("c.png", 200, 40)
         ]
         let evicted = RadarDiskEviction.filesToEvict(files, capacityBytes: 100)
-        XCTAssertEqual(evicted.map(\.url.lastPathComponent), ["b.png"])
+        XCTAssertEqual(evicted.map(\.lastPathComponent), ["b.png"])
     }
 
     /// 未超上限 → 一个都不删。
@@ -726,7 +726,7 @@ final class RadarDiskEvictionTests: XCTestCase {
             candidate("middle.png", 200, 50)
         ]
         let evicted = RadarDiskEviction.filesToEvict(files, capacityBytes: 60)
-        XCTAssertEqual(evicted.map(\.url.lastPathComponent), ["oldest.png", "middle.png"])
+        XCTAssertEqual(evicted.map(\.lastPathComponent), ["oldest.png", "middle.png"])
     }
 }
 
