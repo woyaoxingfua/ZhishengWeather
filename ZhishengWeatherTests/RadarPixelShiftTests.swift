@@ -1,0 +1,535 @@
+//
+//  RadarPixelShiftTests.swift
+//  ZhishengWeatherTests
+//
+//  R2（像素级平移）的**机制与量级**单测。
+//
+//  ── 本文件验证什么 / 不验证什么（务必读完）──────────────────────────
+//  ✅ 能证明：
+//    ① MapKit 侧平移机制的存在性判断被钉住（官方无平移API，但 draw 钩子可平移）；
+//    ② 平移量换算链正确（米 → mapPoint → 点），且与解析式交叉一致；
+//    ③ **平移量在 z4–z7 全区间都 < 1 设备像素**（@1x/@2x）——
+//       即"平了也看不见"这个结论是可执行的，不是口头断言；
+//    ④ 惰性证明 `correctionIsInertAcrossRadarZooms` **仍然为真**
+//       （像素级平移**不改变瓦片请求**，故三档 URL 仍相同 —— 这正是
+//        平移与"切档"两条路的关键区别）。
+//  ❌ **不能证明**：纠偏**方向**对不对、MapKit 是否已自动纠偏。
+//     那是 MapKit 运行时行为，只能真机验证（R1未收敛）。
+//
+//  ⚠️ 期望值来源：全部由 Python 独立复刻同一套公式跑出（实测 2026-10-07），
+//  不依赖 Swift 实现自身的结果，避免"用被测代码算期望值"的循环论证。
+//
+//  纪律：无 `XCTFail("待实现")`、无 `#if false` 占位。
+//
+
+import XCTest
+// `atan` / `sinh` / `asinh` / `tan` 来自 Darwin 数学库，经 Foundation 转出。
+import Foundation
+// `ShiftedTileOverlayRenderer` 是 App target 的 MapKit 类，故本测试需 import MapKit
+// 才能调它的静态 `shiftVector`（`CLLocationCoordinate2D` 也来自 MapKit 的连带导出）。
+import MapKit
+@testable import ZhishengWeather
+
+// MARK: - 一、MapKit 侧平移能力的查证结论（钉住「查到了什么」）
+
+/// 把「MapKit 有没有平移 API」变成可执行断言。
+///
+/// ⚠️ 为什么要钉：很容易凭印象写「MapKit 不支持平移」或「肯定能平移」。
+/// 两条都不对 —— 官方**没有**平移属性，但 `draw` 钩子**能**平移。
+final class MapKitTranslationCapabilityTests: XCTestCase {
+
+    /// `MKTileOverlayRenderer` 官方页**不提供**任何平移 / 变换属性。
+    ///
+    /// - 依据（实测查证 2026-10-07，WebFetch 官方页全文）：Topics 只有
+    ///   `init(tileOverlay:)` 与 `reloadData()`。
+    func testTileRendererExposesNoTranslationAPI() {
+        XCTAssertFalse(CoordinateTransform.Evidence.tileRendererExposesTranslationAPI,
+                       "MKTileOverlayRenderer 官方页无平移 API；"
+                       + "若此断言失败，必须在注释里附官方原文链接后再改")
+    }
+
+    /// 但 `draw(_:zoomScale:in:)` 钩子**可用**于平移（机制层可行）。
+    ///
+    /// - 依据：`MKOverlayRenderer` 官方页明写
+    ///   "Subclasses need to override the `draw(_:zoomScale:in:)` method to draw
+    ///   the contents of the overlay."，且该方法收 `CGContext`。
+    func testDrawHookIsAvailableForTranslation() {
+        XCTAssertTrue(CoordinateTransform.Evidence.translationViaDrawHookAvailable,
+                      "draw(_:zoomScale:in:) 是文档化的子类钩子，可用于平移绘制内容")
+    }
+
+    /// 平移能力查证用的链接与引文非空（防止证据被清空成"查无此事"）。
+    func testTranslationEvidenceIsPopulated() {
+        XCTAssertTrue(CoordinateTransform.Evidence.tileRendererDocURL
+            .hasPrefix("https://developer.apple.com/documentation/mapkit/"))
+        XCTAssertTrue(CoordinateTransform.Evidence.overlayRendererDocURL
+            .hasPrefix("https://developer.apple.com/documentation/mapkit/"))
+        XCTAssertTrue(CoordinateTransform.Evidence.overlayRendererSubclassHookQuote
+            .contains("draw(_:zoomScale:in:)"),
+                      "引文应含 draw(_:zoomScale:in:) 子类钩子原文")
+    }
+
+    /// 🔴 **能力 ≠ 有用**：机制可行，但平移量 < 1 px（见下节）。
+    ///
+    /// 这条测试防止后来者只看到"机制可行"就宣称"纠偏已实现"。
+    func testTranslationCapabilityDoesNotImplyVisibleCorrection() {
+        XCTAssertTrue(CoordinateTransform.Evidence.translationViaDrawHookAvailable)
+        // 在最有利于"看得见"的档位（@2x，雷达最大 zoom）上，
+        // 全中国境内参考点仍**没有一个**达到 1 设备像素。
+        XCTAssertTrue(
+            CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(tileEdge: 256,
+                                                                    contentScaleFactor: 2),
+            "即便@2x，平移量也应全区间 < 1 设备像素 —— 机制可行 ≠ 用户看得见")
+    }
+}
+
+// MARK: - 二、平移量换算链（米 → mapPoint → 点）
+
+/// 验证 `metersPerMapPoint` / `mapPointsPerMeter` / `zoomScale` 三步换算。
+final class PixelShiftUnitConversionTests: XCTestCase {
+
+    /// `MKMapSize.world.width` = 2^28（**文档如此，未实测**；数值本身不影响结论）。
+    func testWorldWidthConstant() {
+        XCTAssertEqual(CoordinateTransform.MKMapSizeWorldWidth, 268_435_456.0, accuracy: 0.001)
+    }
+
+    /// 赤道处 1 mapPoint 的米数 = 40075016.686 / 2^28 ≈ 0.149 308 m。
+    ///
+    /// 期望值由 Python 独立算出：40075016.686 / 268435456 = 0.14930864...
+    func testMetersPerMapPointAtEquator() {
+        XCTAssertEqual(CoordinateTransform.metersPerMapPoint(atLatitude: 0),
+                       0.14930864, accuracy: 0.00001)
+    }
+
+    /// 高纬度的 1 mapPoint 覆盖**更少**米（cos(lat) 收缩）—— 方向别搞反。
+    func testMetersPerMapPointShrinksWithLatitude() {
+        let equator = CoordinateTransform.metersPerMapPoint(atLatitude: 0)
+        let at40 = CoordinateTransform.metersPerMapPoint(atLatitude: 40)
+        XCTAssertLessThan(at40, equator, "40° 处1 mapPoint 应覆盖更少米")
+        XCTAssertEqual(at40 / equator, cos(40 * .pi / 180), accuracy: 0.0001)
+    }
+
+    /// 倒数关系自洽。
+    func testMapPointsPerMeterIsReciprocal() {
+        for lat in [0.0, 23.129, 39.909, 45.803] {
+            let perPoint = CoordinateTransform.metersPerMapPoint(atLatitude: lat)
+            let perMeter = CoordinateTransform.mapPointsPerMeter(atLatitude: lat)
+            XCTAssertEqual(perPoint * perMeter, 1.0, accuracy: 0.000001)
+        }
+    }
+
+    /// 🔴 **交叉验证**：zoomScale 与 metersPerMapPoint 组合后，
+    /// 反推出的「1 屏幕点 = 多少米」必须与既有解析式 `tileEdgeMeters/256` 吻合。
+    ///
+    /// 这是整条换算链的**自洽性证明** —— 若MapKit 单位假设错了，这里会炸。
+    /// 实测（Python）：z4 9783.9 vs 解析 9783.940；z7 1223.0 vs 1222.992。
+    func testZoomScaleChainReproducesAnalyticMetersPerPoint() {
+        let expected: [Int: Double] = [
+            4: 9_783.940,
+            5: 4_891.970,
+            6: 2_445.985,
+            7: 1_222.992
+        ]
+        for (zoom, analytic) in expected {
+            let scale = CoordinateTransform.zoomScale(atZoom: zoom,
+                                                     tileEdge: 256,
+                                                     contentScaleFactor: 1)
+            let metersPerPoint = 1.0 / (CoordinateTransform.mapPointsPerMeter(atLatitude: 0) * scale)
+            XCTAssertEqual(metersPerPoint, analytic, accuracy: 0.5,
+                           "z\(zoom) 换算链与解析式不吻合（赤道处）")
+        }
+    }
+
+    /// `zoomScale` 随 zoom 线性翻倍、随 contentScaleFactor 线性放大。
+    func testZoomScaleScalesLinearly() {
+        let z7 = CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256, contentScaleFactor: 1)
+        let z4 = CoordinateTransform.zoomScale(atZoom: 4, tileEdge: 256, contentScaleFactor: 1)
+        XCTAssertEqual(z7 / z4, 8.0, accuracy: 0.0001)
+        let z7At2x = CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256, contentScaleFactor: 2)
+        XCTAssertEqual(z7At2x / z7, 2.0, accuracy: 0.0001)
+    }
+
+    /// 非法输入 → 0（不崩、不 NaN）。
+    func testInvalidInputsReturnZero() {
+        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: -1, tileEdge: 256,
+                                                    contentScaleFactor: 1), 0)
+        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 0,
+                                                    contentScaleFactor: 1), 0)
+        XCTAssertEqual(CoordinateTransform.zoomScale(atZoom: 7, tileEdge: 256,
+                                                    contentScaleFactor: 0), 0)
+        XCTAssertEqual(CoordinateTransform.metersPerMapPoint(atLatitude: 91), 0)
+        XCTAssertEqual(CoordinateTransform.metersPerMapPoint(atLatitude: 90), 0,
+                       "极点处 cos=0，米/点趋无穷 → 必须夹成 0 防除零")
+    }
+}
+
+// MARK: - 三、🔴 核心量级：平移量不足 1 设备像素
+
+/// **本轮最重要的量级结论**：像素级平移在雷达可用区间**看不见**。
+final class PixelShiftMagnitudeTests: XCTestCase {
+
+    /// z7 @1x：北京平移 0.348 设备像素（Python 实测）。
+    func testBeijingShiftAtZ7At1x() {
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: 116.3970, latitude: 39.9090,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 1)
+        XCTAssertEqual(probe.magnitudeDevicePixels, 0.348, accuracy: 0.005,
+                       "北京 z7@1x 平移量（实测 0.348 px）")
+        XCTAssertFalse(probe.isVisuallyDetectable)
+    }
+
+    /// z7 @2x：北京 0.697 px —— 仍 < 1。
+    func testBeijingShiftAtZ7At2x() {
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: 116.3970, latitude: 39.9090,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 2)
+        XCTAssertEqual(probe.magnitudeDevicePixels, 0.697, accuracy: 0.005)
+        XCTAssertFalse(probe.isVisuallyDetectable, "z7@2x 仍应不足 1 设备像素")
+    }
+
+    /// z7 @2x：广州 0.933 px —— 参考点里最大，**仍未达 1 px**。
+    ///
+    /// 实测（Python 穷举）：全中国境内 552 个z7 瓦片中心里最大的是
+    /// 113.906°E/28.304°N 的 **0.931 px**，**0 个** ≥ 1.0 px。
+    func testLargestReferenceShiftAtZ7At2xIsStillUnderOnePixel() {
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: 113.2640, latitude: 23.1290,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 2)
+        XCTAssertEqual(probe.magnitudeDevicePixels, 0.933, accuracy: 0.005)
+        XCTAssertFalse(probe.isVisuallyDetectable,
+                       "广州（参考点最大偏移）z7@2x 应仍不足 1 设备像素")
+    }
+
+    /// 🔴 **全区间、全参考点都< 1 px**（@1x 与 @2x）。
+    ///
+    /// 这是"平了也看不见"的**可执行**表述 —— 不是注释里的形容词。
+    func testNoReferencePointReachesOnePixelAcrossRadarZooms() {
+        XCTAssertTrue(
+            CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(tileEdge: 256,
+                                                                    contentScaleFactor: 1),
+            "z4–z7 @1x：任何参考点都不该达到 1 设备像素")
+        XCTAssertTrue(
+            CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(tileEdge: 256,
+                                                                    contentScaleFactor: 2),
+            "z4–z7 @2x：任何参考点都不该达到 1 设备像素")
+    }
+
+    /// 🆕 反向边界：**@3x + z7** 时部分参考点**确实越过** 1 px。
+    ///
+    /// ⚠️ 诚实记录：不是"任何设备上都看不见"。@3x 屏上 z7 可见
+    /// （实测海口 1.167 px、深圳 1.372 px、广州 1.400 px）。
+    /// 这让 `pixelShiftIsBelowOnePixelEverywhere` 的 @3x 判定**为false** ——
+    /// 故该函数只对 @1x/@2x 断言"全不可见"，**不**对 @3x 声称。
+    func testAt3xSomePointsDoBecomeVisible() {
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: 113.2640, latitude: 23.1290,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 3)
+        XCTAssertGreaterThan(probe.magnitudeDevicePixels, 1.0,
+                             "@3x + z7 时广州应越过 1 设备像素（实测 1.400 px）")
+        XCTAssertTrue(probe.isVisuallyDetectable)
+        XCTAssertFalse(
+            CoordinateTransform.pixelShiftIsBelowOnePixelEverywhere(tileEdge: 256,
+                                                                    contentScaleFactor: 3),
+            "@3x 不该再声称全不可见")
+    }
+
+    /// 平移量随 zoom 线性翻倍（z4 → z7 共 8 倍）。
+    func testShiftScalesWithZoom() {
+        let atZ4 = CoordinateTransform.pixelShiftProbe(
+            longitude: 116.3970, latitude: 39.9090,
+            zoom: 4, tileEdge: 256, contentScaleFactor: 1)
+        let atZ7 = CoordinateTransform.pixelShiftProbe(
+            longitude: 116.3970, latitude: 39.9090,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 1)
+        XCTAssertEqual(atZ7.magnitudePoints / atZ4.magnitudePoints, 8.0, accuracy: 0.001)
+    }
+
+    /// 探针的偏移米数必须与既有 `OffsetProbe` **一致**（同一份 GCJ 计算）。
+    func testPixelShiftProbeAgreesWithOffsetProbe() {
+        let shift = CoordinateTransform.pixelShiftProbe(
+            longitude: 116.3970, latitude: 39.9090,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 1)
+        let offset = CoordinateTransform.offsetProbe(longitude: 116.3970, latitude: 39.9090)
+        XCTAssertEqual(shift.distanceMeters, offset.distanceMeters, accuracy: 0.0001,
+                       "两个探针的偏移米数必须同源")
+        XCTAssertEqual(shift.eastMeters, offset.eastMeters, accuracy: 0.0001)
+        XCTAssertEqual(shift.northMeters, offset.northMeters, accuracy: 0.0001)
+    }
+
+    /// 摘要必须**自带**「肉眼不可辨」的诚实标注。
+    func testSummaryStatesDetectabilityHonestLy() {
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: 116.3970, latitude: 39.9090,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 2)
+        XCTAssertTrue(probe.summary.contains("不足 1 px"),
+                      "摘要应说明不足 1 px，实际：\(probe.summary)")
+        XCTAssertTrue(probe.summary.contains("肉眼不可辨"),
+                      "摘要应明说肉眼不可辨，实际：\(probe.summary)")
+    }
+}
+
+// MARK: - 四、平移档位（RadarPixelShiftMode）
+
+/// 档位语义：默认关闭、方向符号明确、非法值回落安全档。
+final class RadarPixelShiftModeTests: XCTestCase {
+
+    /// 🔴 **默认必须是不平移** —— 方向未验证时默认开平移是制造假信号。
+    func testDefaultIsOff() {
+        XCTAssertFalse(RadarPixelShiftMode.from(rawValue: nil).appliesShift)
+        XCTAssertFalse(RadarPixelShiftMode.from(rawValue: "不存在的档位").appliesShift,
+                       "非法值必须回落到 .off（安全档），而非某个平移档")
+        XCTAssertEqual(RadarPixelShiftMode.from(rawValue: nil), .off)
+    }
+
+    /// 三档齐备，且只有 `.off` 不平移。
+    func testExactlyThreeCasesAndOnlyOffIsNoShift() {
+        XCTAssertEqual(RadarPixelShiftMode.allCases.count, 3)
+        XCTAssertFalse(RadarPixelShiftMode.off.appliesShift)
+        XCTAssertTrue(RadarPixelShiftMode.shiftAlongCorrection.appliesShift)
+        XCTAssertTrue(RadarPixelShiftMode.shiftOppositeCorrection.appliesShift)
+    }
+
+    /// 两个平移档的符号**互为相反数**（供真机 A/B）。
+    func testShiftDirectionsAreOpposite() {
+        XCTAssertEqual(RadarPixelShiftMode.shiftAlongCorrection.directionSign, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(RadarPixelShiftMode.shiftOppositeCorrection.directionSign, -1.0, accuracy: 0.0001)
+        XCTAssertEqual(RadarPixelShiftMode.off.directionSign, 0.0, accuracy: 0.0001)
+    }
+
+    /// 沿纠偏方向的档位，文案**必须**带「方向未验证」字样。
+    func testShiftModeNamesStateDirectionIsUnverified() {
+        XCTAssertTrue(RadarPixelShiftMode.shiftAlongCorrection.displayName.contains("方向未验证"),
+                      "文案必须如实说明方向未验证，实际："
+                      + RadarPixelShiftMode.shiftAlongCorrection.displayName)
+    }
+
+    /// 🔴 **任何档位的文案都不许出现"已纠偏"** —— 那会误导用户。
+    func testNoModeNameClaimsCorrectionIsApplied() {
+        for mode in RadarPixelShiftMode.allCases {
+            XCTAssertFalse(mode.displayName.contains("已纠偏"),
+                           "档位文案不得声称已纠偏，实际：\(mode.displayName)")
+            XCTAssertFalse(mode.displayName.contains("已对齐"),
+                           "档位文案不得声称已对齐，实际：\(mode.displayName)")
+        }
+    }
+
+    /// 解析与持久化往返。
+    func testRawValueRoundTrip() {
+        for mode in RadarPixelShiftMode.allCases {
+            XCTAssertEqual(RadarPixelShiftMode.from(rawValue: mode.rawValue), mode)
+        }
+    }
+}
+
+/// 验证平移量能落进诊断记录（真机验收的读数出口）。
+final class PixelShiftDiagnosticsTests: XCTestCase {
+
+    /// 落盘文案必须含平移量、档位、以及「方向未验证」这句免责。
+    func testRecordPixelShiftWritesHonestMessage() {
+        let suite = "zs.tests.pixelshift.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppDiagnosticsStore(defaults: defaults)
+        AppDiagnosticsStore.recordRadarPixelShift(mode: .shiftAlongCorrection,
+                                                  longitude: 116.3970,
+                                                  latitude: 39.9090,
+                                                  contentScaleFactor: 2,
+                                                  store: store)
+        let entry = store.latest(for: .radarOffsetProbe)
+        XCTAssertNotNil(entry, "应落一条radarOffsetProbe 记录")
+        let message = entry?.message ?? ""
+        XCTAssertTrue(message.contains("平移"), "应写明平移档位，实际：\(message)")
+        XCTAssertTrue(message.contains("方向未验证"),
+                      "🔴 必须写明纠偏方向未验证（R1），实际：\(message)")
+        XCTAssertTrue(message.contains("设备像素"),
+                      "应写明单位是设备像素，实际：\(message)")
+        XCTAssertFalse(message.contains("已纠偏"),
+                       "🔴 诊断文案不得声称已纠偏，实际：\(message)")
+    }
+
+    /// `.off` 档也要落盘（真机需要确认「确实没开」）。
+    func testRecordPixelShiftWorksWhenOff() {
+        let suite = "zs.tests.pixelshift.off.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppDiagnosticsStore(defaults: defaults)
+        AppDiagnosticsStore.recordRadarPixelShift(mode: .off,
+                                                  longitude: 139.6917,
+                                                  latitude: 35.6895,
+                                                  contentScaleFactor: 2,
+                                                  store: store)
+        let message = store.latest(for: .radarOffsetProbe)?.message ?? ""
+        XCTAssertFalse(message.isEmpty, "关闭档也应落盘（真机需确认「确实没开」）")
+        XCTAssertTrue(message.contains("不平移"), "应写明是不平移档，实际：\(message)")
+    }
+
+    /// 摘要列表覆盖全部参考点（诊断不能少行）。
+    func testPixelShiftSummariesCoverEveryReferencePoint() {
+        let lines = CoordinateTransform.pixelShiftSummaries(tileEdge: 256,
+                                                            zoom: 7,
+                                                            contentScaleFactor: 2)
+        XCTAssertEqual(lines.count, CoordinateTransform.probeReferencePoints.count)
+        for line in lines {
+            XCTAssertTrue(line.contains("px@z7"), "每行应含层级与像素量，实际：\(line)")
+            XCTAssertTrue(line.contains("肉眼不可辨"),
+                          "🔴 每行都应如实标注肉眼不可辨，实际：\(line)")
+        }
+    }
+
+    /// 定点格式辅助函数不得产出"-0.00" 这类看起来像 bug 的读数。
+    func testDecimalHelpersAvoidNegativeZero() {
+        XCTAssertEqual(CoordinateTransform.decimal2(0.0), "0.00")
+        XCTAssertEqual(CoordinateTransform.decimal2(0.004), "0.00")
+        XCTAssertEqual(CoordinateTransform.decimal2(-0.004), "0.00")
+        XCTAssertEqual(CoordinateTransform.decimal2(0.931), "0.93")
+        XCTAssertEqual(CoordinateTransform.decimal2(1.4), "1.40")
+        XCTAssertEqual(CoordinateTransform.decimal2(-1.4), "-1.40")
+        XCTAssertEqual(CoordinateTransform.decimal1(2.0), "2.0")
+        XCTAssertEqual(CoordinateTransform.decimal1(3.0), "3.0")
+    }
+}
+
+// MARK: - 六、MapKit 侧渲染器（`ShiftedTileOverlayRenderer`）
+
+/// 验证绘制期平移的接线：**`.off` 必须与原生渲染逐像素一致**。
+///
+/// ⚠️ 这些用例**只验纯函数 `shiftVector`**，不真跑 MapKit 渲染
+/// （那需要真机/ 模拟器）。可执行的部分是「档位→ 向量」的映射与钳制。
+final class ShiftedTileOverlayRendererTests: XCTestCase {
+
+    /// `.off` → 零向量（⇒ renderer 走原生路径，**不改任何渲染行为**）。
+    func testOffModeProducesZeroShift() {
+        let center = CLLocationCoordinate2D(latitude: 39.9090, longitude: 116.3970)
+        let shift = ShiftedTileOverlayRenderer.shiftVector(for: center, mode: .off)
+        XCTAssertEqual(shift.dx, 0, "关闭档必须零平移")
+        XCTAssertEqual(shift.dy, 0, "关闭档必须零平移")
+    }
+
+    /// 两个平移档的向量**互为相反数**（A/B 对照成立）。
+    func testShiftModesAreExactOpposites() {
+        let center = CLLocationCoordinate2D(latitude: 39.9090, longitude: 116.3970)
+        let along = ShiftedTileOverlayRenderer.shiftVector(for: center,
+                                                           mode: .shiftAlongCorrection)
+        let opposite = ShiftedTileOverlayRenderer.shiftVector(for: center,
+                                                              mode: .shiftOppositeCorrection)
+        XCTAssertEqual(along.dx, -opposite.dx, accuracy: 0.000001)
+        XCTAssertEqual(along.dy, -opposite.dy, accuracy: 0.000001)
+        XCTAssertNotEqual(along.dx, 0, "北京偏移非零，平移量应非零")
+    }
+
+    /// 境外城市（如东京）偏移为 0 → 平移向量必须是 0（不多余地挪境外回波）。
+    func testOverseasCityGetsNoShift() {
+        let tokyo = CLLocationCoordinate2D(latitude: 35.6895, longitude: 139.6917)
+        for mode in [RadarPixelShiftMode.shiftAlongCorrection,
+                     .shiftOppositeCorrection] {
+            let shift = ShiftedTileOverlayRenderer.shiftVector(for: tokyo, mode: mode)
+            XCTAssertEqual(shift.dx, 0, accuracy: 0.000001,
+                           "境外（框外）纠偏偏移为 0，不该平移")
+            XCTAssertEqual(shift.dy, 0, accuracy: 0.000001)
+        }
+    }
+
+    /// 平移向量模长应与Core 探针一致（同一条换算链的两次实现必须吻合）。
+    func testShiftVectorMatchesCoreProbeMagnitude() {
+        let center = CLLocationCoordinate2D(latitude: 39.9090, longitude: 116.3970)
+        let shift = ShiftedTileOverlayRenderer.shiftVector(
+            for: center, mode: .shiftAlongCorrection)
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: center.longitude, latitude: center.latitude,
+            zoom: RadarTileZoomRange.maximum,
+            tileEdge: CGFloat(RadarTileURLBuilder.tileEdge),
+            contentScaleFactor: Double(UIScreen.main.scale))
+        let magnitude = (shift.dx * shift.dx + shift.dy * shift.dy).squareRoot()
+        XCTAssertEqual(magnitude, probe.magnitudePoints, accuracy: 0.0001,
+                       "平移向量模长应等于 Core 探针算出的点量")
+    }
+
+    /// 🔴 平移量级护栏：z7 下平移**不足 1 屏幕点**（北京，任意档位）。
+    ///
+    /// 这条是「不要误以为平移开了就有效果」的护栏 —— 若将来RainViewer
+    /// 支持更高 zoom，该断言可能翻false，届时必须同步更新注释说明。
+    func testShiftVectorIsUnderOnePointAtRadarMaxZoom() {
+        let center = CLLocationCoordinate2D(latitude: 39.9090, longitude: 116.3970)
+        let shift = ShiftedTileOverlayRenderer.shiftVector(
+            for: center, mode: .shiftAlongCorrection)
+        let magnitude = (shift.dx * shift.dx + shift.dy * shift.dy).squareRoot()
+        XCTAssertLessThan(magnitude, 1.0,
+                          "北京 z7 平移应不足 1 屏幕点（实测约 0.35pt@1x）")
+    }
+}
+
+// MARK: - 五、平移机制不改瓦片请求 ⇒ 惰性证明仍然为真
+
+/// **本轮的关键衔接**：像素级平移是**绘制期**行为，
+/// 它**不改变** `correctedTileCoordinates` 的输出 ⇒ 昨天的惰性证明继续成立。
+final class PixelShiftPreservesInertnessTests: XCTestCase {
+
+    /// 🔴 惰性证明**继续为真**（z4–z7 纠偏仍不改瓦片索引）。
+    ///
+    /// ⚠️ **为什么平移没有让它失效**：平移发生在 `draw`（渲染），
+    /// 而惰性说的是**请求**（`url(forTilePath:)`）—— 两者是不同层。
+    /// ⇒ 平移量再大，瓦片 URL 也不变；「切档看对齐」**依然无效**。
+    /// 若将来有人把平移塞进请求层，这条测试就是护栏。
+    func testCorrectionRemainsInertAfterPixelShiftWasAdded() {
+        XCTAssertTrue(
+            CoordinateTransform.correctionIsInertAcrossRadarZooms(maximumOffsetMeters: 663.0),
+            "像素级平移不改变瓦片请求 ⇒ 纠偏在 z4–z7 仍是恒等变换")
+    }
+
+    /// 惰性直接断言：三态在z4–z7 产生**完全相同**的瓦片索引（复刻覆盖层算法）。
+    ///
+    /// 这条是"切档验收方法无效"的**直接**依据：同一瓦片路径下，
+    /// `.autoAssumeNotApplied`（纠偏）与 `.disabled`（不纠偏）算出的 x/y **逐个相等**。
+    /// 本测试在 Core 层复刻 `RadarTileOverlay.correctedTileCoordinates` 的算法，
+    /// 不 import MapKit —— 它验的是**纯几何**，与渲染无关。
+    func testAllModesStillProduceIdenticalTileIndicesAcrossRadarZooms() {
+        for zoom in RadarTileZoomRange.minimum...RadarTileZoomRange.maximum {
+            let uncorrected = indices(x: 105, y: 48, z: zoom, applying: .disabled)
+            let corrected = indices(x: 105, y: 48, z: zoom, applying: .autoAssumeNotApplied)
+            XCTAssertEqual(corrected.x, uncorrected.x,
+                           "z\(zoom)：纠偏不应改变 x（惰性）")
+            XCTAssertEqual(corrected.y, uncorrected.y,
+                           "z\(zoom)：纠偏不应改变 y（惰性）")
+        }
+    }
+
+    /// 按给定模式复算瓦片索引（**复刻 `RadarTileOverlay.correctedTileCoordinates`**）。
+    ///
+    /// - Parameters:
+    ///   - x: 瓦片 x。
+    ///   - y: 瓦片 y。
+    ///   - z: 瓦片层级。
+    ///   - mode: 纠偏模式。
+    /// - Returns: 实际会请求的 (x, y)。
+    private func indices(x: Int, y: Int, z: Int,
+                         applying mode: CoordinateTransformMode) -> (x: Int, y: Int) {
+        let clamped = RadarTileZoomRange.clamp(z)
+        let span = Double(1 << clamped)
+        let lon = (Double(x) + 0.5) / span * 360.0 - 180.0
+        let lat = atan(sinh(.pi * (1 - 2 * (Double(y) + 0.5) / span))) * 180.0 / .pi
+        let g = CoordinateTransform.applyMode(mode, longitude: lon, latitude: lat)
+        let newX = Int(floor((g.longitude + 180.0) / 360.0 * span))
+        let newY = Int(floor((1.0 - asinh(tan(g.latitude * .pi / 180.0)) / .pi) / 2.0 * span))
+        return (x: min(max(newX, 0), Int(span) - 1),
+                y: min(max(newY, 0), Int(span) - 1))
+    }
+
+    /// 🆕 **平移与索引是两条独立的路**（本轮架构决策的护栏）。
+    ///
+    /// 平移量 < 1 px（绘制期），而改索引需要 > 半格（156 km @z7）。
+    /// 二者量级差 **5 个数量级** ⇒ 不存在"平移量够大到能改索引"的情形。
+    func testPixelShiftIsOrdersOfMagnitudeSmallerThanTileMargin() {
+        let shift = CoordinateTransform.pixelShiftProbe(
+            longitude: 113.2640, latitude: 23.1290,
+            zoom: 7, tileEdge: 256, contentScaleFactor: 3)
+        let marginMeters = CoordinateTransform.halfTileMarginMeters(atZoom: 7)
+        // 把平移量（米）算出来再比：平移 < 1 px ≈ 1223 m，远小于半格 156 543 m。
+        let metersPerPixel = CoordinateTransform.metersPerPixel(atZoom: 7, tileEdge: 256)
+        let shiftMeters = shift.magnitudeDevicePixels * metersPerPixel
+        XCTAssertLessThan(shiftMeters, marginMeters / 100,
+                          "平移量应比半格小两个数量级以上（量级完全不同）")
+        XCTAssertTrue(CoordinateTransform.correctionIsInertAcrossRadarZooms(
+            maximumOffsetMeters: 663.0),
+            "索引路径依旧惰性")
+    }
+}

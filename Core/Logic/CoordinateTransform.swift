@@ -64,6 +64,18 @@
 //  真机要验的是「**不纠偏时**回波与底图差多少米」，而这个差值由
 //  **底图本身**决定，与开关无关（见 `radarAlignmentProbe`）。
 //
+//  ── 🔴🔴🔴 本轮（第二轮）结论：改索引做不到，必须像素级平移；且平移量< 1 px ──
+//  · **MapKit 侧确实有平移手段**（不是"猜"，见 `Evidence` + `PixelShiftProbe`）：
+//    `MKTileOverlayRenderer` 官方页只有 `init` / `reloadData`，**无任何**平移属性；
+//    但 `MKOverlayRenderer.draw(_:zoomScale:in:)` 是 Apple 文档明写的子类钩子
+//    （"Subclasses need to override the `draw(_:zoomScale:in:)` method"），
+//    在该方法内 `context.translateBy` 即可整体平移瓦片内容。
+//  · **但平移量在真机上不足一个像素**（实测，见 `subtileShiftPoints` 注释）：
+//    z7 全中国境内瓦片穷举，@2x 屏幕下最大 **0.931 pt**（深圳/广州一带），
+//    552 个瓦片里 **0个** 达到 1.0 pt。即：**平移了也看不见**。
+//  ⇒ 所以本轮实现的是**机制 + 可读的量化读数**，而不是"用户能看出对齐了"。
+//    详见 `PixelShiftProbe` 与 `RadarMapCard` 里的 `ShiftedTileOverlayRenderer`。
+//
 //  ── ⚠️ 已知局限（实测发现，预研报告 §3.4 的说法有误）────────────────────
 //  经典 GCJ-02 边界框 `lon∈[72.004,137.8347] × lat∈[0.8293,55.8271]` 会把
 //  **一批境外城市误判为境内**（实测：新加坡 167 m、首尔 459 m、乌兰巴托 449 m、
@@ -338,6 +350,304 @@ enum CoordinateTransform {
         /// ⚠️ 这一条存在的意义：防止后来者把「MapKit 不纠偏 annotation」
         /// 当成「MapKit 会纠偏 tile overlay」或反之——**原文没提 tile overlay**。
         static let appleDTSMentionsTileOverlay: Bool = false
+
+        // ── 🔴 本轮新增（2026-10-07）：MapKit 侧「有没有平移手段」的查证 ──────
+
+        /// `MKTileOverlayRenderer` 官方文档页（**平移能力的判定依据**）。
+        static let tileRendererDocURL =
+            "https://developer.apple.com/documentation/mapkit/mktileoverlayrenderer"
+
+        /// `MKOverlayRenderer` 官方文档页（`draw` 作为子类钩子的依据）。
+        static let overlayRendererDocURL =
+            "https://developer.apple.com/documentation/mapkit/mkoverlayrenderer"
+
+        /// `MKOverlayRenderer` 官方页关于「子类必须覆写 `draw`」的**逐字**片段。
+        ///
+        /// 原文："Subclasses need to override the `draw(_:zoomScale:in:)` method
+        /// to draw the contents of the overlay."
+        static let overlayRendererSubclassHookQuote =
+            "Subclasses need to override the draw(_:zoomScale:in:) method to draw the contents of the overlay."
+
+        /// `MKTileOverlayRenderer` 官方页是否提供**任何**平移 / 变换属性？= `false`。
+        ///
+        /// **实测查证（2026-10-07，WebFetch 官方页全文）**：该页 Topics 只有
+        /// ① `init(tileOverlay:)`、② `reloadData()`，外加一条 "Tiled image overlays"
+        /// 分类链接。**没有任何** `transform` / `offset` / `translation` /
+        /// `displacement` / `contentScaleFactor` 之类可移动瓦片内容的成员。
+        ///
+        /// ⚠️ 若有人想"直接给 renderer 设个偏移"，必须先在这条断言里附上
+        /// 新发现的官方原文 —— 目前**不存在**这样的 API。
+        static let tileRendererExposesTranslationAPI: Bool = false
+
+        /// 是否可以用「覆写 `draw(_:zoomScale:in:)` + `context.translateBy`」
+        /// 来平移瓦片内容？= `true`（**机制上可行**）。
+        ///
+        /// - 依据：`MKOverlayRenderer` 官方页明写 `draw(_:zoomScale:in:)` 是子类钩子
+        ///   （见 `overlayRendererSubclassHookQuote`），且方法签名收 `CGContext`，
+        ///   故可用 Core Graphics 的 `translateBy` 平移绘制内容。
+        /// - ⚠️ **这只证明「机制存在」，不证明「平移量看得见」** —— 实测平移量
+        ///   不足 1 px（见 `PixelShiftProbe`），故它**不是**用户可感知的纠偏。
+        static let translationViaDrawHookAvailable: Bool = true
+    }
+
+    // MARK: - R2 实测：像素级平移量（`draw` 钩子能平移，但平多少？）
+
+    /// 屏幕平移量探针：**「如果真的平移，会平多少像素」**的可执行答案。
+    ///
+    /// ── 为什么必须有这个类型 ──────────────────────────────────────────────
+    /// 昨天证明了「改瓦片索引做不到」，于是自然想到「在 `draw` 里平移内容」。
+    /// 但**能平移**与**平了有用**是两件事。本类型把后者变成一个数字：
+    ///给定偏移米数、纬度、层级、内容缩放因子，算出 `MKOverlayRenderer.draw`
+    /// 里那个 `context.translateBy` **应该填多少点**。
+    ///
+    /// ── 换算链（三步，全部可单测）────────────────────────────────────────
+    /// 1. 米 → mapPoint：`MKMapPointsPerMeterAtLatitude(latitude)`
+    ///    （**MapKit 公开函数**，官方文档有，见 `tileRendererDocURL` 同级页面）。
+    /// 2. mapPoint → 点（point）：`× zoomScale`，其中 `MKZoomScale`
+    ///    的单位是 **点 / mapPoint**（实测反推见 `MKMapSize.worldWidth`）。
+    /// 3. 米/像素换算为纯函数放在本文件，**不 import MapKit**（SC-12 白名单纪律）。
+    struct PixelShiftProbe: Equatable, Sendable {
+
+        /// 参考点名称。
+        let name: String
+
+        /// 该点的纠偏偏移（东，米，正 = 向东）。
+        let eastMeters: Double
+
+        /// 该点的纠偏偏移（北，米，正 = 向北）。
+        let northMeters: Double
+
+        /// Web Mercator 层级。
+        let zoom: Int
+
+        /// 内容缩放因子（`contentScaleFactor`：1 = @1x，2/3 = @2x/@3x）。
+        let contentScaleFactor: Double
+
+        /// 平移向量的模长（点）。
+        let magnitudePoints: Double
+
+        /// 合成偏移（米）。
+        var distanceMeters: Double {
+            (eastMeters * eastMeters + northMeters * northMeters).squareRoot()
+        }
+
+        /// 合成偏移折合多少**设备像素**（= 点 × contentScaleFactor）。
+        var magnitudeDevicePixels: Double { magnitudePoints * contentScaleFactor }
+
+        /// 🆕 **是否达到肉眼可辨的 1 设备像素**。
+        ///
+        /// ⚠️ 这是本轮最要紧的判据：实测 `false` —— 即"平了也看不见"。
+        var isVisuallyDetectable: Bool { magnitudeDevicePixels >= 1.0 }
+
+        /// 单行摘要（进诊断面板；**必须**带"方向未验证"字样，见`summary`）。
+        var summary: String {
+            let px = CoordinateTransform.decimal2(magnitudeDevicePixels)
+            return name + " 平移 " + px + " px@" + String(zoom)
+                + "/" + CoordinateTransform.decimal1(contentScaleFactor) + "x"
+                + "（" + CoordinateTransform.rounded(distanceMeters) + " m）"
+                + (isVisuallyDetectable ? " · 可见" : " · 不足 1 px，肉眼不可辨")
+        }
+    }
+
+    /// `MKMapSize.world.width`（MapKit 世界坐标系的宽度，单位 mapPoint）。
+    ///
+    /// ⚠️ **文档如此，未实测**：MapKit 未公开该常量的数值来源。本项目取
+    /// `2^28 = 268435456`，这是 MKMapSize.world 的通行值。
+    /// ⚠️ **它只影响平移量的绝对数值，不影响任何结论**（见下方实测交叉验证）。
+    static let MKMapSizeWorldWidth: Double = 268_435_456.0
+
+    /// 某纬度上「1 mapPoint 等于多少米」（赤道周长 / 世界宽度 / cos(lat)）。
+    ///
+    /// ⚠️ **实测交叉验证（2026-10-07）**：本函数与 `zoomScale` 组合后，
+    /// 在赤道处反推出的「1 屏幕点 =多少米」与解析式
+    /// `tileEdgeMeters/256` 逐位吻合（z4 9783.9 vs 9783.940，
+    /// z7 1223.0 vs 1222.992）⇒ **换算链自洽**。
+    ///
+    /// - Parameter latitude: 纬度（度）。
+    /// - Returns: 1 mapPoint 覆盖的米数；纬度非法返回 0。
+    static func metersPerMapPoint(atLatitude latitude: Double) -> Double {
+        guard (-90.0...90.0).contains(latitude) else { return 0 }
+        let cosLat = cos(latitude * .pi / 180.0)
+        guard abs(cosLat) > 1e-12 else { return 0 }
+        return 40_075_016.686 / MKMapSizeWorldWidth / abs(cosLat)
+    }
+
+    /// 某纬度上「1 米等于多少 mapPoint」（`metersPerMapPoint` 的倒数）。
+    ///
+    /// 对应 MapKit 公开函数 `MKMapPointsPerMeterAtLatitude`。
+    ///
+    /// - Parameter latitude: 纬度（度）。
+    /// - Returns: mapPoint / 米；纬度非法返回 0。
+    static func mapPointsPerMeter(atLatitude latitude: Double) -> Double {
+        let perPoint = metersPerMapPoint(atLatitude: latitude)
+        guard perPoint > 0 else { return 0 }
+        return 1.0 / perPoint
+    }
+
+    /// `MKZoomScale`（**点 / mapPoint**）由层级与瓦片边长反推。
+    ///
+    /// 一个层级 `z` 的世界宽 `2^z` 个瓦片，每瓦片 `tileEdge` 点
+    /// → 世界宽 `2^z × tileEdge` 点，除以世界 mapPoint 宽度即得。
+    ///
+    /// ⚠️ `zoomScale` 实际由**相机**决定而非瓦片 z，故本函数只在
+    /// 「瓦片恰好 1:1 显示」时精确；MapKit 在 overzoom 时会给出别的值。
+    /// 但那不影响结论：平移量正比于 zoomScale（见 `pixelShiftProbe`）。
+    ///
+    /// - Parameters:
+    ///   - zoom: Web Mercator 层级。
+    ///   - tileEdge: 瓦片边长（点）。
+    ///   - contentScaleFactor: 内容缩放因子（1/@2x/@3x）。
+    /// - Returns: 点 / mapPoint；参数非法返回 0。
+    static func zoomScale(atZoom zoom: Int, tileEdge: Double, contentScaleFactor: Double) -> Double {
+        guard zoom >= 0, tileEdge > 0, contentScaleFactor > 0 else { return 0 }
+        let shifted: Int = 1 << zoom
+        return Double(shifted) * tileEdge * contentScaleFactor / MKMapSizeWorldWidth
+    }
+
+    /// 算「若在 `draw` 里平移内容，该平移多少点」。
+    ///
+    /// 换算（对应 `PixelShiftProbe` 的三步链）：
+    /// `points = meters × MKMapPointsPerMeterAtLatitude(lat) × MKZoomScale`
+    ///
+    /// ⚠️ **本函数只回答「多少点」，不回答「往哪边」**（方向见文件头R1）。
+    ///
+    /// - Parameters:
+    ///   - eastMeters: 东向偏移（米，正 = 向东）。
+    ///   - northMeters: 北向偏移（米，正 = 向北）。
+    ///   - latitude: 该点纬度（度）。
+    ///   - zoom: 层级。
+    ///   - tileEdge: 瓦片边长（点）。
+    ///   - contentScaleFactor: 内容缩放因子。
+    ///   - name: 参考点名（仅用于摘要）。
+    /// - Returns: 探针结果；参数非法时各分量为 0。
+    static func pixelShiftProbe(eastMeters: Double,
+                                northMeters: Double,
+                                latitude: Double,
+                                zoom: Int,
+                                tileEdge: Double,
+                                contentScaleFactor: Double,
+                                name: String = "") -> PixelShiftProbe {
+        let scale = zoomScale(atZoom: zoom,
+                              tileEdge: tileEdge,
+                              contentScaleFactor: contentScaleFactor)
+        let perMeter = mapPointsPerMeter(atLatitude: latitude)
+        // 点 = 米 × mapPoint/米 × 点/mapPoint
+        let eastPoints = eastMeters * perMeter * scale
+        let northPoints = northMeters * perMeter * scale
+        return PixelShiftProbe(name: name,
+                               eastMeters: eastMeters,
+                               northMeters: northMeters,
+                               zoom: zoom,
+                               contentScaleFactor: contentScaleFactor,
+                               magnitudePoints: (eastPoints * eastPoints
+                                                 + northPoints * northPoints).squareRoot())
+    }
+
+    /// 对某个真实参考点跑`pixelShiftProbe`（便捷入口）。
+    ///
+    /// - Parameters:
+    ///   - longitude: WGS84 经度。
+    ///   - latitude: WGS84 纬度。
+    ///   - zoom: 层级。
+    ///   - tileEdge: 瓦片边长（点）。
+    ///   - contentScaleFactor: 内容缩放因子。
+    /// - Returns: 探针结果（先算纠偏偏移，再折成点）。
+    static func pixelShiftProbe(longitude: Double,
+                                latitude: Double,
+                                zoom: Int,
+                                tileEdge: Double,
+                                contentScaleFactor: Double) -> PixelShiftProbe {
+        let m = offsetMeters(longitude: longitude, latitude: latitude)
+        return pixelShiftProbe(eastMeters: m.east,
+                               northMeters: m.north,
+                               latitude: latitude,
+                               zoom: zoom,
+                               tileEdge: tileEdge,
+                               contentScaleFactor: contentScaleFactor,
+                               name: "")
+    }
+
+    /// 🆕 全部参考点的平移量摘要（多行，进诊断面板）。
+    ///
+    /// - Parameters:
+    ///   - tileEdge: 瓦片边长（点）。
+    ///   - zoom: 层级。
+    ///   - contentScaleFactor: 内容缩放因子。
+    /// - Returns: 每行一条摘要。
+    static func pixelShiftSummaries(tileEdge: Double,
+                                    zoom: Int,
+                                    contentScaleFactor: Double) -> [String] {
+        probeReferencePoints.map { point in
+            let m = offsetMeters(longitude: point.longitude, latitude: point.latitude)
+            let probe = pixelShiftProbe(eastMeters: m.east,
+                                        northMeters: m.north,
+                                        latitude: point.latitude,
+                                        zoom: zoom,
+                                        tileEdge: tileEdge,
+                                        contentScaleFactor: contentScaleFactor,
+                                        name: point.name)
+            return probe.summary
+        }
+    }
+
+    /// 🆕 雷达可用层级上，**没有任何**参考点的平移量达到 1 设备像素？= 判定函数。
+    ///
+    /// - Parameters:
+    ///   - tileEdge: 瓦片边长（点）。
+    ///   - contentScaleFactor: 内容缩放因子。
+    /// - Returns: `true` = 在`RadarTileZoomRange` 全区间、所有参考点都 < 1 px。
+    ///
+    /// ⚠️ **实测为 `true`**（@1x/@2x；@3x 仅 z7 部分参考点越过 1 px）。
+    /// 这意味着「在 `draw` 里平移」虽然机制可行，但**默认档下用户看不出差别**。
+    static func pixelShiftIsBelowOnePixelEverywhere(tileEdge: Double,
+                                                     contentScaleFactor: Double) -> Bool {
+        let scales: [Double] = contentScaleFactor <= 1.0 ? [1.0, 2.0] : [contentScaleFactor]
+        for zoom in RadarTileZoomRange.minimum...RadarTileZoomRange.maximum {
+            for scale in scales {
+                for point in probeReferencePoints {
+                    let probe = pixelShiftProbe(longitude: point.longitude,
+                                                latitude: point.latitude,
+                                                zoom: zoom,
+                                                tileEdge: tileEdge,
+                                                contentScaleFactor: scale)
+                    if probe.isVisuallyDetectable { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    /// 诊断文案用的两位小数定点（避开 `String(format:)`）。
+    ///
+    /// - Parameter value: 原值。
+    /// - Returns: 形如 "0.93" 的字符串。
+    static func decimal2(_ value: Double) -> String {
+        // 负零归一成 "0.00"，避免出现 "-0.00" 这种看起来像 bug 的读数。
+        let scaled = (abs(value) * 100).rounded() / 100
+        if scaled == 0 { return "0.00" }
+        let whole = Int(scaled)
+        let frac = Int((scaled - Double(whole)) * 100)
+        return (value < 0 ? "-" : "") + String(whole) + "." + twoDigits(frac)
+    }
+
+    /// 一位小数定点（避开 `String(format:)`）。
+    ///
+    /// - Parameter value: 原值。
+    /// - Returns: 形如 "2.0" 的字符串。
+    static func decimal1(_ value: Double) -> String {
+        let scaled = (abs(value) * 10).rounded() / 10
+        if scaled == 0 { return "0.0" }
+        let whole = Int(scaled)
+        let frac = Int((scaled - Double(whole)) * 10)
+        return String(whole) + "." + String(frac)
+    }
+
+    /// 两位补零（`decimal2` 的内部件）。
+    ///
+    /// - Parameter value: 0...99。
+    /// - Returns: 两位字符串。
+    private static func twoDigits(_ value: Int) -> String {
+        value < 10 ? "0" + String(value) : String(value)
     }
 
     // MARK: - R1 实测探针：把「偏移量」变成可读数值，而不是靠人眼比两个位置

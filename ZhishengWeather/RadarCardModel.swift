@@ -85,6 +85,18 @@ final class RadarCardModel {
         RadarCoordinateModeStore.current()
     }
 
+    /// 像素级平移档位（**计算属性**，理由同 `coordinateMode`）。
+    ///
+    /// 🆕 与 `coordinateMode` **物理层不同**：那个改瓦片请求（URL），
+    /// 这个改绘制期平移（`CGContext`）。昨天已证明前者在 z4–z7 是恒等变换，
+    /// 故纠偏若要真正生效，只能走这个。
+    ///
+    /// ⚠️ **默认 `.off`**：平移量实测不足 1 设备像素（`CoordinateTransform.PixelShiftProbe`），
+    /// 且**方向未验证**（R1）。默认开一个方向未知的亚像素平移会制造假信号。
+    var pixelShiftMode: RadarPixelShiftMode {
+        RadarPixelShiftStore.current()
+    }
+
     /// 地图中心（WGS84，来自选中城市）。
     private(set) var center: CLLocationCoordinate2Like = .beijing
 
@@ -244,6 +256,25 @@ final class RadarCardModel {
     /// - Parameter store: 诊断层（默认 `.shared`；单测可注入独立 suite）。
     func recordOffsetProbe(store: AppDiagnosticsStore = .shared) {
         AppDiagnosticsStore.recordRadarOffsetProbe(mode: coordinateMode, store: store)
+    }
+
+    /// 🆕 把**像素级平移量**写进诊断记录（R2；真机验收真正要看的那个数）。
+    ///
+    /// 为什么必须单独一个出口：`recordOffsetProbe` 报的是「偏移多少米 /
+    /// 多少**瓦片**像素」，而用户看到的是**屏幕** —— 平移量在 z4–z7 实测
+    /// 都 < 1 设备像素，这才是"切档看不出差别"的根因。
+    ///
+    /// - Parameters:
+    ///   - contentScaleFactor: 内容缩放因子（**由调用方传入**，
+    ///     本文件不引 UIKit，见 `AppDiagnosticsStore` 文件头纪律）。
+    ///   - store: 诊断层（默认 `.shared`）。
+    func recordPixelShiftProbe(contentScaleFactor: Double,
+                               store: AppDiagnosticsStore = .shared) {
+        AppDiagnosticsStore.recordRadarPixelShift(mode: pixelShiftMode,
+                                                  longitude: center.longitude,
+                                                  latitude: center.latitude,
+                                                  contentScaleFactor: contentScaleFactor,
+                                                  store: store)
     }
 }
 

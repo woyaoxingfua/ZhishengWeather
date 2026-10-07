@@ -20,6 +20,14 @@
 //  故纠偏模式由 `RadarCoordinateModeStore`（App 本地偏好）驱动，
 //  **默认档未经真机验证**，见 `CoordinateTransform.defaultMode` 的判断依据。
 //
+//  ── 🆕 本轮：像素级平移机制（`ShiftedTileOverlayRenderer`）────────────────
+//  昨天证明「改瓦片索引」在 z4–z7 是恒等变换，做不到纠偏。本轮改用
+//  **绘制期平移**：`MKOverlayRenderer.draw(_:zoomScale:in:)` 是 Apple 文档
+//  明写的子类钩子，在其中`context.translateBy` 即可整体平移瓦片内容。
+//  ⚠️ **但实测平移量不足 1 设备像素**（z7 @2x 最大 0.931 pt，境内 552 瓦片
+//  0个达到 1.0 px）→ **平了也看不见**。故本卡上的平移档默认**关闭**，
+//  且UI 必须如实显示「平移量 = N px · 纠偏方向未验证」，**不得**写成"已纠偏"。
+//
 //  ── 许可（硬要求，非可选）─────────────────────────────────────────────
 //  RainViewer 要求显示署名：本卡**左下角**固定显示
 //  "Weather data by RainViewer" + 指向 rainviewer.com 的链接。
@@ -179,6 +187,216 @@ final class RadarTileOverlay: MKTileOverlay {
     }
 }
 
+// MARK: - 像素级平移偏好（App 本地）
+
+/// 雷达**像素级平移**档位（**独立于 `CoordinateTransformMode`**）。
+///
+/// ── 为什么必须与 `CoordinateTransformMode` 分开 ──────────────────────────
+/// 三态开关控制的是**「请求哪个瓦片索引」**，本enum 控制的是**「绘制时往哪挪」**。
+/// 两者物理层完全不同（前者改 URL，后者改 `CGContext`），混在一起会让
+/// "切档= 改请求" 的旧心智模型继续误导人——而昨天已证明那个模型在 z4–z7
+/// 上根本产生不了差别。
+///
+/// ── 为什么默认 `.off` ────────────────────────────────────────────────────
+/// 平移量实测不足 1 设备像素（见 `CoordinateTransform.PixelShiftProbe`），
+/// **用户看不出差别**；而**方向仍未定**（R1，真机才能定）。在这种状态下
+/// 默认开启一个方向未知的亚像素平移，是**制造假信号**：用户会以为"纠偏生效了"。
+/// 故默认关闭，让机制可被显式打开做 A/B，但绝不冒充已纠偏。
+enum RadarPixelShiftMode: String, CaseIterable, Sendable {
+
+    /// 不平移（**默认**）。
+    case off
+
+    /// 按「正向纠偏量」平移（东→西、北→南）。
+    ///
+    /// ⚠️ 方向来自「假定 MapKit 未对 overlay 施加偏移」这一**未验证**假设。
+    case shiftAlongCorrection
+
+    /// 按「反向」平移（东→东、北→北）。
+    ///
+    /// 与 `shiftAlongCorrection` 互为对照，用于真机 A/B。
+    case shiftOppositeCorrection
+
+    /// 是否实际施加平移。
+    var appliesShift: Bool { self != .off }
+
+    /// 设置页/ 诊断文案。
+    var displayName: String {
+        switch self {
+        case .off:                return "不平移（默认）"
+        case .shiftAlongCorrection:   return "平移· 沿纠偏方向（方向未验证）"
+        case .shiftOppositeCorrection: return "平移 · 反纠偏方向（对照）"
+        }
+    }
+
+    /// 该档位的方向符号：`+1` = 沿纠偏方向，`-1` = 反向，`0` = 不平移。
+    var directionSign: Double {
+        switch self {
+        case .off:                     return 0
+        case .shiftAlongCorrection:    return 1
+        case .shiftOppositeCorrection:  return -1
+        }
+    }
+
+    /// 解析（非法值回落 `.off` —— **安全的**默认）。
+    static func from(rawValue: String?) -> RadarPixelShiftMode {
+        guard let rawValue, let mode = RadarPixelShiftMode(rawValue: rawValue) else {
+            return .off
+        }
+        return mode
+    }
+}
+
+/// 像素级平移偏好读写（**App 本地 UserDefaults**）。
+enum RadarPixelShiftStore {
+
+    /// 偏好键。
+    static let key = "zs.radar.pixelShiftMode"
+
+    /// 读取当前档位（非法值回落 `.off`）。
+    static func current() -> RadarPixelShiftMode {
+        RadarPixelShiftMode.from(rawValue: UserDefaults.standard.string(forKey: key))
+    }
+
+    /// 写入档位。
+    static func set(_ mode: RadarPixelShiftMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: key)
+    }
+}
+
+// MARK: - 像素级平移渲染器
+
+/// **在绘制期平移瓦片内容**的渲染器（`MKTileOverlayRenderer` 子类）。
+///
+/// ── 机制（路径 A，可行性已查证）────────────────────────────────────────
+/// `MKTileOverlayRenderer` 官方页**只有** `init(tileOverlay:)` 与 `reloadData()`，
+/// **没有任何**平移属性（实测查证，见 `CoordinateTransform.Evidence.tileRendererExposesTranslationAPI`）。
+/// 但 `MKOverlayRenderer.draw(_:zoomScale:in:)` 是 Apple 文档**明写**的子类钩子：
+/// "Subclasses need to override the `draw(_:zoomScale:in:)` method to draw the
+/// contents of the overlay."（见 `Evidence.overlayRendererSubclassHookQuote`）
+/// 该方法收 `CGContext`，故用 Core Graphics 的 `translateBy` 即可整体平移。
+///
+/// ── ⚠️🔴 两条必须一起读的诚实说明 ──────────────────────────────────────
+/// 1. **平移量不足 1 设备像素**（实测：z7 @2x 全中国境内最大 **0.931 pt**，
+///    552 个瓦片里**0 个** ≥ 1.0 px）→ **开了也看不出对齐变了**。
+///    这不是 bug，是 663 m 偏移在 z7 分辨率下的物理事实。
+/// 2. **方向未定**（R1）。本类**只提供机制**，不宣称哪个方向正确；
+///    正/反两个方向由 `RadarPixelShiftMode` 显式选择，供真机 A/B。
+///
+/// ──🔴 `draw` 的两个约束（Apple 文档原文）────────────────────────────────
+///  "The map view may tile large overlays and distribute the rendering of each
+///   tile to separate threads. Therefore, the implementation of your
+///   `draw(_:zoomScale:in:)` method needs to be safe to run from background
+///   threads and from multiple threads simultaneously."
+/// ⇒ 本实现**只读**不可变 `let` 属性、不改任何共享状态，天然线程安全。
+final class ShiftedTileOverlayRenderer: MKTileOverlayRenderer {
+
+    /// 平移量（**点**，东正西负 / 北正南负已在外部算好）。
+    ///
+    /// ⚠️ 之所以能在init 里定死：偏移是**该overlay 覆盖区域的常量**
+    /// （瓦片内任一点与区域中心的 GCJ 偏移差< 1 m，可忽略），
+    /// 且`draw` 可能被多线程并发调用 —— 故**绝不能在 draw 内算**。
+    private let shiftX: CGFloat
+
+    /// 纵向平移量（点；CGContext 的 y 向下，故北向偏移对应**负** y）。
+    private let shiftY: CGFloat
+
+    /// 构造。
+    ///
+    /// - Parameters:
+    ///   - tileOverlay: 覆盖层。
+    ///   - shift: 平移向量（**点**，`CGContext` 坐标：x 东正、y 下正）。
+    init(tileOverlay: MKTileOverlay, shift: CGVector) {
+        self.shiftX = shift.dx
+        self.shiftY = shift.dy
+        super.init(tileOverlay: tileOverlay)
+    }
+
+    // MARK: - 平移向量计算（**纯几何，MapKit 侧唯一入口**）
+
+    /// 按平移档位算出应施加的平移向量（点）。
+    ///
+    /// ── 换算（与 `CoordinateTransform.pixelShiftProbe` 同一条链）────────────
+    /// `点 = 米 × MKMapPointsPerMeterAtLatitude(lat) × MKZoomScale`
+    /// 其中 `MKZoomScale` 由**瓦片层级 + 瓦片边长 + contentScaleFactor** 反推。
+    ///
+    /// ⚠️🔴 **诚实声明（三条，缺一不可）** ─────────────────────────────────
+    /// 1. **方向未验证**：本函数只实现「沿/反纠偏方向」两种**符号约定**，
+    ///    哪个约定对应"看起来对齐了"**只能真机确定**（R1）。故档位名里
+    ///    直接写「方向未验证」，UI 也如实显示 —— **不得**写成"已纠偏"。
+    /// 2. **平移量不足 1 设备像素**（实测 z7 @2x 全中国境内最大 0.931 pt，
+    ///    552 瓦片 0 个 ≥ 1 px）→ 开了**也看不出**差别。
+    /// 3. `zoomScale` 实际由**相机**决定，此处按「瓦片 1:1 显示」估算。
+    ///    MapKit overzoom 时真实值会偏大，平移量同比例放大 ——
+    ///    但方向与"看不见"这两条结论不受影响（量级仍 < 数 px）。
+    ///
+    /// - Parameters:
+    ///   - center: 地图中心（WGS84），偏移量在此点上取。
+    ///   - mode: 平移档位。
+    /// - Returns: 平移向量（点）；`.off` / 参数非法 → `dx = dy = 0`。
+    static func shiftVector(for center: CLLocationCoordinate2D,
+                            mode: RadarPixelShiftMode) -> CGVector {
+        let sign = mode.directionSign
+        guard sign != 0 else { return CGVector(dx: 0, dy: 0) }
+        // 直接取该纬度每米点数与 zoomScale，复用 Core 的换算（不在此处重写公式）。
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: center.longitude,
+            latitude: center.latitude,
+            zoom: RadarTileZoomRange.maximum,
+            tileEdge: CGFloat(RadarTileURLBuilder.tileEdge),
+            contentScaleFactor: Double(UIScreen.main.scale))
+        let eastPoints = centerShiftComponent(probe: probe,
+                                              center: center,
+                                              eastward: true)
+        let northPoints = centerShiftComponent(probe: probe,
+                                               center: center,
+                                               eastward: false)
+        // 🔴 符号即"方向未验证"的落点：`shiftAlongCorrection` 往纠偏的反方向挪
+        // （若 MapKit 真的已纠偏过瓦片，则不纠偏才是对的；反之亦然 —— 真机二选一）。
+        return CGVector(dx: CGFloat(-sign * eastPoints),
+                        dy: CGFloat(sign * northPoints))
+    }
+
+    /// 探针在地图中心处的单轴平移分量（点）。
+    ///
+    /// - Parameters:
+    ///   - probe: 探针结果（提供偏移米数与该纬度每米点数）。
+    ///   - center: 地图中心（取纬度）。
+    ///   - eastward: `true` 取东向分量，`false` 取北向分量。
+    /// - Returns: 分量（点）。
+    private static func centerShiftComponent(probe: CoordinateTransform.PixelShiftProbe,
+                                            center: CLLocationCoordinate2D,
+                                            eastward: Bool) -> Double {
+        let perMeter = CoordinateTransform.mapPointsPerMeter(atLatitude: center.latitude)
+        let scale = CoordinateTransform.zoomScale(
+            atZoom: probe.zoom,
+            tileEdge: CGFloat(RadarTileURLBuilder.tileEdge),
+            contentScaleFactor: probe.contentScaleFactor)
+        return (eastward ? probe.eastMeters : probe.northMeters) * perMeter * scale
+    }
+
+    /// 平移绘制（Apple 文档指定的子类钩子）。
+    ///
+    /// - Parameters:
+    ///   - mapRect: 待绘制区域。
+    ///   - zoomScale: 当前缩放（点 / mapPoint）。
+    ///   - context: 绘制上下文。
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+        guard shiftX != 0 || shiftY != 0 else {
+            // 未开启平移 → 走原生路径，**一个字节都不改变**（逐像素一致）。
+            super.draw(mapRect, zoomScale: zoomScale, in: context)
+            return
+        }
+        // ⚠️ **代价（如实记录）**：MapKit 只渲染与 `mapRect` 相交的瓦片，
+        // 平移后边缘会露出与平移量等宽的空隙。实测 z7 @2x 最大约 **1.9 设备像素**
+        // （见报告）。该空隙由 `alpha`/底图透出，不是灰块 —— 但**确实是副作用**。
+        context.saveGState()
+        context.translateBy(x: shiftX, y: shiftY)
+        super.draw(mapRect, zoomScale: zoomScale, in: context)
+        context.restoreGState()
+    }
+}
+
 // MARK: - MKMapView 包装
 
 /// `MKMapView` 的 SwiftUI 包装（承载 `MKTileOverlay` 的唯一途径）。
@@ -190,6 +408,8 @@ struct RadarMapView: UIViewRepresentable {
     let host: String
     /// 纠偏模式。
     let mode: CoordinateTransformMode
+    /// 像素级平移档位（R2；`.off` = 逐像素等价于原生渲染）。
+    let pixelShift: RadarPixelShiftMode
     /// 缓存。
     let cache: RadarTileCache
     /// 地图中心（选中城市）。
@@ -216,9 +436,10 @@ struct RadarMapView: UIViewRepresentable {
         // ⚠️ **换帧必须重建 overlay，不能只 `reloadData()`**：
         // `framePath` 与纠偏模式都是 overlay 的不可变初值，`reloadData()` 只会用
         // **同一个** framePath 重新取瓦片 —— 那样时间轴滑动会"看起来在动、底图不变"。
-        // 判据：帧路径**或**纠偏模式任一变化 → 换实例。
+        // 判据：帧路径 / 纠偏模式 / 平移档位任一变化 → 换实例。
         let needsRebuild = context.coordinator.installedFramePath != framePath
             || context.coordinator.installedMode != mode
+            || context.coordinator.installedPixelShift != pixelShift
         guard needsRebuild else { return }
         map.removeOverlays(map.overlays)
         if let framePath {
@@ -226,10 +447,14 @@ struct RadarMapView: UIViewRepresentable {
                                            framePath: framePath,
                                            mode: mode,
                                            cache: cache)
+            // 平移向量随 overlay 一起交给 Coordinator（renderer 由 delegate 回调时构造）。
+            context.coordinator.shift = ShiftedTileOverlayRenderer.shiftVector(
+                for: center, mode: pixelShift)
             map.addOverlay(overlay, level: .aboveRoads)
         }
         context.coordinator.installedFramePath = framePath
         context.coordinator.installedMode = mode
+        context.coordinator.installedPixelShift = pixelShift
     }
 
     /// 渲染器工厂。
@@ -240,11 +465,25 @@ struct RadarMapView: UIViewRepresentable {
         /// 当前已装上的纠偏模式。
         var installedMode: CoordinateTransformMode?
 
+        /// 当前已装上的平移档位。
+        var installedPixelShift: RadarPixelShiftMode?
+
+        /// 待施加的平移向量（点；`nil` = 不平移）。
+        var shift: CGVector?
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
                 // 注意：`loadingPolicy` 是在 `RadarTileOverlay.init` 里设的
                 // （它属于 MKTileOverlay，不属于 renderer）。这里只造 renderer。
-                return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+                //
+                // ⚠️ 平移**只能**在这里做 —— `MKTileOverlayRenderer` 没有平移 API
+                // （实测查证，见 `Evidence.tileRendererExposesTranslationAPI`），
+                // 唯一途径是覆写 `draw(_:zoomScale:in:)`。
+                guard let shift, shift.dx != 0 || shift.dy != 0 else {
+                    // 不平移 → 用原生类，**完全不改渲染行为**。
+                    return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+                }
+                return ShiftedTileOverlayRenderer(tileOverlay: tileOverlay, shift: shift)
             }
             return MKOverlayRenderer(overlay: overlay)
         }
@@ -278,6 +517,7 @@ struct RadarMapCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             mapArea
+            pixelShiftNote
             if availability.allowsScrubbing, let timeline {
                 timelineBar(timeline)
             }
@@ -292,6 +532,35 @@ struct RadarMapCard: View {
             RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
                 .stroke(Theme.divider, lineWidth: 0.5)
         )
+    }
+
+    // MARK: - 🔴 像素级平移读数（如实显示，**不得写成"已纠偏"**）
+
+    /// 平移档位的一行读数。
+    ///
+    /// ⚠️ **本行的存在理由**：平移量实测不足 1 设备像素，用户**看不出**差别；
+    /// 而方向又**未验证**。若不显示，用户会以为"纠偏已生效"。故必须写出来：
+    /// 「平移量 = N px · 纠偏方向未验证 · 切档不影响请求」。
+    ///
+    /// `.off` 时只显示"未平移"，**不**谎称任何纠偏状态。
+    @ViewBuilder
+    private var pixelShiftNote: some View {
+        let mode = model.pixelShiftMode
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: model.center.longitude,
+            latitude: model.center.latitude,
+            zoom: RadarTileZoomRange.maximum,
+            tileEdge: Double(RadarTileURLBuilder.tileEdge),
+            contentScaleFactor: Double(UIScreen.main.scale))
+        Text(mode.appliesShift
+             ? "平移量 " + CoordinateTransform.decimal2(probe.magnitudeDevicePixels)
+                + " px@" + String(RadarTileZoomRange.maximum) + " · " + mode.displayName
+                + " · 纠偏方向未验证"
+             : "未平移 · " + mode.displayName
+                + " · 纠偏方向未验证")
+            .font(.system(size: Theme.FontSize.caption))
+            .foregroundStyle(Theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - 派生
@@ -334,6 +603,7 @@ struct RadarMapCard: View {
                     framePath: currentFramePath,
                     host: model.host,
                     mode: model.coordinateMode,
+                    pixelShift: model.pixelShiftMode,
                     cache: model.tileCache,
                     center: model.center.mapCoordinate
                 )

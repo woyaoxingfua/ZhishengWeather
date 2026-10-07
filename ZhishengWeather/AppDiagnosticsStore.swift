@@ -253,6 +253,56 @@ final class AppDiagnosticsStore {
                      message: message)
     }
 
+    /// 🆕 把「像素级平移量」写进诊断记录（R2）。
+    ///
+    /// ── 为什么必须单独落盘（不能塞进 `recordRadarOffsetProbe`）────────────
+    /// 两者回答的是**不同问题**：
+    ///  · `offsetProbe` = 「偏移有多远」（米 / 瓦片像素当量）；
+    ///  · 本方法= 「绘制期平移会挪多少」（**屏幕点/ 设备像素**）。
+    /// 而R1 真机验收要看的是**后者** —— 用户看到的是屏幕，
+    /// 不是瓦片像素。实测后者在 z4–z7 都 < 1 设备像素，
+    /// 这正是"切档看不出差别"的**根因**，必须单独可查。
+    ///
+    /// ⚠️ **它同样不下方向结论**（R1 未定案），故文案里显式带
+    /// 「纠偏方向未验证」，防止读日志的人把某个数字当成"已对齐"。
+    ///
+    /// - Parameters:
+    ///   - mode: 当前平移档位。
+    ///   - longitude: 参考点经度（WGS84）。
+    ///   - latitude: 参考点纬度（WGS84）。
+    ///   - tileEdge: 瓦片边长（点）。
+    ///   - contentScaleFactor: 内容缩放因子。
+    ///   - store: 诊断层（默认 `.shared`）。
+    ///
+    /// ⚠️ `contentScaleFactor` **由调用方传入**而非在此读 `UIScreen`：
+    /// 本文件纪律是「仅 import Foundation（不引 UIKit）」（见文件头），
+    /// 且单测必须能固定该值 —— 故绝不在这里取设备相关量。
+    static func recordRadarPixelShift(mode: RadarPixelShiftMode,
+                                      longitude: Double,
+                                      latitude: Double,
+                                      tileEdge: Int = RadarTileURLBuilder.tileEdge,
+                                      contentScaleFactor: Double,
+                                      store: AppDiagnosticsStore = .shared) {
+        let summaries = CoordinateTransform.pixelShiftSummaries(
+            tileEdge: Double(tileEdge),
+            zoom: RadarTileZoomRange.maximum,
+            contentScaleFactor: contentScaleFactor)
+        let probe = CoordinateTransform.pixelShiftProbe(
+            longitude: longitude, latitude: latitude,
+            zoom: RadarTileZoomRange.maximum,
+            tileEdge: Double(tileEdge),
+            contentScaleFactor: contentScaleFactor)
+        let message = ("平移档位：" + mode.displayName + "\n"
+            + "当前城市平移量 " + CoordinateTransform.decimal2(probe.magnitudeDevicePixels)
+            + " 设备像素（" + CoordinateTransform.decimal1(contentScaleFactor) + "x）\n"
+            + summaries.joined(separator: "\n")
+            + "\n纠偏方向未验证（R1），平移量不足 1 像素时肉眼不可辨")
+        store.record(source: .radarOffsetProbe,
+                     succeeded: true,
+                     target: "pixelShift",
+                     message: message)
+    }
+
     // MARK: - 内部
 
     /// 读取整份日志（缺失 / 解码失败 → 空日志）。
