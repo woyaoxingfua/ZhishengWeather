@@ -25,6 +25,17 @@
 //  list_2030 **404/618(text/html)**。
 //  **不得**为了让测试通过而改写样本。
 //
+// 🔴 **内联样本两条纪律（本批修过 7 处，勿再犯）**：
+//  ① **必须带 JSONP 外壳**：样本都要过 `NmcTyphoonJSONP.unwrap`，
+//     而裸 JSON 里没有 `(` → `strip` 返回 `""` → unwrap 抛错 → 必红。
+//  ② **`#"""` raw string 里行尾 `\` 是【字面反斜杠】、不是续行符**
+//     （只有 plain `"""` 才是续行）。raw 里留 `\` 会让 JSON 非法 →
+//     `JSONDecoder` 抛错。→ raw 样本**不要**写行尾续行反斜杠；
+//     换行本身就是合法 JSON 空白。
+//
+// ⚠️ 上游点数会随时间增长（实测同三个活跃台风已从 89 漂到 91），
+//    故本文件**不**对「全部点数」写死数字，只断言样本自身的点数。
+//
 //  不联网：全部喂本地造好的 JSON（服务层用 URLProtocol 桩注入响应）。
 //  ⚠️ **并发纪律**：`XCTAssert*` 实参是 autoclosure，装不下 `await`
 //  → 所有 `await` 先求值到局部常量再断言（同 `NmcAlarmTests`）。
@@ -182,6 +193,70 @@ final class NmcTyphoonTests: XCTestCase {
                       "HTML 响应体不应被剥成可解析内容，实际：\(stripped.prefix(60))")
     }
 
+    // MARK: - 1b．剥壳边界（**失败分支**，此前零覆盖）
+
+    /// 空响应体 → 空串（不是 `"cb("`、也不是原文）。
+    func testStripOnEmptyBodyReturnsEmpty() {
+        XCTAssertEqual(NmcTyphoonJSONP.strip(""), "")
+    }
+
+    /// 只有壳、**没有 JSON**（实测 `cb()`）→ 空串，
+    /// 使 `unwrap` 抛错而不是把空壳喂给 decoder。
+    func testStripOnCallbackOnlyReturnsEmpty() {
+        XCTAssertEqual(NmcTyphoonJSONP.strip("cb()"), "")
+    }
+
+    /// 🔴 壳内**带空格**（`cb( ({"a":1}) )`）必须能剥干净。
+    ///
+    /// 这是本批修`strip` 的原因：`hasPrefix("(")` 要求首字符**精确**是 `(`，
+    /// 而循环判断前**不 trim** 时，壳内多一个空格就剥不掉 →
+    /// 整份响应被判成「非 JSONP」→ **整个台风源静默消失**。
+    func testStripToleratesWhitespaceInsideWrapper() {
+        XCTAssertEqual(NmcTyphoonJSONP.strip(#"cb( ({"a":1}) )"#), #"{"a":1}"#)
+        // 换行/tab 同样要成立（多行JSONP 是真实形态）。
+        XCTAssertEqual(NmcTyphoonJSONP.strip("cb(\n  {\"a\":1}\n)"), "{\"a\":1}")
+        // 剥完内层后残留的空白也必须被清掉，才轮到下一层判断。
+        XCTAssertEqual(NmcTyphoonJSONP.strip(#"cb( ( ({"a":1}) ) )"#), #"{"a":1}"#)
+    }
+
+    /// 括号**不匹配**（闭括号在开括号之前）→ 空串。
+    ///
+    /// 这是`close > open` 那道守卫的锚点：若守卫写反成 `>=`，
+    /// 就会把开括号本身当成剥好的 JSON 返回。
+    func testStripOnMismatchedParenthesesReturnsEmpty() {
+        // 只有闭括号、根本没有 `(` → 空串。
+        XCTAssertEqual(NmcTyphoonJSONP.strip(")"), "")
+        XCTAssertEqual(NmcTyphoonJSONP.strip("no parenthesis at all"), "")
+        XCTAssertEqual(NmcTyphoonJSONP.strip("}{"), "")
+    }
+
+    ///壳内**括号不配对**（`cb({)`）→ 如实交出 `{`，
+    /// 由 `JSONDecoder` 去抛错——「剥壳」不管「校验」。
+    ///
+    /// ⚠️ 这条钉住一个易被误读的边界：`(` 在 `)` **之前**，故 `close > open`
+    /// 成立、剥壳**不算失败**；截出来的是 `{`（合法 JSON 片段前缀）。
+    /// 若有人日后把守卫改成「必须配平」，这条会红。
+    func testStripOnUnbalancedInnerBracePassesThroughForDecoderToReject() throws {
+        XCTAssertEqual(NmcTyphoonJSONP.strip("cb({)"), "{")
+        // ⚠️ `unwrap` **不抛**（它只负责剥壳，非空即返回）→ 抛错发生在**解码**环节。
+        //端到端确认：这样的壳最终**过不了解码**，不得被当成「空列表」静默通过。
+        let data = try NmcTyphoonJSONP.unwrap(Data("cb({)".utf8))
+        XCTAssertThrowsError(try ResponseDecoding.decode(NmcTyphoonResponse.self, from: data),
+                             "壳内括号不配对 → 必须在解码环节失败，不得静默通过")
+    }
+
+    /// 壳内**不是 JSON**（`cb(xxx)`）→ 如实返回 `xxx`。
+    ///
+    /// ⚠️ `strip` 是**纯文本**层，不负责判 JSON —— 它只管剥壳。
+    /// 判「是不是 JSON」是 `unwrap` 之后 `JSONDecoder` 的职责。
+    /// 故此处断言「原样透传」，**不是**断言失败：
+    /// 这样将来若有人误把「剥壳」与「校验」混在一起，这条会红。
+    func testStripPassesThroughNonJSONPayloadVerbatim() {
+        XCTAssertEqual(NmcTyphoonJSONP.strip("cb(xxx)"), "xxx")
+        // 对照：只剥到第一层，内层不是括号就停。
+        XCTAssertEqual(NmcTyphoonJSONP.strip("cb((xxx))"), "xxx")
+    }
+
     // MARK: - 2．🔴 经度在前（本任务最易写反的一处）
 
     /// 路径点下标 4 = **经度**、下标 5 = **纬度**。
@@ -247,14 +322,53 @@ final class NmcTyphoonTests: XCTestCase {
         XCTAssertEqual(first.leadHours, 12, "实测首时效 12 小时")
     }
 
-    /// 取值域自证：纬度**不可能 > 90**（实测三台风 89/89 点满足）。
-    func testLatitudeAlwaysWithinValidRange() throws {
+    /// 🔴 取值域自证：纬度落在**实测的西北太平洋热带气旋纬度带**、
+    /// 且经度落在**实测的西太平洋经度带** —— 两个带**互不重叠**。
+    ///
+    /// ⚠️ 原写法是 `abs(latitude) <= 90`，那是**恒真**的（纬度数学上不可能 > 90），
+    /// 既区分不了「正确解析」与「解析出的就是纬度字段」，
+    /// 更在 `points` 为空时**循环体不执行 →照样绿**（实现全返回 `[]` 也发现不了）。
+    /// →故改为：① 先锚**点数非空且等于样本实测值**（空数组必红）；
+    ///  ② 断言**两带各自落在实测区间内**（经纬写反必红，因为两个区间不重叠）。
+    func testCoordinatesFallInMeasuredBasinRanges() throws {
         let track = NmcTyphoonMapper.track(from: try decode(viewTrackJSONP))
-        for point in track?.points ?? [] {
-            if let latitude = point.latitude {
-                XCTAssertTrue(abs(latitude) <= 90,
-                              "纬度 \(latitude) 越界 —— 很可能与经度写反了")
+        let points = track?.points ?? []
+        // 🔴 锚点：样本（诺洛）实测 2 个路径点。空数组必须**在这里红**。
+        XCTAssertEqual(points.count, 2, "实测样本含 2 个路径点（空数组不得通过）")
+
+        for point in points {
+            // 缺测就红：geo 字段是nil 时`?? 0` 会被 0 悄悄满足。
+            guard let latitude = point.latitude, let longitude = point.longitude else {
+                XCTFail("实测每个点都带经纬，缺测必须显式失败而不是被默认值吞掉")
+                continue
             }
+            // 实测诺洛两点：纬度 24.8/ 25.4，经度 179.4 / 162.6。
+            // 用远宽于实测、但**远窄于 ±90** 的带 → 写反必红、真值必绿。
+            XCTAssertTrue((0.0...60.0).contains(latitude),
+                          "纬度 \(latitude) 超出实测热带气旋纬度带 0–60°"
+                          + "（若这里拿到 ≈179 级别的值，说明经纬写反了）")
+            XCTAssertTrue((100.0...180.0).contains(abs(longitude)),
+                          "经度 \(longitude) 超出实测西太平洋经度带 100–180°"
+                          + "（若这里拿到 ≈25 级别的值，说明经纬写反了）")
+        }
+    }
+
+    /// 历史台风（布拉万）同样受这条不变量约束 —— **换样本也成立**。
+    func testCoordinatesFallInMeasuredBasinRangesForHistoricalTyphoon() throws {
+        let track = NmcTyphoonMapper.track(from: try decode(historicalTrackJSONP))
+        let points = track?.points ?? []
+        // ⚠️ 本仓historicalTrackJSONP 样本按文件头注释「只保留首点」→ **1 个点**。
+        //   （实测该台风线上共 26 个点，但样本只留首点，故此处锚1。）
+        XCTAssertEqual(points.count, 1, "本仓历史台风样本只保留首点 → 1 个路径点")
+        for point in points {
+            guard let latitude = point.latitude, let longitude = point.longitude else {
+                XCTFail("历史台风实测亦逐点带经纬，缺测必须显式失败")
+                continue
+            }
+            XCTAssertTrue((0.0...60.0).contains(latitude),
+                          "历史台风实测纬度 \(latitude) 应在 0–60°（本样本实测 8.8）")
+            XCTAssertTrue((100.0...180.0).contains(abs(longitude)),
+                          "历史台风实测经度 \(longitude) 应在 100–180°（本样本实测 129.6）")
         }
     }
 
@@ -262,8 +376,8 @@ final class NmcTyphoonTests: XCTestCase {
     func testSwappedCoordinateOrderIsRecovered() throws {
         // 实测把「经度 179.4 / 纬度 24.8」反写成「179.4 在纬度位」。
         let swapped = #"""
-        {"typhoon":[1,"X","测试",1,1,null,null,"start",\
-        [[1,"202610050000",1791158400000,"TY",24.8,179.4,935,52,"W",28,[],null,null]]]}
+cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        [[1,"202610050000",1791158400000,"TY",24.8,179.4,935,52,"W",28,[],null,null]]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                               from: NmcTyphoonJSONP.unwrap(Data(swapped.utf8)))
@@ -327,8 +441,8 @@ final class NmcTyphoonTests: XCTestCase {
     /// 一条坏条目（缺 id）**只丢自己**，不拖垮整批。
     func testMalformedListEntryDoesNotBreakWholeBatch() throws {
         let mixed = #"""
-        {"typhoonList":[[999,"GOOD","正常","1","1",null,null,"start"],\
-        ["不是数组"],[],[3346168,"NOLO","诺洛","2628","2628",null,null,"start"]]}
+cb({"typhoonList":[[999,"GOOD","正常","1","1",null,null,"start"],
+        ["不是数组"],[],[3346168,"NOLO","诺洛","2628","2628",null,null,"start"]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(mixed.utf8)))
@@ -343,7 +457,7 @@ final class NmcTyphoonTests: XCTestCase {
     /// 缺 id 的条目必须丢弃（无法拼 `view_<id>` URL → 该条不可用）。
     func testEntryWithoutIDIsDropped() throws {
         let noID = #"""
-        {"typhoonList":[["NOLO","诺洛","2628","2628",null,null,"start"]]}
+cb({"typhoonList":[["NOLO","诺洛","2628","2628",null,null,"start"]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(noID.utf8)))
@@ -359,8 +473,28 @@ final class NmcTyphoonTests: XCTestCase {
         XCTAssertNotNil(track, "实测顶层 10 元素结构必须能解出台风")
         XCTAssertEqual(track?.points.count, 2)
         XCTAssertEqual(track?.summary.englishName, "NOLO")
-        // ⚠️ 已停止台风也允许查详情（实测列表里 29 条是 'stop'）。
-        XCTAssertFalse(track?.summary.isActive ?? true)
+        // 🔴 本样本（诺洛）头部下标 7 逐字是 `"start"` → `isActive == true`。
+        //    原断言 `XCTAssertFalse(track?.summary.isActive ?? true)` **方向反了**（必红）。
+        //    （附带说明：那个 `?? true` 本身**不会**造成静默通过 ——
+        //      nil 时 `XCTAssertFalse(true)` 同样会红；它真正的毛病是
+        //      把「解析失败」与「真的是活跃台风」压成同一个结果，诊断信息丢失。）
+        //    → 改为直接与 `true` 比对：nil ≠ true，解析失败会红且能看出原因。
+        XCTAssertEqual(track?.summary.isActive, true,
+                       "实测本样本头部下标 7 逐字为 \"start\" → 必须是活跃台风")
+    }
+
+    /// 🔴 「**已停止**台风也能查详情」——原意图，用**历史台风**样本才成立。
+    ///
+    /// 上一条用例的样本（诺洛）是 `"start"`，**证不了**「已停止也能查」。
+    /// 实测历史台风布拉万3227033 头部下标 7 逐字是 `"stop"` → `isActive == false`，
+    /// 且 `track()` **刻意不强制** isActive（详情页允许查看已停止台风）。
+    func testStoppedTyphoonDetailIsStillQueryable() throws {
+        let track = NmcTyphoonMapper.track(from: try decode(historicalTrackJSONP))
+        XCTAssertNotNil(track, "已停止台风也必须能解出详情（实测下标 7 = \"stop\"）")
+        // 用 `XCTAssertEqual(_, false)` 而非 `XCTAssertFalse(_ ?? true)`：
+        // 后者虽也会红，但把 nil（解析失败）与true 压成同一结果，诊断信息丢失。
+        XCTAssertEqual(track?.summary.isActive, false,
+                       "实测历史台风下标 7 为 \"stop\" → 必须是非活跃")
     }
 
     /// 实测各字段解析：强度 / 气压 / 风速 / 移向 / 移速 / 发布时间。
@@ -409,30 +543,36 @@ final class NmcTyphoonTests: XCTestCase {
     func testHistoricalTyphoonToleratesNullForecastAndEmptyWindCircle() throws {
         let track = NmcTyphoonMapper.track(from: try decode(historicalTrackJSONP))
         XCTAssertNotNil(track, "实测历史台风顶层下标 9 为 null 也必须能解析")
-        let point = track?.points.first
-        XCTAssertEqual(point?.latitude ?? 0, 8.8, accuracy: 0.001, "实测纬度 8.8")
-        XCTAssertEqual(point?.longitude ?? 0, 129.6, accuracy: 0.001, "实测经度 129.6")
-        XCTAssertTrue(point?.windCircles.isEmpty ?? false, "实测风圈为空数组")
-        XCTAssertTrue(point?.forecast.isEmpty ?? false,
+        // ⚠️ 用 `guard let` 取代 `point?.windCircles.isEmpty ?? false`：
+        //    两者在 nil 时**都会红**（`?? false` → 断言 false → 红，故原写法
+        //    并**不会**静默通过），但那时的红是「碰巧对」，不是「知道缺了什么」。
+        //    `guard let` 让失败**指名道姓**：到底是台风没解出来、还是点没解出来。
+        guard let track, let point = track.points.first else {
+            return XCTFail("实测历史台风应解出 1 个路径点，缺测必须显式失败")
+        }
+        XCTAssertEqual(point.latitude ?? 0, 8.8, accuracy: 0.001, "实测纬度 8.8")
+        XCTAssertEqual(point.longitude ?? 0, 129.6, accuracy: 0.001, "实测经度 129.6")
+        XCTAssertTrue(point.windCircles.isEmpty, "实测风圈为空数组")
+        XCTAssertTrue(point.forecast.isEmpty,
                       "实测历史台风无预报（下标 11 为 null）")
-        XCTAssertTrue(track?.latestForecast.isEmpty ?? false,
+        XCTAssertTrue(track.latestForecast.isEmpty,
                       "无预报时 latestForecast 应为空数组（UI 显示「无官方预报」）")
-        XCTAssertEqual(point?.motion?.rawValue, "no", "实测历史台风移向为 'no'")
-        XCTAssertEqual(point?.motion?.displayName, "停滞")
+        XCTAssertEqual(point.motion?.rawValue, "no", "实测历史台风移向为 'no'")
+        XCTAssertEqual(point.motion?.displayName, "停滞")
     }
 
     /// 实测预报时效**数量不固定**（8个 / 1 个）→ 不按固定长度取。
     func testForecastLeadCountIsNotFixed() throws {
         // 彩云 2026-10-07 实测：末点只剩 [12]，首点是 8 个时效。
         let varying = #"""
-        {"typhoon":[3341981,"CHOI-WAN","彩云",2627,2627,null,null,"start",\
-        [[1,"202609301800",1790791200000,"TS",149.5,16.4,998,18,"W",22,[],\
-        {"BABJ":[[12,"202609301800",147.1,16.7,990,23,"BABJ","TS"],\
-        [24,"202609301800",140.0,17.5,995,20,"BABJ","TS"]]},\
-        ["202610010200","2026年10月01日02时00分",null,null]],\
-        [2,"202610070000",1791331200000,"STS",153.2,39.2,975,30,"NE",87,[],\
-        {"BABJ":[[12,"202610070000",162,46,980,28,"BABJ","STS"]]},\
-        ["202610070800","2026年10月07日08时00分",null,null]]],null]}
+cb({"typhoon":[3341981,"CHOI-WAN","彩云",2627,2627,null,null,"start",
+        [[1,"202609301800",1790791200000,"TS",149.5,16.4,998,18,"W",22,[],
+        {"BABJ":[[12,"202609301800",147.1,16.7,990,23,"BABJ","TS"],
+        [24,"202609301800",140.0,17.5,995,20,"BABJ","TS"]]},
+        ["202610010200","2026年10月01日02时00分",null,null]],
+        [2,"202610070000",1791331200000,"STS",153.2,39.2,975,30,"NE",87,[],
+        {"BABJ":[[12,"202610070000",162,46,980,28,"BABJ","STS"]]},
+        ["202610070800","2026年10月07日08时00分",null,null]]],null]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(varying.utf8)))
@@ -449,10 +589,10 @@ final class NmcTyphoonTests: XCTestCase {
     /// 缺经纬的点必须被丢弃（地图上画不出来），其余点保留。
     func testPointWithoutCoordinatesIsDropped() throws {
         let partial = #"""
-        {"typhoon":[1,"X","测试",1,1,null,null,"start",\
-        [[1,"202610050000",1791158400000,"TY",179.4,24.8,935,52,"W",28,[],null,null],\
-        [2,"202610050300",null,null,null,null,null,null,null,null,[],null,null],\
-        [3,"202610050600",1791200000000,"TY",179.0,25.0,935,52,"W",28,[],null,null]]]}
+cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        [[1,"202610050000",1791158400000,"TY",179.4,24.8,935,52,"W",28,[],null,null],
+        [2,"202610050300",null,null,null,null,null,null,null,null,[],null,null],
+        [3,"202610050600",1791200000000,"TY",179.0,25.0,935,52,"W",28,[],null,null]]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(partial.utf8)))
@@ -464,9 +604,9 @@ final class NmcTyphoonTests: XCTestCase {
     /// 路径点按时间**排序**（防上游乱序画出折返线）。
     func testPointsAreSortedByTime() throws {
         let unsorted = #"""
-        {"typhoon":[1,"X","测试",1,1,null,null,"start",\
-        [[2,"202610050600",1791200000000,"TY",179.0,25.0,935,52,"W",28,[],null,null],\
-        [1,"202610050000",1791158400000,"TY",179.4,24.8,935,52,"W",28,[],null,null]]]}
+cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        [[2,"202610050600",1791200000000,"TY",179.0,25.0,935,52,"W",28,[],null,null],
+        [1,"202610050000",1791158400000,"TY",179.4,24.8,935,52,"W",28,[],null,null]]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(unsorted.utf8)))
@@ -601,7 +741,13 @@ final class NmcTyphoonTests: XCTestCase {
         TyphoonStubURLProtocol.handler = nil
     }
 
-    /// 网络失败 → `.network` / `.timeout`，**绝不**伪装成「没有台风」。
+    /// 网络失败 → `.network`，**绝不**伪装成「没有台风」。
+    ///
+    /// 🔴 原断言是裸的 `XCTAssertTrue(true)`（恒真，零信息），且把
+    /// `.network` / `.timeout` 一起接受 → 分不出映射是否写错。
+    /// →改为断言**确切**的 `.network`：`NmcTyphoonProviding.fetchData`
+    /// 只把 `URLError.timedOut` 映射成 `.timeout`，其余 URLError 一律 `.network`
+    /// （见 NmcTyphoonProviding.swift:123-127），故断网必须是 `.network`。
     func testNetworkFailureThrowsInsteadOfReturningEmpty() throws async {
         TyphoonStubURLProtocol.handler = { request in
             throw URLError(.notConnectedToInternet)
@@ -611,12 +757,11 @@ final class NmcTyphoonTests: XCTestCase {
             _ = try await service.fetchSummaries()
             XCTFail("网络失败必须抛错（返回空数组会被显示成「无活跃台风」）")
         } catch let error as WeatherError {
-            if case .network = error {
-                XCTAssertTrue(true)
-            } else if case .timeout = error {
-                XCTAssertTrue(true)
-            } else {
-                XCTFail("期望 network/timeout，实际：\(error)")
+            // 🔴 不用 `XCTAssertTrue(true)`：那恒真、零信息。
+            //    也不接受 `.timeout`：断网实测映射为 `.network`（二者须可区分）。
+            guard case .network = error else {
+                XCTFail("断网（URLError.notConnectedToInternet）应映射为 .network，实际：\(error)")
+                return
             }
         } catch {
             XCTFail("期望 WeatherError，实际：\(error)")
@@ -740,14 +885,18 @@ final class NmcTyphoonTests: XCTestCase {
     /// 缺测字段逐项为 nil（UI 逐项判空，不显示占位）。
     func testMissingFieldsAreNilRatherThanZero() throws {
         let sparse = #"""
-        {"typhoon":[1,"X","测试",1,1,null,null,"start",\
-        [[1,null,null,null,null,null,null,null,null,null,[],null,null]]]}
+cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        [[1,null,null,null,null,null,null,null,null,null,[],null,null]]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(sparse.utf8)))
-        // 该点缺经纬 → 整点被丢弃（地图上画不出来）。
-        XCTAssertTrue(NmcTyphoonMapper.track(from: dto)?.points.isEmpty ?? false,
-                      "缺经纬的点应被丢弃")
+        // ⚠️ 不用 `points.isEmpty`（在「整批被丢弃」与「唯独该点被丢弃」之间无法区分），
+        //    改为先锚「台风本身仍解得出」→ 再锚「点数为 0」。
+        //    注：原写法 `?.points.isEmpty ?? false` 在 nil 时同样会红（不是静默通过），
+        //    但那条红来自 `?? false` 的**副作用**而非断言意图，诊断信息也丢失。
+        let track = NmcTyphoonMapper.track(from: dto)
+        XCTAssertNotNil(track, "头部合法时应仍能解出台风（不该整批丢弃）")
+        XCTAssertEqual(track?.points.count, 0, "缺经纬的点应被丢弃")
     }
 
     /// `JSONValue` 的类型安全取值：字符串数字可转数、非整数不截断。

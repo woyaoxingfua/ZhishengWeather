@@ -248,10 +248,17 @@ enum NmcTyphoonJSONP {
         body = String(body[body.index(after: open)...close])
         // 循环剥壳：**实测层数因端点而异**（list 双层 / view 单层），
         // 故用 while 而不是 if —— 见本文件头「坑一」。
-        while body.hasPrefix("("), body.hasSuffix(")") {
+        //
+        // ⚠️ **每轮先 trim 再判断**：`hasPrefix("(")` 要求首字符**精确**是 `(`，
+        // 故若壳内带空格（如 `cb( ({"a":1}) )`），不trim 就**剥不掉**，
+        // 结果整份响应被当成「非 JSONP 形态」抛错 → **整个台风源静默消失**。
+        // 实测当前 4+4 个端点壳内均无多余空白（故此前未触发），
+        // 但上游加一个空格就会全面失效，故此处**按最坏情况**处理。
+        while true {
+            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard body.hasPrefix("("), body.hasSuffix(")") else { break }
             body.removeFirst()
             body.removeLast()
-            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return body
     }
