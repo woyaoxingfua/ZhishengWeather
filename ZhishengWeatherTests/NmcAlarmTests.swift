@@ -539,6 +539,22 @@ final class NmcAlarmTests: XCTestCase {
         // 非法日历分量 → nil（13 月）
         XCTAssertNil(NmcIssueTimeDecoder.date(from: "2026/13/06 20:28",
                                               timeZone: shanghai))
+        // 🔴 「范围合法但日历上不存在」→ nil（2 月 30 日 / 4 月 31 日）。
+        // ⚠️ 这两条**单靠 1...31 的范围 guard 拦不住**，必须靠回读自证：
+        //   Foundation `Calendar.date(from:)` 不做校验，会把 2026-02-30
+        //   归一化成 2026-03-02（非 nil）—— 本仓 `ISOTimeStringDecoderTests`
+        //   的 `testNilWhenDateComponentsInvalid` 已实测记录同一行为。
+        // 纪律：**时刻解析绝不猜**，归一化出来的日期比 nil 糟糕得多。
+        XCTAssertNil(NmcIssueTimeDecoder.date(from: "2026/02/30 20:28",
+                                              timeZone: shanghai),
+                     "2 月 30 日在日历上不存在，必须 nil（不得归一化成 3-02）")
+        XCTAssertNil(NmcIssueTimeDecoder.date(from: "2026/04/31 20:28",
+                                              timeZone: shanghai),
+                     "4 月 31 日在日历上不存在，必须 nil（不得归一化成 5-01）")
+        // 🔴 时/分/秒越界同样 → nil（25 时不是"次日 1 时"）。
+        XCTAssertNil(NmcIssueTimeDecoder.date(from: "2026/10/06 25:28",
+                                              timeZone: shanghai),
+                     "25 时非法，必须 nil（不得归一化成次日 01 时）")
     }
 
     /// 🔴 **回归护栏**：日期/时间的分界只能是空格或 `T`，**不能**是日期内部的 `/`、`-`。

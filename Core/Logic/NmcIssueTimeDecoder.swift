@@ -24,7 +24,9 @@
 //  ── 纪律：不用 `DateFormatter`（与 `ISOTimeStringDecoder` 同款理由）────
 //  `DateFormatter` 的 locale / 宽松解析是不可控面（R-A4），且它是
 //  非线程安全的共享可变状态。故手工逐位解析数字，行为完全确定、可单测；
-//  日期合法性交给 `Calendar.date(from:)` 裁定（13 月 / 32 日 → nil）。
+//  日期合法性**由本文件显式校验**（范围 guard + 回读自证），
+//  🔴 **绝不**委托 `Calendar.date(from:)` 裁定—— 它对越界分量
+//  **按自然溢出归一化并返回非 nil**（13 月 → 次年 1 月），旧注释此处写了假话。
 //
 //  Core 纪律：仅 import Foundation；纯函数（无内部 Date()、无副作用）；
 //  禁 UIKit / try! / fatalError。
@@ -120,7 +122,34 @@ enum NmcIssueTimeDecoder {
             return nil
         }
 
-        // ⑤ 组装：合法性交给 Calendar 裁定（13 月 / 32 日 / 25 时 → nil）。
+        // ⑤ 组装：合法性由**本函数显式校验**，**不**依赖 `Calendar.date(from:)`。
+        //
+        // 🔴 **第三个真实 bug**（2026-10-07 CI `testIssueTimeDecoding` 暴露）：
+        // 旧实现把分量合法性**委托**给 `calendar.date(from:)`，并在上面的
+        // 文件头注释里写「13 月 / 32 日 → nil」。**那是错的**：
+        // Foundation 的 `Calendar.date(from:)` 对越界分量**不做校验、按自然
+        // 溢出归一化**并返回**非 nil**（本仓`ISOTimeStringDecoderTests`
+        // 的 `testNilWhenDateComponentsInvalid` 早就用实测记录了同一事实：
+        // 13 月 → 次年 1 月、32 日 → 次月 2 日）。
+        // ⇒ `"2026/13/06 20:28"` 被"编"成 **2027-01-06 20:28 +08**
+        //   （= `2027-01-06 12:28:00 +0000`），正是 CI 报出的失败值。
+        //而本项目的纪律是「**时刻解析绝不猜**」：一个**编出来的**日期比
+        // `nil` 糟糕得多 —— 它会被当成真实发布时间参与四态新鲜度裁定，
+        // 把一条 `issuedAt` 凭空推到 91 天之后（实测），无人能察觉。
+        //
+        // 正解：**逐分量显式范围校验**（下面的 `guard`）+ **回读自证**
+        // （`dateComponents` 回来必须与输入逐项相等）。
+        // 后者一次性覆盖「2 月 30 日」这类"范围合法但日历上不存在"的形态 ——
+        // 只查 `1...31` 是拦不住的，而逐日查`range(of:.day,in:.month)`
+        // 又要先造一个日期出来（自举）。回读是唯一既总括又无自举的写法。
+        guard (1...12).contains(month),
+              (1...31).contains(day),
+              (0...23).contains(hour),
+              (0...59).contains(minute),
+              (0...59).contains(second) else {
+            return nil
+        }
+
         var components = DateComponents()
         components.year = year
         components.month = month
@@ -131,7 +160,21 @@ enum NmcIssueTimeDecoder {
 
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        return calendar.date(from: components)
+        guard let date = calendar.date(from: components) else { return nil }
+
+        // 回读自证：Calendar 一旦做过任何归一化（13 月 / 2 月 30 日 / 25 时），
+        // 回读的分量就与输入不等⇒ 判nil，绝不把归一化后的日期当合法时刻。
+        let roundTrip = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date)
+        guard roundTrip.year == year,
+              roundTrip.month == month,
+              roundTrip.day == day,
+              roundTrip.hour == hour,
+              roundTrip.minute == minute,
+              roundTrip.second == second else {
+            return nil
+        }
+        return date
     }
 
     // MARK: - Private
