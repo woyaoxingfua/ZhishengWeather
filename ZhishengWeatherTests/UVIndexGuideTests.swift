@@ -12,6 +12,10 @@
 //
 //  量表出处见 `Core/Logic/UVIndexGuide.swift` 文件头（WHO Global Solar UV Index 五档量表）。
 //
+//  ⚠️ 各档为**闭区间**（0–2 / 3–5 / 6–7 / 8–10 / 11+），故每档的升档点就在整数上：
+//  「刚过 2」是中等、「刚过 5」是高档，依此类推。**不可**写成 2.9 仍是低档之类——
+//  那种写法与同文件内「2 属低档上沿」自相矛盾（详见 testLevelBoundaryLowToModerate）。
+//
 
 import XCTest
 @testable import ZhishengWeather
@@ -51,25 +55,27 @@ final class UVIndexGuideTests: XCTestCase {
     func testLevelBoundaryLowToModerate() {
         XCTAssertEqual(UVIndexLevel(uv: 0), .low)
         XCTAssertEqual(UVIndexLevel(uv: 2), .low, "2 属低档上沿")
-        XCTAssertEqual(UVIndexLevel(uv: 2.9), .low, "2.9 仍是低档")
+        // 2.5 已越过低档上沿 → 中等。**不是** 2.9：WHO 量表低档是 0–2（闭区间），
+        // 「刚过 2 就升档」才是本分档真正要锁的边界（若实现被改成 `uv < 3` 判低，此断言即红）。
+        XCTAssertEqual(UVIndexLevel(uv: 2.5), .moderate, "刚过 2 即升中等档（低档上沿是 2，不是 3）")
         XCTAssertEqual(UVIndexLevel(uv: 3), .moderate, "3 是中等档下沿（2/3 临界）")
     }
 
     func testLevelBoundaryModerateToHigh() {
         XCTAssertEqual(UVIndexLevel(uv: 5), .moderate, "5 属中等档上沿")
-        XCTAssertEqual(UVIndexLevel(uv: 5.9), .moderate)
+        XCTAssertEqual(UVIndexLevel(uv: 5.5), .high, "刚过 5 即升高档（中等档上沿是 5，不是 6）")
         XCTAssertEqual(UVIndexLevel(uv: 6), .high, "6 是高档下沿（5/6 临界）")
     }
 
     func testLevelBoundaryHighToVeryHigh() {
         XCTAssertEqual(UVIndexLevel(uv: 7), .high, "7 属高档上沿")
-        XCTAssertEqual(UVIndexLevel(uv: 7.9), .high)
+        XCTAssertEqual(UVIndexLevel(uv: 7.5), .veryHigh, "刚过 7 即升很高档（高档上沿是 7，不是 8）")
         XCTAssertEqual(UVIndexLevel(uv: 8), .veryHigh, "8 是很高档下沿（7/8 临界）")
     }
 
     func testLevelBoundaryVeryHighToExtreme() {
         XCTAssertEqual(UVIndexLevel(uv: 10), .veryHigh, "10 属很高档上沿")
-        XCTAssertEqual(UVIndexLevel(uv: 10.9), .veryHigh)
+        XCTAssertEqual(UVIndexLevel(uv: 10.5), .extreme, "刚过 10 即升极高档（很高档上沿是 10，不是 11）")
         XCTAssertEqual(UVIndexLevel(uv: 11), .extreme, "11 是极高档下沿（10/11 临界）")
     }
 
