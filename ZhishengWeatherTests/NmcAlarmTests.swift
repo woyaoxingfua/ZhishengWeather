@@ -516,6 +516,13 @@ final class NmcAlarmTests: XCTestCase {
     }
 
     /// `issuetime` 解析：实测格式 + 时区**必须注入**（不读设备时区）。
+    ///
+    /// ⚠️ 标 `@MainActor`：`WeatherTimeFormatter` 是**类型级 `@MainActor`**
+    /// （`Core/Logic/WeatherTimeFormatter.swift:28-29`）—— 它的 `formatterCache`
+    /// 是未加锁共享可变状态，编译期强制隔离是正确设计，不是可以随手绕开的麻烦。
+    /// 同理 `WeatherTimeFormatter.resolveFormatPattern` 已显式标 `nonisolated`
+    /// （:35-38），那才是纯裁定、才允许跨 actor 调用。
+    @MainActor
     func testIssueTimeDecoding() throws {
         let parsed = try XCTUnwrap(NmcIssueTimeDecoder.date(from: "2026/10/06 20:28",
                                                              timeZone: shanghai))

@@ -140,16 +140,26 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
                              "测试自身的 JSONP 构造失败 —— 字段名与解码器不匹配")
     }
 
+    /// ⚠️ 有两个重载：
+    ///  - 传 `Behavior`：helper 自己构造 stub（多数测试用这个）；
+    ///  - 传 `StubWeatherCnDetail`：**调用方要断言 stub 自身的状态**
+    ///    （如 recordedRequestIDs）时用这个 —— 否则断言的是一个
+    ///    **从未接进 VM** 的 stub，测试看着绿但没有证明力。
     private func makeViewModel(items: [OfficialWarningItem],
                                detail: StubWeatherCnDetail.Behavior) throws -> WeatherViewModel {
-        let store = try makeStore()
-        return WeatherViewModel(service: StubWeather(snapshot: makeSnapshot()),
-                                store: store,
-                                locationProvider: LocationProvider(),
-                                airService: StubAir(),
-                                ensembleService: StubEnsembleAlwaysFail(),
-                                alarmService: StubNmcAlarm(.success(items)),
-                                alarmDetailService: StubWeatherCnDetail(detail))
+        try makeViewModel(items: items, detailStub: StubWeatherCnDetail(detail))
+    }
+
+    /// 注入**已构造好的** stub，使调用方能观察它的内部状态。
+    private func makeViewModel(items: [OfficialWarningItem],
+                               detailStub: StubWeatherCnDetail) throws -> WeatherViewModel {
+        WeatherViewModel(service: StubWeather(snapshot: makeSnapshot()),
+                         store: try makeStore(),
+                         locationProvider: LocationProvider(),
+                         airService: StubAir(),
+                         ensembleService: StubEnsembleAlwaysFail(),
+                         alarmService: StubNmcAlarm(.success(items)),
+                         alarmDetailService: detailStub)
     }
 
     private func waitUntil(timeout: TimeInterval = 3,
@@ -169,9 +179,11 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
     /// 正文永远拿不到（但所有既有测试都绿 —— 最坏的那种状态）。
     func testDefenseGuideReachesViewModelThroughProductionPath() async throws {
         let id = "65402641600000_20261006212927"
-        let detailStub = StubWeatherCnDetail(
-            .success([id: makeDetail(identifier: id, guide: measuredGuide)]))
-        let vm = try makeViewModel(items: [makeItem(id: id)], detail: detailStub)
+        // 传Behavior（不是构造好的 stub）—— makeViewModel 内部负责构造。
+        let vm = try makeViewModel(
+            items: [makeItem(id: id)],
+            detail: .success([id: makeDetail(identifier: id, guide: measuredGuide)])
+        )
 
         await vm.addAndSelect(makeCity())
         await waitUntil { vm.displayedOfficialWarning != nil }
@@ -242,8 +254,11 @@ final class OfficialWarningDefenseGuideTests: XCTestCase {
 
     /// 本城市**无预警**时**不发**任何详情请求（限频纪律：不空烧配额）。
     func testNoWarningsForCitySendsNoDetailRequest() async throws {
+        // 必须注入**这个 stub 实例**—— 断言的是它recordedRequestIDs()。
+        // （另造一个 stub 的话，断言的是一个从未接进 VM 的对象，
+        //   测试会永远绿且证明不了任何东西。）
         let detailStub = StubWeatherCnDetail(.success([:]))
-        let vm = try makeViewModel(items: [], detail: detailStub)
+        let vm = try makeViewModel(items: [], detailStub: detailStub)
 
         await vm.addAndSelect(makeCity())
         await waitUntil { vm.displayedOfficialWarning != nil }
