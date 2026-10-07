@@ -61,6 +61,14 @@
 import SwiftUI
 
 /// 官方预警卡（四态自持）。
+///
+/// ⚠️ **类型级 `@MainActor`** —— 与本仓所有 View 范式一致
+/// （`DaylightCard` / `AirQualityCard` / `ContentView` 等均如此）。
+/// 不标会编译不过：本卡的 `color(for:)` 要调 `AirQualityCard.color(for:)`，
+/// 那是另一个 View 的 static 成员，继承了它的类型级隔离；
+/// `issueTimeText` 要调类型级 `@MainActor` 的 `WeatherTimeFormatter`。
+/// SwiftUI 的 `View` 本身也要求成员访问在主 actor，标注是诚实描述而非绕过。
+@MainActor
 struct OfficialWarningCard: View {
 
     /// 四态（由 `WeatherViewModel` / Core 的 `resolve` 派生）。
