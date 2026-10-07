@@ -263,3 +263,270 @@
   associated domains），CI 全绿**不能**作为真机可用的证据；真机验收
   必须在签名产物上做，且验收清单要含「跨进程共享读写」用例。
 
+---
+
+## 十、编译失败遮蔽测试红灯（run114 → run137 实证）
+
+> 本节是上面「六、复盘结论」第 1 条「错误分层暴露」的**机制升级**：
+> 那条讲的是*编译错误*之间互相遮挡；本节讲的是**编译错误把测试红灯
+> 一起遮住**。两者叠加，才产生「修一处、CI 又暴露下一处」的连续 10+ 轮。
+> **本节的量化数字全部来自 GitHub API 实测**（采集脚本见文末「取证方法」）；
+> 方案部分标注「未实测」。
+
+### P-20 单一 step 同时承担编译与测试 → 编译失败时测试根本没跑（run114–run137）
+
+- **现象**：`.github/workflows/ios.yml` 第 64–74 行只有一个
+  `Run unit tests (simulator)` step，里面是
+  `xcodebuild test`。该命令**先编译整个 test target（含 1197 个测试函数），
+  编译全部成功后才进入执行阶段**。只要有 1 个编译错误，执行阶段
+  **一个测试都不会跑**——红灯不存在，不是"绿"，是"从未被检验"。
+- **实测证据（run114–run138 共 25 次失败，全部红在同一个 step）**：
+
+  | 失败类型 | 次数 | run 区间 | 注解里的证据 |
+  |---|---|---|---|
+  | **编译失败**（测试从未执行） | **19** | run114–run132 | `file.swift:行:列: error: ...` + `** TEST FAILED **` |
+  | **测试断言失败**（编译通过） | **5** | run133–run137 | `-[Suite testMethod] : XCTAssert... failed` |
+  | 无法取到注解（见下） | 1 | run138 | jobs 列表为空 |
+  | 编译与断言同时出现 | **0** | — | 这是关键：两类失败从不共存 |
+
+  最后一行是整节的核心：既然编译失败时**一条断言注解都不会产生**，
+  那么 CI 上看到的"全是编译错"**不是"测试没问题"，而是"测试没跑"**。
+
+- **⚠️ 日志措辞本身在骗人**：`grep` 到的 `** TEST FAILED **` 样板行
+  在**编译失败**的 run 里同样出现（run114 的注解里就有）。xcodebuild
+  编译崩了照样打 `** TEST FAILED **`。所以"日志里写着 TEST FAILED"
+  **不能**推出"有测试跑挂了"。必须看有没有
+  `-[Suite testMethod] :` 形态的注解——那才是真跑了测试的标志。
+- **量化结论：被遮蔽的红灯**。把 15 条真实红测逐条回溯到它的引入提交
+  （`git log --reverse -S '<方法名>'`），再看引入它的那次 CI 属于哪类失败：
+
+  | 测试文件 | 方法数 | 引入于 | 引入轮失败类型 | 首次实际报红 |
+  |---|---|---|---|---|
+  | `MarineFloodSourcesTests.swift` | 1 | `f0382c4` | run114 **COMPILE** | run133 |
+  | `RadarTileTests.swift` | 2 | `fac5bb6` | run114 **COMPILE** | run136 |
+  | `UVIndexGuideTests.swift` | 4 | `da77541` | run119 **COMPILE** | run136 |
+  | `NmcAlarmTests.swift` | 1 | `bde61e2` | run120 **COMPILE** | run133 |
+  | `RadarPixelShiftTests.swift` | 7 | `d715851` | run124 **COMPILE** | run133/134 |
+
+  **15/15（100%）**：每一条红测都是**先**在一次编译失败的 CI 里进入代码库、
+  **后**在编译修好之后才浮出来。**编译失败共遮蔽了 15 条测试红灯。**
+- **遮蔽时长**：最早的 `MarineFloodSourcesTests` 与 `RadarTileTests`
+  在 run114（2026-10-06T11:40:50Z）入库，直到 run133
+  （2026-10-06T15:58:12Z）才第一次报红 —— **被遮蔽 19 次 CI 推送、
+  约 3 小时 55 分钟**。全量 15 条从引入到暴露，横跨 run114→run137
+  （约 19 小时）。
+- **为什么这条坑以前没被记下来**：P-03 记的是"产物上传用
+  `if-no-files-found: ignore` 会静默吞问题"，P-19 记的是
+  "CI 绿 ≠ 真机对"。**两者都没覆盖「编译与测试混在一步」这个结构性缺陷。**
+  之前 19 次编译失败里，有 18 次的注解里一条断言都没有，我们当时读到的是
+  "这次又是编译错"，于是继续修编译——**红灯被合法地、一次又一次地推迟**。
+  修编译本身没错（它是必修项），但缺一个"编译是否已通过"的显式判据，
+  就永远只能一轮见一层。
+
+### P-21 取证时的两个 API 坑（省得下次重踩）
+
+- `check-runs/{id}/annotations` 的 `{id}` 是 **check-run id**，
+  即 `actions/runs/{run_id}/jobs` 里 `jobs[0].id`，**不是** workflow run id。
+  传错会拿到 `{"message":"Not Found"}`——且这个错误响应是 **HTTP 200**，
+  脚本里 `if (resp.ok)` 判断不出来，会静默解析成"0 条注解"。
+  **判空必须判 `message == "Not Found"`，不能判 HTTP 状态码。**
+- `annotations` 端点返回的是**裸 JSON 数组**，不是带 `total_count` 的对象。
+  解析时要同时兼容两种形态。
+
+### P-22 方案评估（⚠️ 以下 YAML/脚本**均未实测** —— 本机 Windows 无 Xcode）
+
+> 纪律：本节所有 workflow 改动**没有在 macOS runner 上跑过**。
+> 首次启用请当作一次独立改动单独提交、单独观察一轮 CI。
+
+#### 方案 A（**推荐**）：编译与测试拆成两个 step
+
+- **做法**：`build-for-testing`（只编译，产出 `.xctest`）→
+  `test-without-building`（只执行）。两者共用同一个
+  `-derivedDataPath`，第二步复用第一步的产物。
+- **为什么是它**：它**把归因问题从根上消掉**。第一步红 = 编译问题，
+  第二步红 = 测试问题，两者在 GitHub UI 上是两个独立的 step、
+  两条独立的注解流。不需要任何"从日志猜是哪一类"的启发式规则。
+  顺带**省时间**：编译只跑一次（`test` 本来也是编一次），
+  而第二步在编译失败时**秒级失败**而不是重编。
+- **代价**：`test-without-building` 必须严格复用 `-derivedDataPath`
+  与 `-destination`；两者不一致会得到"跑了 0 个测试"这种**假绿**，
+  是本方案唯一的真实风险（缓解见下方断言）。
+- **取舍**：`xcodebuild test` 一步版更短，但正是这个"短"造成了 19 次遮蔽。
+  改动量约 15 行 YAML，无脚本、无新增依赖。
+
+#### 方案 B：保留单 step，事后按 xcresult 存在性分流
+
+- **做法**：单 step 内先 `xcodebuild test`，用
+  `rc=$?` 兜住失败码，再判 `-f build/TestResults.xcresult`：
+  有 → 跑测试阶段失败；无 → 编译失败，直接 `::error::COMPILE_FAILURE`。
+- **优点**：改动最小，不动 `xcodebuild` 调用方式。
+- **缺点（决定了它不能做主方案）**：分流**完全依赖 xcresult 是否落盘**。
+  编译崩在中途时 xcresult 可能落一个**不完整**的包，此时会把编译失败
+  误判成测试失败——**从"看不出"变成"看错了"，比现状更危险**。
+  另外它仍然只有 1 个 step，GitHub UI 上两类失败还是挤在一起。
+- **定位**：A 的补充。若暂不想拆 step，可先上 B 拿显式判据。
+
+#### 方案 C：测试清单守卫（防"测试没被编进 target"）
+
+- **做法**：仓库存一份测试方法清单，CI 跑完比对"实际执行的测试数"。
+  本仓库当前基线（实测，2026-10-07）：**95 个测试文件 / 1197 个测试函数**。
+- **它能抓什么**：测试文件没进 `sources`、被 `@available`/条件编译排除、
+  或被 scheme 的 `test.targets` 漏掉——即"**编进去了但没跑**"。
+- **它抓不到什么（本方案的真实短板）**：**抓不到编译失败遮蔽**。因为
+  清单与"实际执行数"的比对发生在测试**跑完之后**，而编译失败时根本没有
+  "跑完之后"这个时刻。所以 **C 不能替代 A**，只能叠加。
+- **代价**：清单文件要随每次新增测试手工更新，否则天天误报；
+  静态正则匹配函数名会与 `@Test` 宏、辅助方法产生歧义。
+  **本仓库 XCTest 写法统一（1197 个 `func testXxx`，无 `@Test`），
+  清单可自动生成**，维护成本可控——但这一点是**按当前代码风格推断**的。
+
+#### 方案 D（补充，成本最低，建议与 A 一起上）：注解里区分失败类别
+
+- 在现有 `Report test failures as annotations` 里加一行判据：
+  若日志有 `-[Suite testMethod] :` 形态的注解 → 额外打一条
+  `::error::TEST_FAILURE`；否则打 `::error::COMPILE_FAILURE`。
+- 这不改任何构建行为，只是让**红在哪一类**一眼可见，成本约 5 行。
+- 它**不能**让测试提前跑起来（仍被编译遮蔽），但能让"这次是编译挡了"
+  立刻可读——**直接解决本次 19 次遮蔽里"看不出真相"的那部分损失**。
+
+#### 推荐组合
+
+**A + D**。A 消除遮蔽（治本），D 让残余失败的归因一眼可读（治标，兜住
+A 覆盖不到的情况，如"Archive/IPA 步骤的失败"）。C 作为后续增强。
+**不建议单独用 B**（误判风险大于收益），C 单独用**解决不了本问题**。
+
+<details>
+<summary>可直接复制的 YAML 片段（替换现有 "Run unit tests (simulator)" step）——<strong>未实测</strong></summary>
+
+```yaml
+      # ── 编译与测试分离：编译失败与测试失败分别归因（方案 A，未实测）──
+      # 纪律：DerivedData 路径必须与下一步**完全一致**，否则
+      # test-without-building 找不到 .xctest，会报「跑了 0 个测试」＝假绿。
+      - name: Compile tests (build-for-testing)
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          # 承 P-02：tee 在管道末端，pipefail 保证 xcodebuild 失败码能传出；
+          # 禁止把 tee 换成 `| head`。
+          xcodebuild build-for-testing \
+            -project ZhishengWeather.xcodeproj \
+            -scheme ZhishengWeather \
+            -destination "platform=iOS Simulator,OS=latest,name=${{ steps.sim.outputs.device }}" \
+            -derivedDataPath build/DD \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild-build.log
+
+      - name: Run unit tests (test-without-building)
+        run: |
+          set -euo pipefail
+          rm -rf build/TestResults.xcresult
+          xcodebuild test-without-building \
+            -project ZhishengWeather.xcodeproj \
+            -scheme ZhishengWeather \
+            -destination "platform=iOS Simulator,OS=latest,name=${{ steps.sim.outputs.device }}" \
+            -derivedDataPath build/DD \
+            -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild-test.log
+          # 防空跑：build-for-testing 产物缺失时 xcodebuild 可能 0 测试 0 失败，
+          # 那就是**假绿**。这里显式判产物在不在。
+          test -e build/DD/Build/Products/Debug-iphonesimulator/ZhishengWeatherTests.xctest
+
+      # 方案 D：把失败类别直接写进注解。未实测。
+      - name: Report test failures as annotations
+        if: failure()
+        run: |
+          set -euo pipefail
+          # 编译阶段也可能打出 "** TEST FAILED **"，**不能**拿它判断"测试跑挂了"。
+          # 真跑过测试的唯一标志是 -[Suite testMethod] : 形态的注解。
+          if grep -qaE '\-\[[A-Za-z0-9_]+\.[A-Za-z0-9_]+ test[A-Za-z0-9_]+\]' build/xcodebuild-test.log 2>/dev/null; then
+            echo "::error::TEST_FAILURE——测试确实执行了，红灯是真断言失败（见下方条目）"
+          else
+            echo "::error::COMPILE_FAILURE——本次没有任何测试被执行；下方为编译错误，测试状态未知"
+          fi
+          for LOG in build/xcodebuild-build.log build/xcodebuild-test.log; do
+            [ -f "$LOG" ] || continue
+            # 截断**必须**用 awk 'NR<=40'，**不能**用 head -40（P-02 同源坑）：
+            # head 会关管道，上游收到 SIGPIPE(141)，pipefail 把这条
+            # 「报告失败」的步骤自己判失败，反而掩盖真正的失败原因。
+            grep -aE "error:|XCTAssert[A-Za-z]* failed|failed - |TEST FAILED" "$LOG" \
+              | sed -e 's/\r$//' \
+              | awk 'NR<=40' \
+              | while IFS= read -r line; do
+                  escaped=$(printf '%s' "$line" | sed 's/%/%25/g')
+                  echo "::error::$escaped"
+                done
+          done
+```
+
+方案 C 的清单守卫片段（**未实测**）：
+
+```bash
+# scripts/check-test-manifest.sh —— 校验"编进 target 的测试"与"清单"一致
+# 基线：95 个测试文件 / 1197 个测试函数（2026-10-07 实测）
+set -euo pipefail
+MANIFEST=scripts/test-manifest.txt
+RES=build/TestResults.xcresult
+EXPECTED=$(grep -c . "$MANIFEST")
+# Xcode 15.4 的 xcresulttool 尚未强制 --legacy；Xcode 16+ 需补 --legacy。
+# 递归搜 counts 键，避免依赖 JSON 里随版本变动的层级路径。
+ACTUAL=$(xcrun xcresulttool get --path "$RES" --format json | python3 -c '
+import json, sys
+def walk(o, out):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == "testsCount" and isinstance(v, dict) and "_value" in v:
+                out.append(int(v["_value"]))
+            else:
+                walk(v, out)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v, out)
+r = []
+walk(json.load(sys.stdin), r)
+print(max(r) if r else 0)
+')
+if [ "$ACTUAL" -ne "$EXPECTED" ]; then
+  echo "::error::测试数不符：清单 $EXPECTED 条，实际执行 $ACTUAL 条 —— 有测试没被编进 target 或没跑到"
+  exit 1
+fi
+```
+
+</details>
+
+### 无法确定的部分（不猜）
+
+- **run138**：`conclusion=failure`，但 `actions/runs/{id}/jobs` 返回
+  `jobs: []`、注解为 0 条。**取消/排队/基础设施类失败都有可能**，
+  现有权限下无法判定是哪一种，故未计入 19/5 之外的任何归因。
+- **run139**：抓取时 `conclusion=null`（仍在跑），未纳入统计。
+- **每次失败到底漏了几条**：现workflow 的注解抽取有
+  `awk 'NR<=40'` 上限，且 `Upload test results` 用的是
+  `if-no-files-found: ignore`。**因此"15 条"是下界，不是上界**——
+  19 次编译失败期间被遮蔽的红灯**可能多于 15 条**（同一次编译失败
+  会遮蔽当时树里所有跑不到的红测，而不只是最终浮出来的那几条）。
+  要拿到精确数字，需要让 CI 在编译失败时也落一份"应跑测试数"的基线
+  （即方案 C）。
+
+### 取证方法（可复现）
+
+```bash
+# 公开仓库免认证。① 取 run 列表（ios 分支）
+curl -s -m 20 --ssl-no-revoke --compressed \
+  "https://api.github.com/repos/woyaoxingfua/ZhishengWeather/actions/runs?branch=ios&per_page=30"
+# ② 取 jobs（注意是 jobs[0].id，不是 run id）
+curl -s ... "https://api.github.com/repos/woyaoxingfua/ZhishengWeather/actions/runs/{run_id}/jobs"
+# ③ 取注解（id = 上一步 jobs[0].id）
+curl -s ... "https://api.github.com/repos/woyaoxingfua/ZhishengWeather/check-runs/{jobs[0].id}/annotations"
+# ④ 关联"红测何时入库"用 git（本地）：
+git log --reverse -S '<测试方法名>' -- ZhishengWeatherTests/
+git merge-base --is-ancestor <引入SHA> <run 的 head SHA>   # 判断它进了哪一次 CI
+```
+
+判读规则（本次即用）：
+
+| 注解里出现 | 判定 |
+|---|---|
+| `** TEST FAILED **` | **不可判定**（编译失败时也会打，见 P-20） |
+| `-[Suite testMethod] :` | 真跑过测试，**测试失败** |
+| `path/File.swift:行:列: error:` | **编译失败**，测试未执行 |
+| 两者都没有 | 归因不了，看不出是编译还是测试（run110 的情况） |
+
