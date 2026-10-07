@@ -166,14 +166,39 @@ final class TileIndexCorrectionInertnessTests: XCTestCase {
                       "偏移超过半格时应判可能改变（否则判据形同虚设）")
     }
 
-    /// 反向边界：恰好等于半格时**仍**判 false（严格大于才翻转）。
+    /// 反向边界：偏移**恰好等于**半格时判 **true**（判据是 `>=`，不是 `>`）。
     ///
-    /// 钉住 `>=` 与 `>` 的取舍，避免边界抖动。
-    func testOffsetExactlyEqualToHalfTileStillReturnsFalse() {
+    /// ⚠️ 这条断言原本写的是 `false`（"严格超出才翻转"），**期望值错了**，
+    /// 实现 `offset >= margin`（`CoordinateTransform.swift:881`）是对的。依据：
+    ///
+    /// 瓦片 `x` 覆盖**半开区间** `[x/n, (x+1)/n)`，索引由 `floor` 反算
+    /// （`RadarMapCard.correctedTileCoordinates`，`RadarMapCard.swift:166`）。
+    /// 中心点 `(x+0.5)/n` 加**恰好半格**后**正好落在上边界 `(x+1)/n`**，
+    /// `floor((x+1))` = `x+1` → 索引**确实变了**（已用 Python 复刻 z4/z7、
+    /// x=5/26/100 逐点验证）。故"恰好半格"不属于"必然不变"，判据必须用 `>=`。
+    ///
+    /// 若改成 `>`，会在偏移恰为半格时漏判一次跨格 —— 这正是本函数要防的事。
+    ///
+    /// 关于浮点可达性：此处"恰好等于"是**真等于**，不是浮点误差假象 ——
+    /// `margin` 由**同一个函数** `halfTileMarginMeters(atZoom: 7)` 现场算出再传回，
+    /// 两次调用结果**位模式完全相同**，`>=` 看到的是同一个 Double。
+    /// 故本条不涉及浮点误差，纯粹是期望值写反。
+    func testOffsetExactlyEqualToHalfTileIsJudgedAsAbleToChange() {
+        let margin = CoordinateTransform.halfTileMarginMeters(atZoom: 7)
+        XCTAssertTrue(CoordinateTransform.canCorrectionChangeTileIndex(zoom: 7,
+                                                                       offsetMeters: margin),
+                      "恰好等于半格时索引可跨格（半开区间 + floor），应判 true（判据是 >=）")
+    }
+
+    /// 真正的分界在**半格之下**：偏移**严格小于**半格 → 必然仍在同一格内。
+    ///
+    /// 用 `nextDown` 取"刚好小于半格"的最大可表示 Double ——
+    /// 这是本判据真正的边界（`>=` 的左侧），比上面那条更贴近要害。
+    func testOffsetJustBelowHalfTileCannotChangeTileIndex() {
         let margin = CoordinateTransform.halfTileMarginMeters(atZoom: 7)
         XCTAssertFalse(CoordinateTransform.canCorrectionChangeTileIndex(zoom: 7,
-                                                                        offsetMeters: margin),
-                       "恰好等于半格时应判false（判据是严格超出才翻转）")
+                                                                         offsetMeters: margin.nextDown),
+                       "严格小于半格时必然不跨格（判据左侧边界）")
     }
 
     /// 🔴 **这条测试不能证明纠偏方向对错。**

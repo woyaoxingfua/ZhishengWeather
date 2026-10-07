@@ -432,11 +432,28 @@ final class RadarTimelineTests: XCTestCase {
     }
 
     /// 越界 index 读 selected → **nil** 而不是崩溃（Core 禁 fatalError / 强制解包）。
+    ///
+    /// ⚠️ 越界状态**不能靠 `select(99)` 构造**：`select` 的职责就是夹紧
+    /// （`RadarFrame.swift:117-120`：`min(max(newIndex, 0), frames.count - 1)`），
+    /// 走它必然得到合法 index。上一条 `testSelectClampsOutOfRangeIndex`
+    /// 已经把这条夹紧契约钉住了，两条测试只有这样分工才不互相矛盾。
+    /// `index` 是内部 `var`，直接赋值才能触到 `selected` 的 guard 分支
+    /// （`RadarFrame.swift:72`：`guard frames.indices.contains(index) else { return nil }`）。
     func testSelectedReturnsNilForOutOfRangeIndex() {
         let raw = [frame(offset: 0, path: "/a"), frame(offset: 600, path: "/b")]
         var timeline = RadarTimeline.make(from: raw)
-        timeline?.select(99)
+        timeline?.index = 99
         XCTAssertNil(timeline?.selected)
+    }
+
+    /// 反向确认：夹紧后 index 合法 → `selected` 有值（证明上一条不是恒 nil 的死代码）。
+    func testSelectedIsNonNilForInRangeIndex() {
+        let raw = [frame(offset: 0, path: "/a"), frame(offset: 600, path: "/b")]
+        var timeline = RadarTimeline.make(from: raw)
+        timeline?.index = 0
+        XCTAssertEqual(timeline?.selected?.path, "/a")
+        timeline?.index = 1
+        XCTAssertEqual(timeline?.selected?.path, "/b")
     }
 
     /// ageMinutes：最新帧 = 0 分钟；上一帧 = 10 分钟；最早帧 = 120 分钟。
@@ -457,11 +474,36 @@ final class RadarTimelineTests: XCTestCase {
     }
 
     /// 越界 → ageMinutes 为 nil。
+    ///
+    /// ⚠️ 两个必须说清的坑（这条测试原本红过）：
+    ///
+    /// ① **不能用 `select(99)` 制造"无选中帧"**：select 会夹紧到合法下标
+    ///    （`RadarFrame.swift:117-120`），于是 `selected` 有值 → 有 age。
+    ///    这里直接写 `index` 才能触到 nil 分支（同上一条的理由）。
+    ///
+    /// ② **绝不能传 `Date()`**：`ageMinutes` 的单位是**分钟**且实现正确
+    ///    （`RadarFrame.swift:97-102`，`Int(seconds / 60)`）。原先这里传真实
+    ///    当前时间，而 fixture 帧时刻锚在 `base = 1_700_000_000`
+    ///    = 2023-11-14 22:13:20 UTC，**相差约 2.9 年 ≈ 1.52×10⁶ 分钟**
+    ///    —— 这就是那条 `1522612` 的全部来源：**测试造的数据过期了两年**，
+    ///    不是实现的单位/量级 bug。注入帧时刻之后才有可判定的 nil 断言。
     func testAgeMinutesIsNilWhenNoFrameSelected() {
         let raw = [frame(offset: 0, path: "/a")]
         var timeline = RadarTimeline.make(from: raw)
-        timeline?.select(99)
-        XCTAssertNil(timeline?.ageMinutes(now: Date()))
+        timeline?.index = 99
+        XCTAssertNil(timeline?.ageMinutes(now: Date(timeIntervalSince1970: base)))
+    }
+
+    /// 上一条的对照：夹紧/合法下标下 ageMinutes **有值**，且单位确为**分钟**。
+    ///
+    /// 钉住「实现把秒当分钟」或「把分钟当秒」这类单位 bug —— 二者都会让本条红。
+    func testAgeMinutesIsInMinutesNotSecondsForSameFrame() {
+        let raw = [frame(offset: 0, path: "/a")]
+        var timeline = RadarTimeline.make(from: raw)
+        timeline?.index = 0
+        // 帧时刻 + 600 s（10 分钟）→ age 应为 10；若是秒则应为 600。
+        let now = Date(timeIntervalSince1970: base + 600)
+        XCTAssertEqual(timeline?.ageMinutes(now: now), 10, "ageMinutes 单位应为分钟")
     }
 
     /// 帧 id 稳定（同一时刻恒等），可安全用于 SwiftUI `ForEach`。
