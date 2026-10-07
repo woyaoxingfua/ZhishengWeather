@@ -203,10 +203,6 @@ actor SatelliteImageService {
                     switch await loadFrame(url: url) {
                     case .downloaded(let data):
                         candidate = data
-                    case .rejected(let verdict):
-                        // 传输层就能判定的坏帧（如响应体根本不是图片）。
-                        lastRejection = verdict
-                        candidate = nil
                     case .miss:
                         candidate = nil
                     }
@@ -245,11 +241,13 @@ actor SatelliteImageService {
 
     // MARK: - 私有：单帧
 
-    /// 取单帧字节（不含回溯、**不做像素判定**）。
+    /// 取单帧字节（不含回溯、**不做任何有效性判定**）。
     ///
-    /// ⚠️ 这里**只做字节层的粗判**（拦住「响应体根本不是图片」），
-    ///   **两层完整判定由 `fetchLatest` 统一做**。
-    ///   原因：缓存与新下载必须走**同一条**判定路径；
+    /// ⚠️ 判定**全部**由 `fetchLatest` 统一做（字节 + 像素两层）。
+    ///   若在这里也做一遍字节判，就是同一判据跑两次 ——
+    ///   看着「更安全」，实则是**两份判据会各自漂移**的隐患。
+    ///
+    /// ⚠️ 原因：缓存与新下载必须走**同一条**判定路径；
     ///   若把判定分散在「缓存分支」与「下载分支」两处，
     ///   极易出现「坏帧从缓存绕过像素层」这种最难查的漏洞。
     ///
@@ -263,10 +261,6 @@ actor SatelliteImageService {
                 // 本轮实测 404 → 552 B openresty HTML；非 2xx 一律按「该帧不存在」。
                 return .miss
             }
-            // 字节层粗判：8 KiB 下界 / 8 MiB 上界。
-            if let bad = SatelliteFrameValidator.validateByteCount(data.count) {
-                return .rejected(bad)
-            }
             return .downloaded(data)
         } catch {
             return .miss
@@ -275,10 +269,8 @@ actor SatelliteImageService {
 
     /// 单帧取数结果。
     private enum FrameResult {
-        /// 下载成功（**尚未做任何像素判定**）。
+        /// 下载成功（**尚未做任何有效性判定**）。
         case downloaded(Data)
-        /// 传输层即可判定的坏帧。
-        case rejected(SatelliteFrameVerdict)
         /// 该帧不存在（404 / 网络错误）。
         case miss
     }

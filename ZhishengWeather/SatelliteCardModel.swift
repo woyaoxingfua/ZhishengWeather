@@ -130,9 +130,14 @@ final class SatelliteCardModel {
         // ⚠️ 本批**只接线不建 UI**：Core 层的判据与 URL 拼装已有测试覆盖，
         //    但本类型**尚未被任何 View 引用**（`ContentView` 未接入），
         //    故 `image` / `state` 目前无人消费。UI 接线留到下一批。
-        let outcome = await service.fetchLatest(now: now) { data in
-            Self.statistics(of: data)
-        }
+        //
+        // ⚠️ 刻意写成**显式实参**而非尾随闭包：`statisticsProvider` 是
+        //    **可选**闭包参数，尾随闭包在可选参数位置上有歧义风险，
+        //    显式传参把「这里就是注入点」写死在代码里。
+        let outcome = await service.fetchLatest(
+            now: now,
+            statisticsProvider: { data in Self.statistics(of: data) }
+        )
 
         switch outcome {
         case .success(let data, let url, let observed, let pixelValidation):
@@ -142,6 +147,7 @@ final class SatelliteCardModel {
                 image = nil
                 observationDate = nil
                 sourceURL = nil
+                self.pixelValidation = .unavailable
                 return
             }
             state = .loaded
