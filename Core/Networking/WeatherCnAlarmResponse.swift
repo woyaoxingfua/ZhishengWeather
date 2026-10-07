@@ -131,11 +131,17 @@ struct WeatherCnAlarmListResponse: Decodable, Sendable {
             //
             // ⚠️ `container.allKeys` 在 unkeyed 容器上是**非 throwing** 属性，
             // 包 `try?` 会触发「type of expression is ambiguous without a type
-            // annotation」；数量直接用 `count`。
-            let count = container.count
+            // annotation」。
+            //
+            // ⚠️⚠️ `container.count` 的类型是 **`Int?`**（不是 `Int`）——
+            // 上一版拿它当非可选整数用，CI 报 "value of optional type 'Int?' must
+            // be unwrapped"（两处：循环条件与下标上界）。
+            // 而它**根本不必参与循环**：`isAtEnd` 才是权威终止判据。
+            // 故此处**完全不读 `count`**，越界交给 `slots` 字典自身的语义
+            // （下标不存在 → nil）。
             var slots: [Int: String] = [:]
             var cursor = 0
-            while cursor < count, !container.isAtEnd {
+            while !container.isAtEnd {
                 // 每轮**必须恰好消费一个元素**，否则游标不前进 → 死循环。
                 // `decodeNil()` 遇 null 会消费并返回 true；
                 // 否则 `decode(String.self)` 消费一个（失败时已抛出，
@@ -155,7 +161,9 @@ struct WeatherCnAlarmListResponse: Decodable, Sendable {
                 }
             }
             func string(_ index: Int) -> String? {
-                guard index >= 0, index < count else { return nil }
+                guard index >= 0 else { return nil }
+                // ⚠️ 不用 `index < count` 做上界判断 —— `count` 是 `Int?`，
+                // 且越界时字典下标本身就会返回 nil（**字典不越界**）。
                 return slots[index]
             }
             self.region = string(Index.region)
