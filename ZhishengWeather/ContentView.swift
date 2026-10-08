@@ -208,15 +208,31 @@ struct ContentView: View {
 
                 // 四条链路**并发**（不是串行）：`async let` 保证同时发起，
                 // 最后一起 await —— 任何一条都不是另三条的**前置阻塞**。
-                async let radar: Void = radarModel.load(cityID: city.id,
-                                                          latitude: latitude,
-                                                          longitude: longitude)
-                async let flood: Void = floodModel.load(latitude: latitude,
-                                                          longitude: longitude)
-                async let earthquake: Void = earthquakeModel.load(latitude: latitude,
-                                                                     longitude: longitude)
-                async let qWeather: Void = qWeatherModel.load(latitude: latitude,
-                                                               longitude: longitude)
+                //
+                // 🔴🔴 **被用户关掉的卡：连请求都不发**（不只是不渲染）。
+                // 守卫用 `if` 包裹时，闭包在条件为假时**根本不会执行** → 零请求。
+                // 这正是「关掉一张卡真的省流量与电量」的实现方式，
+                // 也让「折叠 = 不关心 = 不该耗电」的取舍在取数层同样成立。
+                // ⚠️ 坐标系里的 satellite 由卡内 `.task(id: isEnabled)` 自管，
+                //   不在这四路里（它默认关闭，用户拨开关才取数）。
+                async let radar: Void = {
+                    guard !CardVisibilityStore.isHidden(.radar) else { return }
+                    await radarModel.load(cityID: city.id,
+                                          latitude: latitude,
+                                          longitude: longitude)
+                }()
+                async let flood: Void = {
+                    guard !CardVisibilityStore.isHidden(.flood) else { return }
+                    await floodModel.load(latitude: latitude, longitude: longitude)
+                }()
+                async let earthquake: Void = {
+                    guard !CardVisibilityStore.isHidden(.earthquake) else { return }
+                    await earthquakeModel.load(latitude: latitude, longitude: longitude)
+                }()
+                async let qWeather: Void = {
+                    guard !CardVisibilityStore.isHidden(.qWeather) else { return }
+                    await qWeatherModel.load(latitude: latitude, longitude: longitude)
+                }()
                 _ = await (radar, flood, earthquake, qWeather)
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
@@ -375,8 +391,11 @@ struct ContentView: View {
                 //
                 // 四态（`.radar` / `.forecast` / `.radarUnavailable`）**全部**由
                 // `RadarCardModel` 派生并渲染，**绝无空白地图页**。
-                RadarMapCard(model: radarModel,
-                             timeZone: viewModel.selectedTimeZone)
+                // 🔴 可见性由 `CardVisibilityStore` 决定（用户可关掉这张卡 → 顺带不取数）
+if !CardVisibilityStore.isHidden(.radar) {
+                    RadarMapCard(model: radarModel,
+                                 timeZone: viewModel.selectedTimeZone)
+                }
                 // P2 · AC-B17c：UV 指数卡（当前档位 + 防晒建议 + 当日峰值与峰值时刻）。
                 //
                 // **插入位置**：与「短时降水卡」「空气质量卡」同级，固定区块，
@@ -386,10 +405,12 @@ struct ContentView: View {
                 // 隐藏判据全在卡内（当前 UV 与峰值**都**无 → `EmptyView`），
                 // 故这里**无条件**挂载——与 `RadarMapCard` 同款（由卡内四态自行决定渲染）。
                 // 分级与文案由 Core `UVIndexGuide` 单一真源给出，本文件不拼字符串。
-                UVIndexCard(points: snapshot.hourly,
-                            currentUV: snapshot.uvIndex,
-                            dailyPeakFallback: snapshot.daily?.first?.uvIndexMax,
-                            timeZone: viewModel.selectedTimeZone)
+                if !CardVisibilityStore.isHidden(.uv) {
+                    UVIndexCard(points: snapshot.hourly,
+                                currentUV: snapshot.uvIndex,
+                                dailyPeakFallback: snapshot.daily?.first?.uvIndexMax,
+                                timeZone: viewModel.selectedTimeZone)
+                }
                 // 官方预警卡（第六源 · 中国气象局 NMC）。
                 //
                 // **插入位置**：UV 卡之后、可排序区块 `ForEach(orderedVisibleSections)`
@@ -404,10 +425,12 @@ struct ContentView: View {
                 //   那会在真正有红色预警时让卡片静默消失（本仓明令禁止的静默兜底）。
                 // `now` 由 `TimelineView` 外的 `snapshot.fetchedAt` 提供
                 //   （卡片本身不读 `Date()`）。
-                if let warningState = viewModel.displayedOfficialWarning {
-                    OfficialWarningCard(state: warningState,
-                                       now: snapshot.fetchedAt,
-                                       timeZone: viewModel.selectedTimeZone)
+                if !CardVisibilityStore.isHidden(.warning) {
+                    if let warningState = viewModel.displayedOfficialWarning {
+                        OfficialWarningCard(state: warningState,
+                                           now: snapshot.fetchedAt,
+                                           timeZone: viewModel.selectedTimeZone)
+                    }
                 }
                 // 台风卡（第七链路· 中央气象台台风网）。
                 //
@@ -423,13 +446,15 @@ struct ContentView: View {
                 // 台风是**全App 唯一**的一条链路，既不随城市切换而变，
                 // 也不随快照刷新而变；绑`id:` 会让它在切城时无谓重取。
                 // 卡内年份选择器是**另一条**入口（用户主动切年份才重取）。
-                TyphoonCard(model: typhoonModel,
-                            currentYear: currentYearValue)
-                    .task {
-                        // 仅在**尚未取过数**时拉一次（`.idle` 判据）。
-                        guard case .idle = typhoonModel.state else { return }
-                        await typhoonModel.load(year: nil)
-                    }
+                if !CardVisibilityStore.isHidden(.typhoon) {
+                    TyphoonCard(model: typhoonModel,
+                                currentYear: currentYearValue)
+                        .task {
+                            // 仅在**尚未取过数**时拉一次（`.idle` 判据）。
+                            guard case .idle = typhoonModel.state else { return }
+                            await typhoonModel.load(year: nil)
+                        }
+                }
                 // 卫星云图卡（风云四号真彩 · 独立失败域）。
                 //
                 // **插入位置**：台风卡之后、可排序区块 `ForEach(orderedVisibleSections)`
@@ -446,8 +471,10 @@ struct ContentView: View {
                 // （整幅亚洲区域位图会完全遮住地图底图，理由见
                 // `SatelliteCardModel.isEnabled`），故未开启时**一个请求都不发**；
                 // 用户拨开开关才取数。本文件**不调** `satelliteModel.load(...)`。
-                SatelliteCard(model: satelliteModel,
-                              timeZone: viewModel.selectedTimeZone)
+                if !CardVisibilityStore.isHidden(.satellite) {
+                    SatelliteCard(model: satelliteModel,
+                                  timeZone: viewModel.selectedTimeZone)
+                }
                 // 河道流量卡（第五源 Open-Meteo Flood · 独立失败域）。
                 //
                 // **插入位置**：卫星云图卡之后、可排序区块**之前**（同上款：
@@ -460,8 +487,10 @@ struct ContentView: View {
                 //
                 // ⚠️ **无坐标判据**：实测内陆城市同样有值（北京、拉萨），
                 // 故不按"是否沿海"过滤（那会错杀真实数据）。
-                FloodCard(model: floodModel,
-                          timeZone: viewModel.selectedTimeZone)
+                if !CardVisibilityStore.isHidden(.flood) {
+                    FloodCard(model: floodModel,
+                              timeZone: viewModel.selectedTimeZone)
+                }
                 // 地震卡（第十源 USGS地震 · 免 Key· 独立失败域）。
                 //
                 // **插入位置**：河道流量卡之后、可排序区块**之前**（同上款：
@@ -473,8 +502,10 @@ struct ContentView: View {
                 // 实测**北京 300km/30天/M2.5+ 就是 0 条**（已用 `/count` 交叉验证，
                 // 确认真的没地震），也就是说**绝大多数用户看到的就是「没有」**。
                 // 若把「没有」与「取不到」混用，用户会以为 App 坏了。
-                EarthquakeCard(model: earthquakeModel,
-                              timeZone: viewModel.selectedTimeZone)
+                if !CardVisibilityStore.isHidden(.earthquake) {
+                    EarthquakeCard(model: earthquakeModel,
+                                  timeZone: viewModel.selectedTimeZone)
+                }
                 // 和风天气卡（第九源 QWeather · 需 Key · 独立失败域）。
                 //
                 // **插入位置**：地震卡之后、可排序区块**之前**（同款：
@@ -486,8 +517,10 @@ struct ContentView: View {
                 // 🔴🔴 **`attributions` 必须渲染**（和风官方明文：
                 // 「必须与当前数据共同显示」）—— 这是**许可条件，非可选**。
                 // 漏渲染 = 违反许可条件，比少一个 UI 元素严重得多。
-                QWeatherCard(model: qWeatherModel,
-                             timeZone: viewModel.selectedTimeZone)
+                if !CardVisibilityStore.isHidden(.qWeather) {
+                    QWeatherCard(model: qWeatherModel,
+                                 timeZone: viewModel.selectedTimeZone)
+                }
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in
