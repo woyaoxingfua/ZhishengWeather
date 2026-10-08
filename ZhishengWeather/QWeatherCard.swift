@@ -31,6 +31,15 @@
 //  与台风 / 洪水 / 地震卡同纪律。把两者混成一句"加载失败"，
 //  会让「上游没下发这一天」被误报成「产品坏了」。
 //
+//  ── 🔴 逐时（`QWeatherHourlyCard`）渲染在**本卡内部** ────────────────────
+//  刻意**不做成独立卡片** —— 那需要改 `ContentView`（加 `@State` +
+//  加 `async let` + 加挂载点三处），而该文件正被两位工程师同时编辑。
+//  做成区块 → `ContentView` **零改动**。详见 `QWeatherHourlyCard` 文件头。
+//
+//  ── 🔴 页脚的 `attributions` 已覆盖**逐日 + 逐时**两份 ────────────────────
+//  和风要求「署名必须与当前数据共同显示」，而 `QWeatherCardModel.attributions`
+//  已把两次请求的 `metadata.attributions` **并集去重** → 一处渲染即足矣。
+//
 //  本仓纪律：View 整体 `@MainActor`（P-06）；图标只用本仓已实际用过的
 //  SF Symbol（P-24）；禁 `try!` / `fatalError`。
 //
@@ -51,6 +60,13 @@ struct QWeatherCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
+            // 🔴 逐时区块（**渲染在本卡内部**，不是独立卡片）。
+            //   它与逐日**共用同一个 `model`**，但状态是**独立的**
+            //   （`hourlyState` vs `state`）→ 「逐日成功 + 逐时 401」
+            //   会被如实分区显示，而不会被压成一句「和风天气取不到」。
+            //   ⚠️ **无条件渲染**：四态由 `model.hourlyState` 派生，
+            //   各自渲染（`.idle` / `.noData` / `.available` / `.unavailable`）。
+            QWeatherHourlyCard(model: model, timeZone: timeZone)
             footer
         }
         .padding(12)

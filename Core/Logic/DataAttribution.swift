@@ -218,6 +218,7 @@ enum DataAttribution {
         case .marineTide: return "潮汐（逐15 分钟潮高，含高低潮极值）"
         case .coarseFallbackFields: return "兜底标量（气温/气压/风向）"
         case .qWeatherDailyForecast: return "逐日预报（和风：逐日高低温/天气现象/昼夜分块/天文，含和风指定署名）"
+        case .qWeatherHourlyForecast: return "逐时预报（和风：逐时温度/体感/湿度/云量/降水/气压/能见度/风/UV，含和风指定署名）"
         @unknown default: return "（未命名能力）"
         }
     }

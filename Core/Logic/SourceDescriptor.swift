@@ -308,7 +308,7 @@ enum SourceDirectory {
         SourceDescriptor(id: .qWeather,
                          displayName: "和风天气",
                          role: .auxiliary,
-                         capabilities: [.qWeatherDailyForecast],
+                         capabilities: [.qWeatherDailyForecast, .qWeatherHourlyForecast],
                          // ⚠️ **诚实留空**：和风逐日要素（自带单位的量纲对象 /
                          // 昼夜分块 / 天文时刻）**不在 `WeatherFieldKey` 域内**
                          // （它们属于 `QWeatherDailyForecast` 模型）——

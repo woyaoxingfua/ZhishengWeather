@@ -11,6 +11,16 @@
 //  官方文档示例 ≠ 真实账号响应，接入后必须真机核验。
 //  ══════════════════════════════════════════════════════════════════════════
 //
+//  ── 🔴 逐时端点实测补记（2026-10-09，`?hours=24` → HTTP 200）───────────
+//  · 响应顶层键逐字是 **`hours`**（**不是** `hourly` —— 路径段才是 `hourly`）；
+//  · 逐时条目 13 键：`forecastTime` / `temperature` / `feelsLike` / `humidity` /
+//    `cloudCover` / `precipitation` / `pressure` / `visibility` / `wind` /
+//    `windGust` / `condition` / `dewPoint` / `uvIndex`；
+//  · `humidity = 0.33`、`cloudCover = 0` → 确认仍是 **`[0,1]`**，不是 0–100；
+//  · 降水概率在 **`precipitation.probability`**，
+//    顶层**不存在** `precipProbability`（实测查过，确实没有）。
+//  → 故逐时**复用**逐日那套净化铁律与 `unitFraction`，不另起一套口径。
+//
 //  ── 本层的职责边界（与 DTO 层严格分工）──────────────────────────────────
 //  · DTO 层（`QWeatherDailyResponse.swift`）：容忍**线上格式的脏**（类型漂移）；
 //  · **本层**：把宽容结构**净化**成领域模型，**绝不造假值**。
@@ -227,6 +237,118 @@ enum QWeatherMapper {
         let unit = raw.unit?.value
         guard value != nil || unit != nil else { return nil }
         return QWeatherQuantity(value: value, unit: unit)
+    }
+
+    // MARK: - 逐时
+
+    /// 逐时映射（**实测顶层键是 `hours`，不是 `hourly`**）。
+    ///
+    /// - Parameter response: 解码后的 DTO（`hours` / `metadata` 均可能缺失）。
+    /// - Returns: 逐时预报领域模型；`hours` 缺失或为空 → `isEffectivelyEmpty == true`
+    ///   （UI 显示「该坐标无和风逐时数据」），**不是**故障。
+    static func mapHourly(_ response: QWeatherHourlyResponse) -> QWeatherHourlyForecast {
+        // ⚠️ 署名在「无数据」时**仍要带回**（合规要求是「与数据共同显示」，
+        //   而 `attributions` 只可能来自 `metadata`，与`hours` 独立）。
+        //   丢掉它会让「无数据」这一态无法履行署名义务 —— 与逐日同款纪律。
+        let collected = attributions(fromHourly: response)
+
+        // `[Hour?]` → `compactMap` 丢弃 null 元素（DTO 层已用可空元素保证
+        // 「一个 null 不让整包失败」，这里只做过滤）。
+        let rawHours = response.hours?.compactMap { $0 } ?? []
+        guard !rawHours.isEmpty else {
+            return QWeatherHourlyForecast(attributions: collected,
+                                          tag: response.metadata?.tag?.value,
+                                          hours: [])
+        }
+
+        var mapped: [QWeatherHour] = []
+        mapped.reserveCapacity(rawHours.count)
+        // ⚠️ 不用 `count` 作循环变量名（P-32 纪律，同 `map` 里的逐日循环）。
+        for (offset, rawHour) in rawHours.enumerated() {
+            mapped.append(mapHour(rawHour, sequenceIndex: offset))
+        }
+
+        return QWeatherHourlyForecast(attributions: collected,
+                                      tag: response.metadata?.tag?.value,
+                                      hours: mapped)
+    }
+
+    /// 单个小时映射（逐时 13 键逐项落地，**全字段可选**）。
+    ///
+    /// - Parameters:
+    ///   - raw: 单小时 DTO。
+    ///   - sequenceIndex: 数组下标（作为 `Identifiable` 的唯一 id）。
+    /// - Returns: 单小时领域模型。
+    static func mapHour(_ raw: QWeatherHourlyResponse.Hour,
+                        sequenceIndex: Int) -> QWeatherHour {
+        QWeatherHour(
+            sequenceIndex: sequenceIndex,
+            // ⚠️ 时刻**原样透传**（不解析成 Date）：理由见
+            //   `QWeatherDay.forecastStartTime` 的注释（解析失败不该让整包失败）。
+            forecastTime: raw.forecastTime?.value,
+            temperature: mapQuantity(raw.temperature),
+            feelsLike: mapQuantity(raw.feelsLike),
+            // 🔴 分数净化：越界 → nil（**绝不 clamp**，见文件头铁律 ①）。
+            //   实测 `humidity = 0.33` → 域内；若哪天变成 33（百分数），
+            //   这里会判为越界 → nil → UI 显示「暂无」，
+            //   **而不是**把 33 悄悄当成 3300%。
+            humidityFraction: unitFraction(raw.humidity?.value),
+            cloudCoverFraction: unitFraction(raw.cloudCover?.value),
+            precipitation: mapPrecipitation(raw.precipitation),
+            pressure: mapQuantity(raw.pressure),
+            visibility: mapQuantity(raw.visibility),
+            wind: mapWind(raw.wind),
+            // ⚠️ 逐时键名是 `windGust`（**不是**逐日的 `windGustMax`）。
+            windGust: mapQuantity(raw.windGust),
+            condition: mapCondition(raw.condition),
+            dewPoint: mapQuantity(raw.dewPoint),
+            // UV 指数是**裸数值**（非量纲对象）→ 与逐日 `uvIndexMax` 同款处理：
+            // 非负净化（负 UV 无物理意义），**不**当分数。
+            uvIndex: nonNegative(raw.uvIndex?.value))
+    }
+
+    // MARK: - 私有辅助（逐时）
+
+    /// 逐时署名提取（**合规必需**，故即便无数据也带回）。
+    ///
+    /// ⚠️ 与逐日 `attributions(from:)` **刻意分成两个函数**而不是泛化：
+    ///   两者参数类型不同（`QWeatherDailyResponse` / `QWeatherHourlyResponse`），
+    ///   泛化要么引入协议、要么引入 `Any`+强转（`as!` 被SC-10 禁）。
+    ///   两个三行函数是本仓一贯的取舍：**宁可重复，不引入类型擦除**。
+    ///
+    /// - Parameter response: 逐时顶层 DTO。
+    /// - Returns: 署名 URL 列表；缺失 / 非数组 → 空数组（**不是 nil**）。
+    static func attributions(fromHourly response: QWeatherHourlyResponse) -> [String] {
+        response.metadata?.attributions?.values ?? []
+    }
+
+    /// 收集**逐时越界分数**的诊断事实（供真机核验 / 日志）。
+    ///
+    /// 🔴 存在理由与逐日 `outOfRangeDiagnostics` 同款：铁律 ① 把越界值变成了
+    ///    `nil`（这是对的处理），但「变成了 nil」本身**不告诉任何人**
+    ///    上游发生了什么。本函数让这个事实**可被观测**。
+    ///
+    /// ⚠️ **纯函数**：不打印、不写共享容器、不读时钟（Core 纪律）。
+    ///
+    /// - Parameter response: 逐时顶层 DTO。
+    /// - Returns: 越界事实描述列表（正常情况下应为空）。
+    static func outOfRangeDiagnostics(_ response: QWeatherHourlyResponse) -> [String] {
+        guard let rawHours = response.hours else { return [] }
+        var findings: [String] = []
+        for rawHour in rawHours {
+            guard let rawHour else { continue }
+            if let humidity = rawHour.humidity?.value, !isUnitFraction(humidity) {
+                findings.append("hourly.humidity=\(humidity)（期望 [0,1]）")
+            }
+            if let cover = rawHour.cloudCover?.value, !isUnitFraction(cover) {
+                findings.append("hourly.cloudCover=\(cover)（期望 [0,1]）")
+            }
+            if let probability = rawHour.precipitation?.probability?.value,
+               !isUnitFraction(probability) {
+                findings.append("hourly.precipitation.probability=\(probability)（期望 [0,1]）")
+            }
+        }
+        return findings
     }
 
     // MARK: - Private

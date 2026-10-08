@@ -108,4 +108,26 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
                                  //  （属于 `EarthquakeEvent` 模型）
                                  //  → `requiredFields` 必须**诚实留空**。
                                  //  ⚠️ 本源**免 Key、免注册、零鉴权**（实测 2026-10-08）。
+
+    case qWeatherHourlyForecast  // 和风侧逐时预报（温度/体感/湿度/云量/降水/气压/能见度/风/UV）← 第九源 和风天气。
+                                 //  🔴 **绝不复用 `.hourlyForecast`**（那一条隐含的是
+                                 //  **本项目既有逐时域**：`WeatherFieldKey` 内的
+                                 //  温度 / 降水概率 / 风速等**裸标量**）。
+                                 //  和风逐时的结构完全不同：
+                                 //  ① 温度 / 体感 / 气压 / 能见度 / 风速 / 阵风
+                                 //     全都是**自带单位的量纲对象**（`value` 与 `unit` 成对）；
+                                 //  ② `humidity` / `cloudCover` 是 **[0,1] 而非 0–100**
+                                 //     （实测 `humidity = 0.33`），降水概率同样 [0,1]
+                                 //     但**只存在于 `precipitation.probability`** ——
+                                 //     顶层**没有** `precipProbability` 这个键（实测查过）；
+                                 //  ③ 时刻是 **UTC ISO8601 原始串**（不在本域内解析）。
+                                 //  复用即**虚报能力**，且会让下游按既有逐时域寻址，
+                                 //  把 0.33 当百分数渲染成 0.33%（**量纲事故**）。
+                                 //  单列的第三个理由（同 `qWeatherDailyForecast`）：
+                                 //  和风逐时要素**不在** `WeatherFieldKey` 域内
+                                 //  （属于 `QWeatherHourlyForecast` 模型）
+                                 //  → `requiredFields` 必须**诚实留空**。
+                                 //  ⚠️ 端点 `/weather/v1/hourly/{lat}/{lon}?hours=N`
+                                 //  （实测 2026-10-09 HTTP 200；`hours` 官方上限 360，
+                                 //  本仓默认取 24）。🔴 **响应顶层键是 `hours` 不是 `hourly`**。
 }

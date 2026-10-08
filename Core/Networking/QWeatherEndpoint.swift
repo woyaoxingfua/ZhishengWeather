@@ -33,11 +33,17 @@
 //  端点形如 `/weather/v1/daily/{lat}/{lon}?days=7`（**注意是 `v1` 不是 `v7`**），
 //  认证头 `Authorization: Bearer <JWT>`。
 //
-//  ── ⚠️ 端点清单（本轮**只接daily**）─────────────────────────────────────
-//  · `/weather/v1/daily/{lat}/{lon}?days=7`  ← **本轮接入**
-//  · `/weather/v1/current/{lat}/{lon}`      ← **本轮未接入**（常量已按实测更正）
-//    故 `SourceCapability` 只声明 `.qWeatherDailyForecast`，**不**声明
-//    `.currentObservation`（**未接即不声明**，见该文件注释）。
+//  ── ⚠️ 端点清单 ────────────────────────────────────────────────────────
+//  · `/weather/v1/daily/{lat}/{lon}?days=7`← **已接入**（逐日）
+//  · `/weather/v1/hourly/{lat}/{lon}?hours=24`  ← **已接入**（逐时，实测 200）
+//  · `/weather/v1/current/{lat}/{lon}`      ← **未接入**（常量已按实测更正）
+//    故 `SourceCapability` 只声明 `.qWeatherDailyForecast` 与
+//    `.qWeatherHourlyForecast`，**不**声明 `.currentObservation`
+//    （**未接即不声明**，见该文件注释）。
+//
+//  🔴🔴 **逐时的路径段是 `hourly`，但响应体顶层键逐字是 `hours`**（实测）。
+//  这两个词不一样 —— 写错**不会编译报错**，只会让整源静默变成「无数据」
+//  （P-18 最坏的失败模式）。`QWeatherHourlyTests` 用断言钉死。
 //
 //  ── 🔴 JWT token **必须缓存并按过期重签**（实测依据）────────────────────
 //  官方 JWT 的 `exp` **最长 24 小时**（实测口径取 30 分钟更安全），
@@ -73,8 +79,15 @@ enum QWeatherEndpoint {
     /// weather-current/`，并**真实请求实测 HTTP 200** 确认。
     /// （网上部分样例写 `/now/`，那是错的；写错会直接 404。）
     ///
-    /// ⚠️ **本轮未接入**（取数 actor 只做了逐日），仅登记常量以固定形态事实。
+    /// ⚠️ **仍未接入**（取数 actor 只做了逐日与逐时），仅登记常量以固定形态事实。
     static let currentPathPrefix = "/weather/v1/current"
+
+    /// 逐时预报的**路径前缀**（实测 2026-10-09：带正确 JWT → **HTTP 200**）。
+    ///
+    /// 🔴 路径段是 `hourly`，但**响应体顶层键是 `hours`**（实测逐字）。
+    /// 这两个词不一样，是本端点最容易写错的地方 —— 见
+    /// `QWeatherHourlyResponse` 文件头。
+    static let hourlyPathPrefix = "/weather/v1/hourly"
 
     /// 默认逐日天数（官方文档：`days` 默认 7）。
     static let defaultDays = 7
@@ -86,6 +99,22 @@ enum QWeatherEndpoint {
     /// → `url(...)` 对越界值**返回 nil**（收敛为 `badURL`），
     ///   **绝不**静默改成 7 或 10（那会让用户以为自己看的是 7 天）。
     static let daysRange = 1...10
+
+    /// 默认逐时小时数（**24**）。
+    ///
+    /// 🔴 为什么是 24 而不是官方上限：本仓是**主屏卡片**，
+    /// 24 小时恰好覆盖「今天剩余 + 明天」这一最常用视界；
+    /// 且逐时条目最密，360 条会显著拖慢渲染与首屏。
+    /// 这是**产品取舍**，不是协议上限 —— 上限见 `hoursRange`。
+    static let defaultHours = 24
+
+    /// 🔴 `hours` 的合法区间（官方文档：**1–360**）。
+    ///
+    /// ⚠️ 与 `daysRange` 同款纪律：**越界 → nil**（收敛为 `badURL`），
+    ///   **绝不**静默改成 24。那会让用户以为看的是 24 小时，
+    ///   实际请求了别的小时数 —— 一个**看起来对但完全错**的结果，
+    ///   比明确报错坏得多。
+    static let hoursRange = 1...360
 
     /// 坐标小数位数（官方文档：**最多两位小数**）。
     static let coordinateDecimalPlaces = 2
@@ -119,10 +148,11 @@ enum QWeatherEndpoint {
                 URLQueryItem(name: "days", value: String(days))
             ],
             days: days,
+            hours: nil,
             language: language)
     }
 
-    /// 实况 URL 拼装（**本轮未接入 UI**，仅固定端点形态供后续接线）。
+    /// 实况 URL 拼装（**仍未接线**，仅固定端点形态供后续接线）。
     ///
     /// ⚠️ **已实现但未接线** —— 这是**刻意**的：形状先钉死并可单测，
     /// 免得将来接线时才发现路径写错。`SourceCapability` 因此**不**声明
@@ -144,12 +174,40 @@ enum QWeatherEndpoint {
             longitude: longitude,
             queryItems: [],
             days: nil,
+            hours: nil,
+            language: language)
+    }
+
+    /// 逐时预报 URL 拼装（**实测 2026-10-09**：`?hours=24` → HTTP 200）。
+    ///
+    /// - Parameters:
+    ///   - apiHost: **控制台分配的专属 API Host**（同 `dailyURL`，因账号而异）。
+    ///   - latitude: 纬度（WGS84）。
+    ///   - longitude: 经度（WGS84）。
+    ///   - hours: 逐时小时数，**必须落在 `1...360`**（官方上限 360）。
+    ///     越界 → **nil**（收敛为 `badURL`），**绝不**静默改成 24。
+    ///   - language: 语言代码；nil → 不下发该参数。
+    /// - Returns: 拼装好的 URL；Host 非法 / 小时数越界 / 坐标非法 → `nil`。
+    static func hourlyURL(apiHost: String,
+                           latitude: Double,
+                           longitude: Double,
+                           hours: Int = defaultHours,
+                           language: String? = defaultLanguage) -> URL? {
+        url(pathPrefix: hourlyPathPrefix,
+            apiHost: apiHost,
+            latitude: latitude,
+            longitude: longitude,
+            queryItems: [
+                URLQueryItem(name: "hours", value: String(hours))
+            ],
+            days: nil,
+            hours: hours,
             language: language)
     }
 
     // MARK: - Private
 
-    /// 通用 URL 拼装（逐日与实况共用同一条路径规则）。
+    /// 通用 URL 拼装（逐日 / 实况 / 逐时共用同一条路径规则）。
     ///
     /// - Parameters:
     ///   - pathPrefix: 路径前缀（如 `/weather/v1/daily`）。
@@ -157,7 +215,8 @@ enum QWeatherEndpoint {
     ///   - latitude: 纬度（WGS84）。
     ///   - longitude: 经度（WGS84）。
     ///   - queryItems: 额外查询参数。
-    ///   - days: 逐日天数；`nil` = 该端点无此参数（实况）；非 nil 时**校验 1...10**。
+    ///   - days: 逐日天数；`nil` = 该端点无此参数。非 nil 时**校验 `daysRange`**。
+    ///   - hours: 逐时小时数；`nil` = 该端点无此参数。非 nil 时**校验 `hoursRange`**。
     ///   - language: 语言代码；nil → 不下发。
     /// - Returns: URL；任一前置校验不通过 → `nil`。
     private static func url(pathPrefix: String,
@@ -166,14 +225,18 @@ enum QWeatherEndpoint {
                             longitude: Double,
                             queryItems: [URLQueryItem],
                             days: Int?,
+                            hours: Int?,
                             language: String?) -> URL? {
         // ① Host 必须能规范化成一个**带主机名**的 https URL。
         //⚠️ 刻意**只接受 https**：和风是 HTTPS-only，
         //    放行 http 会把Bearer Token 明文发出去（凭据泄露路径）。
         guard let normalizedHost = normalizeHost(apiHost) else { return nil }
 
-        // ② 天数校验（仅当该端点有此参数时）。
+        // ② 条数校验（仅当该端点有此参数时）。
+        //    🔴 `days` 与 `hours` **各按各的合法域**校验，且**越界一律 nil**，
+        //      绝不静默改成默认值（理由见两个 `*Range` 常量的注释）。
         if let days, !daysRange.contains(days) { return nil }
+        if let hours, !hoursRange.contains(hours) { return nil }
 
         // ③ 坐标校验：必须是**有限值**且落在合法区间内。
         //    ⚠️ NaN / ±∞ 会让 `String(...)` 产出 "nan" / "inf" → 拼进路径变成
