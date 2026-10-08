@@ -76,6 +76,18 @@ enum NmcTyphoonEndpoint {
     /// —— 后者属于气象学史，与本端点能力无关，不在代码里断言。
     static let earliestSupportedYear = 1950
 
+    /// 宽松上界（**刻意放宽到2100**，不是「当前年」）。
+    ///
+    /// ⚠️ **为什么不用当前年当上界**：本enum 属 Core 层，而 Core **禁用
+    /// `Date()`**（见本文件头纪律）→ 本层**取不到当前年**，判不了「未来」。
+    /// 若强行上界成「当前年」就得注入参数，等于把**同一个业务规则
+    /// （未来年拒绝）在两层各实现一遍** —— 迟早不一致。
+    ///
+    /// 真正的「未来年」拒绝在 `TyphoonCardModel.load`
+    ///（`guard year <= currentYear`，它**注入**了 `currentYear`）。
+    /// 故此常量只是**防明显无效路径**的宽松兜底，不是业务语义边界。
+    static let latestSupportedYear = 2100
+
     /// 拼装「默认列表」请求 URL。
     ///
     /// - Returns: URL；构造失败 → nil（由调用方收敛为 `WeatherError.badURL`）。
@@ -86,15 +98,25 @@ enum NmcTyphoonEndpoint {
     /// 拼装「指定年份列表」请求 URL。
     ///
     /// - Parameter year: 年份（如 `2024`）。
-    /// - Returns: URL；年份**超出实测范围** → nil（**不构造必然 404 的请求**）。
+    /// - Returns: URL；年份**超出实测可达范围** → nil。
     ///
-    /// ⚠️ 实测 `list_2030`（未来年）→ **404 HTML**。故此处**前置拒绝**
-    /// 未来年份，而不是发一次请求换一个 404 回来。
+    /// ⚠️ **本层只守「实测可达范围」，不守「未来年」**：
+    /// 上界取宽松的 `latestSupportedYear`（2100）而非「当前年」，
+    /// 因为 Core 层**禁用 `Date()`**（见本文件头纪律）→ 本层**拿不到当前年**，
+    /// 无从判断某年是否「未来」。
+    ///
+    /// 🔴 **「未来年前置拒绝」的真实落点是 `TyphoonCardModel.load`**
+    /// （`guard year <= currentYear` → `.unavailable("所选年份尚未到来")`）：
+    /// 它**注入**了 `currentYear`，由
+    /// `testFutureYearIsRejectedNotTreatedAsNoTyphoon` 锚定。
+    /// 且唯一年份产出方 `selectableYears(currentYear:)` 只给
+    /// `currentYear - 4 ... currentYear` → 业务链路上到不了未来年。
+    /// **不要**在此处重复实现该规则（同一业务规则两处实现 = 迟早不一致）。
+    ///
+    /// 📌 交接文档记载实测 `list_2030`（未来年）→ **404 HTML**；
+    /// 本轮**未复测**，故只作为上述模型层拒绝策略的依据，不在此处加断言。
     static func yearListURL(year: Int) -> URL? {
-        // 上界用「调用方所在年」无法在Core 内取（禁内部 Date()），
-        // 故只做**下界**与**合理上界**（实测当前业务年 ~= 2026，
-        // 放宽到 2100 足够且不会误拒未来的真实年份）。
-        guard year >= earliestSupportedYear, year <= 2100 else { return nil }
+        guard year >= earliestSupportedYear, year <= latestSupportedYear else { return nil }
         return URL(string: siteRootURLString + jsonPathPrefix + "list_\(year)")
     }
 

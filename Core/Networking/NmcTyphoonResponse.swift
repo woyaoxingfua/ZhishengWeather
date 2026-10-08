@@ -244,8 +244,26 @@ enum NmcTyphoonJSONP {
         // `(` 截断，**不硬编码匹配任何函数名**）。
         guard let open = body.firstIndex(of: "(") else { return "" }
         // 定位末个 `)`：其后是分号或换行。
+        //
+        // ⚠️ `close > open` 这道守卫同时兜住了**半开区间**的越界：
+        // `..<close` 要求 `index(after: open) <= close`，而 `close > open`
+        // 在字符索引上恰好等价于该条件。故退化输入（如实测 `cb()`）会得到
+        // **合法空区间**（空串，交给 `unwrap` 抛「剥壳后为空」）而**不会崩溃**。
         guard let close = body.lastIndex(of: ")"), close > open else { return "" }
-        body = String(body[body.index(after: open)...close])
+        //
+        // 🔴 **这里必须用半开区间 `..<`，不能用闭区间 `...`（P-37）**：
+        // `close` 是**末个 `)` 自身**的位置，闭区间会把它一起切进来，
+        // 于是壳内末尾**多留一个右括号**。而下面的剥壳循环以
+        // 「以 `(` 开头且以 `)` 结尾」为条件 —— 残留的 `)` 恰好满足
+        // `hasSuffix(")")`，却让 `hasPrefix("(")` 为假，循环**立刻 break**，
+        // 于是这个多余的 `)` 永远留在结果里，交给 `JSONDecoder` 就是
+        // `dataCorrupted`（"The given data was not valid JSON."）。
+        //
+        // 该切片已用本仓 5 个实测 JSONP 样本逐一复核（`listDefaultJSONP` /
+        // `viewTrackJSONP` / `historicalTrackJSONP` / `list1950JSONP` /
+        // `list2024JSONP`）：闭区间版本 5 个全产出「合法JSON + 一个残余 `)`」，
+        // 半开区间版本 5 个全产出可直接解码的合法 JSON。
+        body = String(body[body.index(after: open)..<close])
         // 循环剥壳：**实测层数因端点而异**（list 双层 / view 单层），
         // 故用 while 而不是 if —— 见本文件头「坑一」。
         //

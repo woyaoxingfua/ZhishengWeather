@@ -734,3 +734,46 @@ git merge-base --is-ancestor <引入SHA> <run 的 head SHA>   # 判断它进了�
   只匹配 **裸 `try`（排除 `try?` / `try!`）** + 函数签名无 `throws`/`rethrows` + 函数体内**无 `catch`**。
   用这个判据扫全仓测试目录，只剩 **2 个候选**，其中一个正是 `XCTAssertThrowsError` 假阳性。
   ⚠️ 用宽松判据（不排除 `try?`、不排除 `catch`）会一次报出 **44 条**，绝大多数是假的。
+
+### P-37 `lastIndex(of:)` + **闭区间**切片 → 末尾多留一个分隔符 →整批数据 `dataCorrupted`
+
+- **现象**（CI 注解原文，run 157/ job 113138664649，9 条）：
+  `ResponseDecoding.swift:44: error: -[NmcTyphoonTests testXxx] : failed: caught error:
+  "decodingDetail(path: "", debugDescription: "The given data was not valid JSON.")"`。
+  报错点在**解码器**，但真因在**剥壳**：凡走 `NmcTyphoonJSONP.unwrap` 的测试**全军覆没**。
+- **真因**：`NmcTyphoonJSONP.strip` 里
+  `body = String(body[body.index(after: open)...close])`
+  —— `close` 是**末个 `)` 自身**的下标，而 `...` 是**闭区间**，把那个 `)` 也切了进来。
+  随后的剥壳循环以「`hasPrefix("(")` **且** `hasSuffix(")")`」为条件：
+  残留的 `)` 让 `hasSuffix` 为真、但首字符是 `{` 使 `hasPrefix` 为假 → **立刻 break**，
+  于是多余的 `)` **永远留在结果里** → `JSONDecoder` 报 `dataCorrupted`。
+- **正解**：改**半开区间** `body[body.index(after: open)..<close]`。
+- **⚠️ 守卫不用改**：`guard let close = ..., close > open` 在字符索引上
+  **恰好等价于**半开区间所需条件 `index(after: open) <= close`，
+  故退化输入（如 `cb()`）得到**合法空区间**（空串）而**不会崩溃** —— 无需额外防护。
+- **自查判据**（只抓「分隔符 + 闭区间」这一形态，**别全仓乱改**）：
+  找 `lastIndex(of:` 且切片写成 `...<那个变量>` 的行。
+  ⚠️ **三处假阳性别动**：`ISOTimeStringDecoder.swift:76` /
+  `NmcIssueTimeDecoder.swift:82` / `METNorwayMapper.swift:104`
+  虽也含 `index(after:`，但它们是 `[index(after:)...]` —— **切到末尾**，
+  **闭区间在此是正确的**。判据必须看**有没有显式右端点**，不能只看 `index(after:`。
+- **自查命令**：`grep -rn --include=*.swift "lastIndex" .`（本仓仅4 处命中，逐个读判定）。
+
+### P-38 同一个业务规则**在两层各实现一遍** → 一层放宽后另一层测试变红
+
+- **现象**：`NmcTyphoonTests.testFutureYearIsRejectedWithoutRequest` 断言
+  `yearListURL(year: 2030) == nil`，而实现是`year <= 2100` → 断言红。
+- **真因**：这不是「实现写错了」，而是**职责被摊到了两层**：
+  「未来年拒绝」在 `TyphoonCardModel.load`（`guard year <= currentYear`，
+  **注入**了 `currentYear`）里**已经实现且已被
+  `testFutureYearIsRejectedNotTreatedAsNoTyphoon` 锚定**（该测试不在失败名单里 → 本就通过）；
+  而 `NmcTyphoonEndpoint` 在 **Core 层禁用 `Date()`** → **拿不到当前年**，
+  根本判不了「未来」，只能给个宽松上界 2100。
+- **正解**：**改测试，不改实现** —— 把 `Endpoint` 的契约锚回它**自己**真正承诺的事
+  （实测可达范围 `[1950, 2100]`），并显式钉住「未来年属模型层职责」。
+  若反过来把 `Endpoint` 上界改成「当前年」，就得注入参数 →
+  **同一业务规则两处实现**，将来任一处改动即不一致。
+- **⚠️ 判据**：改测试前先问「**这个意图是否已在别处生效**」。
+  「本条测试红了」≠「本层该改」—— 先查失败名单里**有没有**同意图的兄弟测试通过。
+- **诚实要求**：`list_2030` → 404 若来自**交接文档**而非本轮实测，
+  注释里必须写「交接文档记载 / 本轮未复测」，**不得**写成「实测」。

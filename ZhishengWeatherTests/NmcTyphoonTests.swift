@@ -669,13 +669,52 @@ final class NmcTyphoonTests: XCTestCase {
                        "实测详情端点形态")
     }
 
-    /// ⚠️ 实测 `list_2030`（未来年）→ **404 HTML** → 必须前置拒绝。
-    func testFutureYearIsRejectedWithoutRequest() {
-        XCTAssertNil(NmcTyphoonEndpoint.yearListURL(year: 2030),
-                     "实测未来年份 404，前置拒绝（不发无谓请求）")
+    /// 🔴 年份范围守卫：**只管「实测可回溯范围」，不管「未来年」**。
+    ///
+    /// ⚠️ **本条曾断言 `yearListURL(year: 2030) == nil`（未来年前置拒绝），
+    /// 该断言已按依据撤销** —— 理由如下（不是为了让测试变绿而改的）：
+    ///
+    /// 1. **职责边界**：`NmcTyphoonEndpoint` 属Core 层，而 Core **禁用
+    ///    `Date()`**（见该文件头纪律），故它**拿不到「当前年」**，
+    ///    无从判断某年是否「未来」。要让它拒绝未来年就得注入当前年，
+    ///    而那会把**同一个业务规则重复实现两遍**。
+    /// 2. **该意图已另有落点且已生效**：`TyphoonCardModel.load`
+    ///    （`guard year <= currentYear`，见其源码）才是真正的前置拒绝处，
+    ///    它**注入**了 `currentYear`，并由
+    ///    `testFutureYearIsRejectedNotTreatedAsNoTyphoon` 锚定
+    ///    （`load(year: 2030, currentYear: 2026)` → `.unavailable`）。
+    ///    那条测试不在本轮失败名单里 → **该意图本就被覆盖着**。
+    /// 3. **业务上到不了 2030**：唯一下界/上界产出方是
+    ///    `TyphoonCardModel.selectableYears(currentYear:)`，它给出
+    ///    `currentYear - 4 ... currentYear`，故`Endpoint` 收到的年份
+    ///    在业务链路上恒 ≤ 当前年。
+    ///
+    /// → 故本条改为锚定 `Endpoint` **自己**的真实契约：
+    /// **下界 = 实测最早可回溯年 1950，上界 = 宽松上界 2100**。
+    /// 上界取 2100 而非当前年，正是为了「不误拒未来的真实年份」。
+    ///
+    /// 📌 关于 `list_2030` →404：**该结论来自交接文档记载**
+    ///（`NmcTyphoonResponse.swift` 文件头「坑二」与 `TyphoonCardModel`
+    /// 的注释均如此写），**本轮未实测**，故不据此在 Core 层加断言。
+    func testYearListURLGuardsOnlyMeasuredReachableRange() {
+        // 下界：实测 `list_1950` → HTTP 200；1949 从未实测可达 → 拒绝。
         XCTAssertNil(NmcTyphoonEndpoint.yearListURL(year: 1949),
                      "实测下界为 1950（list_1950 → HTTP 200）")
-        XCTAssertNotNil(NmcTyphoonEndpoint.yearListURL(year: 2024))
+        XCTAssertEqual(NmcTyphoonEndpoint.yearListURL(year: 1950)?.absoluteString,
+                       "https://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_1950",
+                       "实测最早可回溯年必须放行")
+        XCTAssertNotNil(NmcTyphoonEndpoint.yearListURL(year: 2024),
+                        "区间内任意年应放行")
+        // 上界：宽松上界 2100（Core 拿不到当前年，故不设「当前年」上界）。
+        XCTAssertNotNil(NmcTyphoonEndpoint.yearListURL(year: 2100),
+                        "上界 2100 应放行 —— 刻意放宽，避免误拒未来的真实年份")
+        XCTAssertNil(NmcTyphoonEndpoint.yearListURL(year: 2101),
+                     "超出宽松上界应拒绝（防构造明显无效的路径）")
+        // 🔴 未来年（如 2030）**在本层是放行的** —— 它不是`Endpoint` 的契约，
+        //    由`TyphoonCardModel.load` 的`guard year <= currentYear` 拒绝。
+        //    此处显式钉住这个分工，防止有人又把规则塞回 Core 层。
+        XCTAssertNotNil(NmcTyphoonEndpoint.yearListURL(year: 2030),
+                        "未来年是否拒绝属模型层职责；Endpoint 只守实测可达范围")
     }
 
     /// 非法 id 必须拒绝（防路径改写打到别的端点）。
