@@ -376,7 +376,7 @@ final class NmcTyphoonTests: XCTestCase {
     func testSwappedCoordinateOrderIsRecovered() throws {
         // 实测把「经度 179.4 / 纬度 24.8」反写成「179.4 在纬度位」。
         let swapped = #"""
-cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
         [[1,"202610050000",1791158400000,"TY",24.8,179.4,935,52,"W",28,[],null,null]]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
@@ -441,7 +441,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
     /// 一条坏条目（缺 id）**只丢自己**，不拖垮整批。
     func testMalformedListEntryDoesNotBreakWholeBatch() throws {
         let mixed = #"""
-cb({"typhoonList":[[999,"GOOD","正常","1","1",null,null,"start"],
+        cb({"typhoonList":[[999,"GOOD","正常","1","1",null,null,"start"],
         ["不是数组"],[],[3346168,"NOLO","诺洛","2628","2628",null,null,"start"]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
@@ -457,7 +457,7 @@ cb({"typhoonList":[[999,"GOOD","正常","1","1",null,null,"start"],
     /// 缺 id 的条目必须丢弃（无法拼 `view_<id>` URL → 该条不可用）。
     func testEntryWithoutIDIsDropped() throws {
         let noID = #"""
-cb({"typhoonList":[["NOLO","诺洛","2628","2628",null,null,"start"]]})
+        cb({"typhoonList":[["NOLO","诺洛","2628","2628",null,null,"start"]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
                                                from: NmcTyphoonJSONP.unwrap(Data(noID.utf8)))
@@ -565,7 +565,7 @@ cb({"typhoonList":[["NOLO","诺洛","2628","2628",null,null,"start"]]})
     func testForecastLeadCountIsNotFixed() throws {
         // 彩云 2026-10-07 实测：末点只剩 [12]，首点是 8 个时效。
         let varying = #"""
-cb({"typhoon":[3341981,"CHOI-WAN","彩云",2627,2627,null,null,"start",
+        cb({"typhoon":[3341981,"CHOI-WAN","彩云",2627,2627,null,null,"start",
         [[1,"202609301800",1790791200000,"TS",149.5,16.4,998,18,"W",22,[],
         {"BABJ":[[12,"202609301800",147.1,16.7,990,23,"BABJ","TS"],
         [24,"202609301800",140.0,17.5,995,20,"BABJ","TS"]]},
@@ -589,7 +589,7 @@ cb({"typhoon":[3341981,"CHOI-WAN","彩云",2627,2627,null,null,"start",
     /// 缺经纬的点必须被丢弃（地图上画不出来），其余点保留。
     func testPointWithoutCoordinatesIsDropped() throws {
         let partial = #"""
-cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
         [[1,"202610050000",1791158400000,"TY",179.4,24.8,935,52,"W",28,[],null,null],
         [2,"202610050300",null,null,null,null,null,null,null,null,[],null,null],
         [3,"202610050600",1791200000000,"TY",179.0,25.0,935,52,"W",28,[],null,null]]]})
@@ -604,7 +604,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
     /// 路径点按时间**排序**（防上游乱序画出折返线）。
     func testPointsAreSortedByTime() throws {
         let unsorted = #"""
-cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
         [[2,"202610050600",1791200000000,"TY",179.0,25.0,935,52,"W",28,[],null,null],
         [1,"202610050000",1791158400000,"TY",179.4,24.8,935,52,"W",28,[],null,null]]]})
         """#
@@ -687,7 +687,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
 
     /// 🔴 实测 `view_9999999` → **404 + text/html** → 必须抛 `badStatus(404)`
     /// 而**不是**「解码失败」：两者对用户的处置完全不同。
-    func testServerErrorThrowsBadStatusNotDecodingError() throws async {
+    func testServerErrorThrowsBadStatusNotDecodingError() async throws {
         TyphoonStubURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 404,
@@ -709,7 +709,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
     }
 
     /// 2xx + 合法 JSONP → 成功返回。
-    func testSuccessfulFetchReturnsMappedSummaries() throws async {
+    func testSuccessfulFetchReturnsMappedSummaries() async throws {
         TyphoonStubURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -726,7 +726,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
 
     /// 🔴 **空数组 = 成功且没有台风**（实测「无台风」是常态），
     /// **不是**故障 → 服务层不得抛错。
-    func testEmptyListIsSuccessNotFailure() throws async {
+    func testEmptyListIsSuccessNotFailure() async throws {
         TyphoonStubURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -748,7 +748,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
     /// →改为断言**确切**的 `.network`：`NmcTyphoonProviding.fetchData`
     /// 只把 `URLError.timedOut` 映射成 `.timeout`，其余 URLError 一律 `.network`
     /// （见 NmcTyphoonProviding.swift:123-127），故断网必须是 `.network`。
-    func testNetworkFailureThrowsInsteadOfReturningEmpty() throws async {
+    func testNetworkFailureThrowsInsteadOfReturningEmpty() async throws {
         TyphoonStubURLProtocol.handler = { request in
             throw URLError(.notConnectedToInternet)
         }
@@ -770,7 +770,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
     }
 
     /// 超时 → `.timeout`（供UI 显示「取不到」而非「没有台风」）。
-    func testTimeoutIsDistinguishedFromNetworkFailure() throws async {
+    func testTimeoutIsDistinguishedFromNetworkFailure() async throws {
         TyphoonStubURLProtocol.handler = { request in
             throw URLError(.timedOut)
         }
@@ -885,7 +885,7 @@ cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
     /// 缺测字段逐项为 nil（UI 逐项判空，不显示占位）。
     func testMissingFieldsAreNilRatherThanZero() throws {
         let sparse = #"""
-cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
+        cb({"typhoon":[1,"X","测试",1,1,null,null,"start",
         [[1,null,null,null,null,null,null,null,null,null,[],null,null]]]})
         """#
         let dto = try ResponseDecoding.decode(NmcTyphoonResponse.self,
