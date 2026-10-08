@@ -717,3 +717,20 @@ git merge-base --is-ancestor <引入SHA> <run 的 head SHA>   # 判断它进了�
   会白白改动几十处好代码。**必须按作用域区分。**
 - **自查（只匹配类作用域，缩进 4）**：
   `grep -rnE "^    (private |public |internal |static |final )*(let|var) [A-Za-z0-9_]+( *:[^=]*)? *= *.*\bSelf\." --include=*.swift .`
+
+### P-36 非 `throws` 的函数体里写裸 `try` → `errors thrown from here are not handled`
+
+- **现象**（CI 注解原文，`bfae2ab`）：
+  `TideSourcesTests.swift:361:20: error: errors thrown from here are not handled`
+- **真因**：`func testExtremaFindsHighAndLowTide() {` 声明**没有** `throws`，
+  但体内第 361 行写了 `let high = try XCTUnwrap(result.high.first)`。
+- **正解**：给函数声明补 `throws`（本仓测试大量用这个模式）。
+- **⚠️ 三个**"看着像同一问题、其实不用改"**的假阳性**（别误改）：
+  1. `try?` / `try!` —— **不需要** `throws`；
+  2. `XCTAssertThrowsError(try foo())` / `XCTAssertNoThrow(...)` ——
+     参数的 `@autoclosure () throws -> T` **自己会吞错**，不用改；
+  3. 体内已有 `do { ... } catch { ... }` 把错消化掉的 —— 也不用改。
+- **筛查脚本的正确判据**（本人踩过一次，见 P-33）：
+  只匹配 **裸 `try`（排除 `try?` / `try!`）** + 函数签名无 `throws`/`rethrows` + 函数体内**无 `catch`**。
+  用这个判据扫全仓测试目录，只剩 **2 个候选**，其中一个正是 `XCTAssertThrowsError` 假阳性。
+  ⚠️ 用宽松判据（不排除 `try?`、不排除 `catch`）会一次报出 **44 条**，绝大多数是假的。

@@ -352,7 +352,9 @@ final class TideSourcesTests: XCTestCase {
     // MARK: - 8．极值判定
 
     /// 局部高低潮：一条完整半日潮应各出一个高潮与低潮。
-    func testExtremaFindsHighAndLowTide() {
+    /// ⚠️ 必须 `throws`：体内用了 `try XCTUnwrap(...)`，否则报
+    /// `errors thrown from here are not handled`（CI 实测）。
+    func testExtremaFindsHighAndLowTide() throws {
         // 一个完整的涨落：低 → 高 → 低。
         let series = points([-0.4, 0.0, 0.8, 1.2, 0.8, 0.0, -0.4, -0.8])
         let result = TideForecast.extrema(in: series)
