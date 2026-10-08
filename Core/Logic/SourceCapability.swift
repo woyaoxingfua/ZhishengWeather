@@ -62,4 +62,15 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
                                  //   单列的第三个理由：潮汐有独立的**语义边界**
                                  //   （数值含倒压效应、基准面为全球平均海平面），
                                  //   必须能被单独署名 —— 见 `TideForecast` 文件头。
+    case coarseFallbackFields   // 兜底标量：2 米气温 + 修正海平面气压 + 风向 ← 第八源 7timer!
+                                 //  （`www.7timer.info`，免 Key，与主源**不同 CDN / 不同服务端软件**）。
+                                 //  ⚠️ **绝不复用 `.basicNumericFields`**（第三源 MET Norway 那一位）：
+                                 //   后者含温/压/湿/云/风**五项**，而本源的湿度 / 云量 / 风速
+                                 //   上游给的是**档位码**（`rh2m` 实测 −3…10、`cloudcover` 1…9、
+                                 //   `wind10m.speed` 仅 {2,3,5}）而**不是**百分比 / m/s
+                                 //   （逐条实测 + 官方 doc 的值定义表，见 `SevenTimerMapper`
+                                 //   文件头的诚实性对照表）→ 复用即**虚报能力**，
+                                 //   且会让下游把档位码当物理量渲染出**错误数据**。
+                                 //  单列同时也是「兜底源」这个**角色**的显式声明：
+                                 //   它与「参与常规链路的源」在语义与触发时机上都不同。
 }

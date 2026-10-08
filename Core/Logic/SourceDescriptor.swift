@@ -257,7 +257,40 @@ enum SourceDirectory {
                          // 两条都必须让用户知道。
                          usageNote: "数据来自中国气象局台风网公开接口，未经官方 API 授权，"
                              + "仅供个人自用。该接口为网站前端数据、非承诺的开放 API，"
-                             + "结构可能变动；台风路径与预报请以中央气象台官方发布为准。")
+                             + "结构可能变动；台风路径与预报请以中央气象台官方发布为准。"),
+
+        // 第八源：**兜底源** 7timer!（`www.7timer.info/bin/api.pl`，免 Key、零鉴权）。
+        //
+        // ⚠️ 与前七源**角色不同**：它被放在辅助链**末位**，仅当其余源都没给出某字段时
+        //   才由 `FieldFallbackResolver.merge` 选中（主源非 nil 绝不覆盖；辅助源按链序
+        //   取第一个有值者）。它是**单一故障域兜底** —— 与 Open-Meteo 不同域名 /
+        //   不同服务端软件（实测 `Server: Apache/2.4.68 (Debian)` vs Open-Meteo 无
+        //   `Server` 头）→ 主源整体挂掉时它仍可能可用。
+        //
+        // ⚠️ `requiredFields` 必须**恰好**等于 `SevenTimerMapper` 会写入的字段集合
+        //   （温度 / 气压 / 风向）：多写 → EV-1 误摘；少写 → 该字段永不参与 EV-1。
+        //   ⚠️ **不含**湿度 / 云量 / 风速 —— 上游给的是**档位码**而非物理量
+        //   （`rh2m` 实测 −2…11、`cloudcover` 1…9、`wind10m.speed` 1…4），
+        //   详见 `SevenTimerMapper` 文件头的逐字段诚实性对照表。
+        //   两侧对齐由 `SevenTimerTests.testRequiredFieldsEqualMappedKeys` 钉住。
+        SourceDescriptor(id: .sevenTimer,
+                         displayName: "7timer!（兜底）",
+                         role: .auxiliary,
+                         capabilities: [.coarseFallbackFields],
+                         requiredFields: [.temperature, .pressure, .windDirection],
+                         // 实测 2026-10-08：免 Key、无额度声明、无需特定 UA → false。
+                         needsCredential: false,
+                         // 参与自动摘除：它是**在链的真实取数源**（与 MET Norway 同款纪律），
+                         // 连续 3 次缺字段 / 非 2xx 时由 EV-1 / EV-3 摘除，设置页给停用入口。
+                         participatesInAutoExclusion: true,
+                         // 实测 2026-10-08：`https://www.7timer.info/` → HTTP 200。
+                         // CC BY 4.0 署名义务要求可追溯的 credit，故填官网首页。
+                         websiteURLString: "https://www.7timer.info/",
+                         // 无需额外说明：本源为公开免费 API，官方文档（本仓 .tmp7t 已核）
+                         // 明确「无需 API 密钥即可直接使用」，不存在「现状可用但矩阵不含」，
+                         // 故**不**套用那句谨慎备注（那是虚假谨慎）。许可条款官方未声明 →
+                         // 不臆测、不美化，保持 nil。
+                         usageNote: nil)
     ]
 
     /// 按 id 取描述符（未登记 → nil；调用方按「未知源一律不参与自动摘除」处理）。

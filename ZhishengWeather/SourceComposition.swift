@@ -23,11 +23,15 @@ import Foundation
 /// 多源组装点。
 enum SourceComposition {
 
-    /// 本轮组装：两个能力型辅助源（solarEvents + basicNumericFields）。
+    /// 本轮组装：三个能力型辅助源（solarEvents + basicNumericFields + coarseFallbackFields）。
+    ///
+    /// ⚠️ **顺序即优先级**：`FieldFallbackResolver.merge` 对同一字段取**链序第一个**
+    /// 有值的辅助源。第八源 7timer! 是**兜底源**，故刻意排在**末位** —— 只有前序源
+    /// 都没给出该字段时它才会被选中（即便它成功返回了值）。
     ///
     /// - Returns: 辅助源列表（装进注册表 / 协调器）。
     static func makeAuxiliarySources() -> [any FieldSupplying] {
-        [SunriseSunsetService(), METNorwayService()]
+        [SunriseSunsetService(), METNorwayService(), SevenTimerService()]
     }
 
     /// 构造按能力查找的注册表（主源不在 FieldSupplying 体系，此处仅列辅助源）。

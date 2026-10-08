@@ -113,12 +113,15 @@ final class SourceAttributionCoordinator: ObservableObject {
     /// `lastSuccessAt` / 今日用量永远为空、EV-1 永不触发，设置页却把它显示成
     /// 一行"备用"的正常源 —— 这就是本仓库反复出现的**静默哑火**位置。
     ///
-    /// 当前两项：
+    /// 当前三项：
     /// - `.solarEvents`：日出/日落覆盖层（`DaylightCard` 逐字段叠加，唯一有消费者的能力面）；
     /// - `.basicNumericFields`：MET Norway 的温/压/湿/云/风。本轮**只**参与
     ///   「逐字段降级链 + 多源管理状态行」，**没有**上屏消费者
     ///   （对比/诊断 UI 属后续批次）—— 故这些值进入 overlay 后无任何视图读取。
-    static let handledCapabilities: Set<SourceCapability> = [.solarEvents, .basicNumericFields]
+    /// - `.coarseFallbackFields`：第八源 7timer! 的兜底标量（温/压/风向）。它在链**末位**，
+    ///   只有前序源都没给出该字段时才被选中；同样**没有**上屏消费者（与 MET 同处境）。
+    static let handledCapabilities: Set<SourceCapability> =
+        [.solarEvents, .basicNumericFields, .coarseFallbackFields]
 
     /// 按城市拉取辅助源并逐字段合并（输入 = 坐标 + 主源 solar + 注入 now）。
     ///

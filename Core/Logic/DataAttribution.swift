@@ -210,6 +210,7 @@ enum DataAttribution {
         case .riverDischarge: return "河道流量"
         case .typhoonTrack: return "台风路径与官方预报（含风圈）"
         case .marineTide: return "潮汐（逐15 分钟潮高，含高低潮极值）"
+        case .coarseFallbackFields: return "兜底标量（气温/气压/风向）"
         @unknown default: return "（未命名能力）"
         }
     }

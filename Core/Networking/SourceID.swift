@@ -63,6 +63,29 @@ enum SourceID: String, CaseIterable, Sendable {
     /// 故**必须**是两个独立 SourceID —— 否则健康账本会把台风故障
     /// 记到预警源头上（两个源的失败域是独立的）。
     case nmcTyphoon = "nmc-typhoon"
+
+    /// 第八源：**兜底源**（7timer!，`www.7timer.info/bin/api.pl`，免 Key、零鉴权）
+    /// —— 仅补**能与主源精确对齐**的两个数值标量（2 米气温 / 修正海平面气压）
+    /// 与**风向**，且被放在辅助链**末位**。
+    ///
+    /// ⚠️ **它为什么值得作为兜底（独立性实测结论，2026-10-07）**：
+    /// · 域名完全独立：`www.7timer.info` vs `api.open-meteo.com`；
+    /// · **服务端软件完全不同**：实测响应头 `Server: Apache/2.4.68 (Debian)`
+    ///   （自建裸 Apache），Open-Meteo 侧**实测无 `Server` / 无 `cf-ray` 头**
+    ///   → **不共享 Cloudflare 等任何 CDN**（这一点是兜底价值的前提）；
+    /// · ⚠️ **但两家很可能同在 Hetzner 机房（AS24940，DE）** —— 本次**未用 whois
+    ///   复核 ASN**，该归属为**推定**：实测 7timer `178.104.189.96`、
+    ///   Open-Meteo `188.40.99.226`（2026-10-08；注意 Open-Meteo 的解析 IP 会变动，
+    ///   连两次实测即可不同），二者**不同 /16 网段**但都落在 Hetzner 常用段。
+    ///   → 疑似同一家机房/上游供应商，**不是完全隔离的故障域**（诚实披露）。
+    ///
+    /// ⚠️ **它不提供湿度 / 云量 / 风速**（不是漏接，是上游给的是**档位码**
+    ///   不是物理量 —— 详见 `SevenTimerMapper` 文件头的逐字段诚实性对照表）。
+    ///   声明了却拿不到会造成 EV-1 误摘，故 `requiredFields` 只有三个字段。
+    ///
+    /// ⚠️ rawValue 用 `7timer`（**不是** `7timer-info`）：与前七源「域名/服务名」
+    ///   的命名口径一致，且这是本仓该源的稳定持久化键。
+    case sevenTimer = "7timer"
 }
 
 // MARK: - Codable
