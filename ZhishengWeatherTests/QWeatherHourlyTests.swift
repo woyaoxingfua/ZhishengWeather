@@ -77,6 +77,18 @@ private struct StubQWeatherProviding: QWeatherProviding {
         }
         return hourlyForecast
     }
+
+    /// 🔴 坐标反查桩方法（2026-10-08 随 `QWeatherProviding` 新增协议要求而补）。
+    ///
+    /// ⚠️ 本桩**只用于满足协议**，本文件（逐时端点测试）**不测这条链路** ——
+    ///   反查链路的测试在 `QWeatherCityLookupTests.swift`（那里有独立的桩）。
+    ///   抛 `dataMissing` 而不是返回空模型：若哪天有测试误调它，
+    ///   应看到**明确的错误**而不是一个「看起来查到了但什么都没有」的结果。
+    func fetchCityLookup(latitude: Double,
+                         longitude: Double,
+                         number: Int) async throws -> QWeatherResolvedPlaces {
+        throw WeatherError.dataMissing("本测试桩未提供坐标反查样本（见 QWeatherCityLookupTests）")
+    }
 }
 
 final class QWeatherHourlyTests: XCTestCase {

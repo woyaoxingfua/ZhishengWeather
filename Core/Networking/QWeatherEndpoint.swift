@@ -40,6 +40,11 @@
 //    故 `SourceCapability` 只声明 `.qWeatherDailyForecast` 与
 //    `.qWeatherHourlyForecast`，**不**声明 `.currentObservation`
 //    （**未接即不声明**，见该文件注释）。
+//  · `/geo/v2/city/lookup?location={lon},{lat}` ← **已接入**（端点与解析）
+//    拼装在**独立文件** `QWeatherGeoEndpoint.swift`（形状不同：坐标走**查询串**
+//    且是「经度在前」，与天气端点的「路径 `lat/lon`」不是同一套），
+//    但 Host 规范化与坐标校验/定点格式化**复用本文件的单一真源**
+//    （`normalizeHost` / `validatedCoordinateTexts`）。
 //
 //  🔴🔴 **逐时的路径段是 `hourly`，但响应体顶层键逐字是 `hours`**（实测）。
 //  这两个词不一样 —— 写错**不会编译报错**，只会让整源静默变成「无数据」
@@ -248,16 +253,16 @@ enum QWeatherEndpoint {
         if let days, !daysRange.contains(days) { return nil }
         if let hours, !hoursRange.contains(hours) { return nil }
 
-        // ③ 坐标校验：必须是**有限值**且落在合法区间内。
+        // ③ 坐标校验 + 定点格式化（**单一真源**：`validatedCoordinateTexts`，
+        //    天气端点与 Geo 反查端点共用，见该函数注释）。
         //    ⚠️ NaN / ±∞ 会让 `String(...)` 产出 "nan" / "inf" → 拼进路径变成
         //    一个语法上"合法"但语义上荒谬的 URL，服务端会返回难以理解的错误。
-        guard latitude.isFinite, longitude.isFinite,
-              (-90.0...90.0).contains(latitude),
-              (-180.0...180.0).contains(longitude) else { return nil }
-
-        // ④ 坐标按官方约定保留 2 位小数（locale 无关，见文件头）。
-        let latText = coordinateText(latitude)
-        let lonText = coordinateText(longitude)
+        guard let coordinates = validatedCoordinateTexts(latitude: latitude,
+                                                         longitude: longitude) else {
+            return nil
+        }
+        let latText = coordinates.latitude
+        let lonText = coordinates.longitude
 
         var components = URLComponents()
         components.scheme = "https"
@@ -318,5 +323,29 @@ enum QWeatherEndpoint {
         // `String(describing:)` 对 Double 已是 locale 无关的 Swift 描述，
         // 且会自动省略尾随零（39.90 → "39.9"、39.00 → "39"），正合需要。
         return String(describing: rounded)
+    }
+
+    /// 坐标校验 + 定点格式化（**天气端点与 Geo 反查端点的单一真源**）。
+    ///
+    /// 🔴 **为什么抽出来**：Geo 反查端点（`/geo/v2/city/lookup`，见
+    ///   `QWeatherGeoEndpoint`）也需要**完全相同**的两件事 —— 拒绝 NaN/±∞/
+    ///   越界值，并把坐标按官方约定保留 2 位小数。两处各写一份的代价是
+    ///   **悄悄漂移**（本仓已在别处吃过「两份鉴权处置各自演化」的亏）。
+    ///   → 故只有这一份实现，天气端点与 Geo 端点都调它。
+    ///
+    /// ⚠️ 越界一律返回 `nil`（收敛为 `badURL`），**绝不**静默改成 0
+    ///   ——把非法坐标改成 0 会得到「几内亚湾的天气」，一个**看起来成功
+    ///   但完全错**的结果，比明确报错坏得多。
+    ///
+    /// - Parameters:
+    ///   - latitude: 纬度（WGS84）。
+    ///   - longitude: 经度（WGS84）。
+    /// - Returns: 已按 2 位小数定点化的 (纬度文本, 经度文本)；非法 → `nil`。
+    static func validatedCoordinateTexts(latitude: Double,
+                                         longitude: Double) -> (latitude: String, longitude: String)? {
+        guard latitude.isFinite, longitude.isFinite,
+              (-90.0...90.0).contains(latitude),
+              (-180.0...180.0).contains(longitude) else { return nil }
+        return (coordinateText(latitude), coordinateText(longitude))
     }
 }

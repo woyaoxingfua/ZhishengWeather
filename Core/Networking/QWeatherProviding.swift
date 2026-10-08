@@ -64,6 +64,23 @@ protocol QWeatherProviding: Sendable {
     func fetchHourly(latitude: Double,
                      longitude: Double,
                      hours: Int) async throws -> QWeatherHourlyForecast
+
+    /// 取回坐标反查结果（**能拿到的最细粒度行政区**）。
+    ///
+    /// 🔴⚠️ **本端点未实测**（2026-10-08 实测该 Host 下 `/geo/v2/city/lookup`
+    ///    返回 **404 空响应体**；用故意错误的 token 则 401 → 路由存在，
+    ///    Host / 订阅侧有问题）。真机行为**未经验证**，接入后必须核验。
+    ///
+    /// ⚠️ 坐标顺序由**实现内部**按官方规格处理（`location={经度},{纬度}`），
+    ///   **调用方仍传 `latitude:` / `longitude:` 两个独立参数** ——
+    ///   绝不把「经度在前」这件事泄漏成调用方的责任：
+    ///   参数名与类型已经说明了各自是什么，比一个位置敏感的双重参数安全。
+    ///
+    /// - Note: 与 `fetchDaily` / `fetchHourly` 同款纪律 —— 凭据缺失抛
+    ///   `dataMissing`，**不**返回空模型（「没配置」与「真的查不到」必须可区分）。
+    func fetchCityLookup(latitude: Double,
+                         longitude: Double,
+                         number: Int) async throws -> QWeatherResolvedPlaces
 }
 
 /// 基于和风天气 Web API 的取数实现。
@@ -144,6 +161,38 @@ actor QWeatherService: QWeatherProviding {
         // ④ 解码 → 映射（顶层键 `hours`，见 `QWeatherMapper.mapHourly`）。
         return QWeatherMapper.mapHourly(
             try ResponseDecoding.decode(QWeatherHourlyResponse.self, from: data))
+    }
+
+    /// 取回坐标反查结果（GeoAPI city lookup）。
+    ///
+    /// 🔴⚠️ **未实测**：2026-10-08 实测该 Host 下本端点 404 空响应体
+    ///   （坏 token 则 401 → 路由存在，Host/订阅侧有问题）。
+    ///   → 真机首次接入时**必须**核验响应结构（逐条对照
+    ///     `QWeatherCityResponse.swift` 的字段注释）。
+    ///
+    /// ⚠️ 与前两条链路**完全同构**（同一 Host / 同一 Bearer JWT / 同一错误处置），
+    ///   唯一差别是：坐标在**查询串**且顺序是**经度在前**，
+    ///   以及响应顶层是 `location` + `refer`（**没有 `metadata`**）。
+    ///   → 共享逻辑仍走 `resolveToken()` 与 `performRequest(url:token:)`。
+    func fetchCityLookup(latitude: Double,
+                         longitude: Double,
+                         number: Int = QWeatherGeoEndpoint.defaultNumber) async throws -> QWeatherResolvedPlaces {
+        // ① 凭据（同逐日 / 逐时：先于 URL 拼装，报错更直接）。
+        let token = try await resolveToken()
+        let host = try apiHost()
+
+        // ② URL（`number` 越界 / 坐标非法 → nil → `badURL`，**绝不**静默改默认值）。
+        guard let url = QWeatherGeoEndpoint.cityLookupURL(apiHost: host,
+                                                          latitude: latitude,
+                                                          longitude: longitude,
+                                                          number: number) else {
+            throw WeatherError.badURL
+        }
+
+        let data = try await performRequest(url: url, token: token)
+        // ③ 解码 → 映射（顶层 `location` + `refer`，见 `QWeatherMapper.mapCityLookup`）。
+        return QWeatherMapper.mapCityLookup(
+            try ResponseDecoding.decode(QWeatherCityResponse.self, from: data))
     }
 
     // MARK: - Private

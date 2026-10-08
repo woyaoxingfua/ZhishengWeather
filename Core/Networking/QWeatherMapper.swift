@@ -351,6 +351,165 @@ enum QWeatherMapper {
         return findings
     }
 
+    // MARK: - 坐标反查（GeoAPI city lookup）
+
+    /// 坐标反查映射（`/geo/v2/city/lookup`）。
+    ///
+    /// 🔴⚠️ **本端点未实测**（2026-10-08 实测该 Host 下404 空响应体）。
+    ///    本函数按官方 OpenAPI 规格逐字建模，**真机行为未经验证**。
+    ///
+    /// - Parameter response: 解码后的 DTO（`location` / `refer` 均可能缺失）。
+    /// - Returns: 反查领域模型；`location` 缺失或为空 → `isEffectivelyEmpty == true`
+    ///   （**查了、没有**，UI 应显示「该坐标没有对应行政区」，**不是**故障）。
+    static func mapCityLookup(_ response: QWeatherCityResponse) -> QWeatherResolvedPlaces {
+        // ⚠️ 署名在「无数据」时**仍要带回**（合规要求是「与数据共同显示」，
+        //   而署名只可能来自 `refer`，与 `location` 独立）。
+        //   🔴 本端点署名在 **`refer.metaAttributions`**，**没有 `metadata` 块**
+        //   （规格 `getCityLookup` 逐字）—— 写成 metadata 会让署名恒为空，
+        //   那等于**静默违反许可条件**。
+        let collected = response.refer?.metaAttributions?.values ?? []
+
+        // `[Location?]` → `compactMap` 丢弃 null 元素（DTO 层已用可空元素保证
+        // 「一个 null 不让整包失败」，这里只做过滤）。
+        let rawLocations = response.location?.compactMap { $0 } ?? []
+        guard !rawLocations.isEmpty else {
+            // 🔴 「零结果」以 **`location` 是否为空**为判据，**不**读
+            //   `refer.metaZeroResult`（那是 boolean，上游可能变形；
+            //   且 DTO 层刻意未解码它）。`location` 为空是**直接可观测**的事实。
+            return QWeatherResolvedPlaces(attributions: collected,
+                                          statusCode: response.code?.value,
+                                          places: [])
+        }
+
+        var mapped: [QWeatherResolvedPlace] = []
+        mapped.reserveCapacity(rawLocations.count)
+        // ⚠️ 不用 `count` 作循环变量名（P-32 纪律，同 `mapHourly`）。
+        for (offset, rawLocation) in rawLocations.enumerated() {
+            mapped.append(mapLocation(rawLocation, sequenceIndex: offset))
+        }
+
+        return QWeatherResolvedPlaces(attributions: collected,
+                                      statusCode: response.code?.value,
+                                      places: mapped)
+    }
+
+    /// 单个地点映射（规格 `locationArray.items` 逐字 **13 个 string 键**）。
+    ///
+    /// - Parameters:
+    ///   - raw: 单个地点 DTO。
+    ///   - sequenceIndex: 数组下标（作为 `Identifiable` 的唯一 id）。
+    /// - Returns: 单个地点领域模型。
+    static func mapLocation(_ raw: QWeatherCityResponse.Location,
+                            sequenceIndex: Int) -> QWeatherResolvedPlace {
+        // ⚠️ 字符串字段：去首尾空白后，空串视为**没有**该字段
+        //   （上游给 `" "` 与不给在事实上等价：都拼不出可显示的名字）。
+        //   **绝不**把空串当成一个名字显示出去。
+        // ⚠️ 局部函数刻意**不复用**任何既有 helper：既有 `attributions(from:)`
+        //   走的是另一套语义（数组），这里要的是「单个标量的净化」。
+        func text(_ source: LenientString?) -> String? {
+            guard let trimmed = source?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else { return nil }
+            return trimmed
+        }
+
+        return QWeatherResolvedPlace(
+            sequenceIndex: sequenceIndex,
+            name: text(raw.name),
+            locationID: text(raw.id),
+            // 🔴🔴 本需求的核心字段：**区级**（规格描述「上级行政区划名称」）。
+            //   原样承载，**不做粒度假设**（官方未承诺它是街道级）。
+            adm2: text(raw.adm2),
+            adm1: text(raw.adm1),
+            country: text(raw.country),
+            // 🔴 时区：**先校验再存**。非法 IANA 标识 → nil（而不是存一个
+            //   解析不了的串，更不是硬编码固定偏移）。
+            //   理由：留一个解析不了的串在模型里，UI 侧若直接 `TimeZone(identifier:)`
+            //   会拿到 nil 并各自回退 —— 那是**多点各自发明回退逻辑**，
+            //   迟早漂移。统一在 mapper 净化一次，非法即 nil。
+            timeZoneIdentifier: validatedTimeZoneIdentifier(text(raw.tz)),
+            // ⚠️ 偏移量**只作诊断**，绝不用于时刻计算（不含夏令时规则）。
+            utcOffset: text(raw.utcOffset),
+            // 🔴 `isDst` 规格是字符串 `"1"` / `"0"` → 裁定成 `Bool?`。
+            //   **无法判定时 nil，绝不猜**（铁律 ③）。
+            isDaylightSavingTime: daylightSavingFlag(from: text(raw.isDst)),
+            placeType: text(raw.type),
+            rank: text(raw.rank),
+            webLink: text(raw.fxLink),
+            // 🔴 上游坐标是**字符串**；解析不了 → nil，**绝不**用 0 顶替
+            //   （`0,0` 是几内亚湾，一个看起来合法但完全错的值）。
+            //   另：越界值 → nil（与天气端点的坐标校验同一判据）。
+            latitude: validatedCoordinate(fromLatitude: text(raw.lat)),
+            longitude: validatedCoordinate(fromLongitude: text(raw.lon)))
+    }
+
+    // MARK: - 坐标反查 ·私有净化
+
+    /// IANA 标识合法性校验（**复用系统解析器**，不自造规则）。
+    ///
+    /// ⚠️ 刻意**不用**手写白名单/正则去判断「像不像时区」——
+    ///   IANA 标识的合法域由系统 tz database 定义，本仓**没有**能力
+    ///   比系统更准确地判断，只能借用 `TimeZone(identifier:)`。
+    ///
+    /// - Parameter identifier: 上游 `tz` 原串（可能为 nil / 空白 / 非法）。
+    /// - Returns: 合法的 IANA 标识；非法 / nil → `nil`。
+    private static func validatedTimeZoneIdentifier(_ identifier: String?) -> String? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        // `TimeZone(identifier:)` 是与 `WeatherTimeFormatter.resolveTimeZone`
+        // **同一套**底层解析器 → 这里的判定与那条单一真源**不会打架**。
+        guard TimeZone(identifier: identifier) != nil else { return nil }
+        return identifier
+    }
+
+    /// 夏令时标志裁定（上游 `"1"` / `"0"` 字符串 → `Bool?`）。
+    ///
+    /// ⚠️ 规格逐字：`1` = 当前处于夏令时、`0` = 不是。
+    ///   只认这两个**逐字**取值；其余（`"true"` / `""` / nil / 别的）
+    ///   → **nil（不知道）**，**绝不**当成 `false`
+    ///   ——把「不知道」渲染成「不是夏令时」是**凭空造一条读数**。
+    ///
+    /// - Parameter raw: 上游 `isDst` 原串（已去空白）。
+    /// - Returns: 裁定结果；无法判定 → `nil`。
+    private static func daylightSavingFlag(from raw: String?) -> Bool? {
+        guard let raw else { return nil }
+        switch raw {
+        case "1": return true
+        case "0": return false
+        default: return nil
+        }
+    }
+
+    /// 纬度字符串 → 合法纬度（越界 / 非有限 / 不可解析 → `nil`）。
+    ///
+    /// - Parameter raw: 上游 `lat` 原串（已去空白）。
+    /// - Returns: 落在 `[-90, 90]` 的纬度；否则 `nil`。
+    private static func validatedCoordinate(fromLatitude raw: String?) -> Double? {
+        validatedCoordinate(raw, range: -90.0...90.0)
+    }
+
+    /// 经度字符串 → 合法经度（越界 / 非有限 / 不可解析 → `nil`）。
+    ///
+    /// - Parameter raw: 上游 `lon` 原串（已去空白）。
+    /// - Returns: 落在 `[-180, 180]` 的经度；否则 `nil`。
+    private static func validatedCoordinate(fromLongitude raw: String?) -> Double? {
+        validatedCoordinate(raw, range: -180.0...180.0)
+    }
+
+    /// 坐标字符串 → 有限且落在给定区间的值（**共用实现**，避免两份判据漂移）。
+    ///
+    /// 🔴 **绝不**返回 0 作为兜底：`(0, 0)` 是几内亚湾，
+    ///   一个**看起来合法但完全错**的结果，比显示「暂无」坏得多。
+    ///
+    /// - Parameters:
+    ///   - raw: 原始字符串（已去空白）。
+    ///   - range: 合法闭区间。
+    /// - Returns: 合法坐标值；否则 `nil`。
+    private static func validatedCoordinate(_ raw: String?, range: ClosedRange<Double>) -> Double? {
+        guard let raw, let value = Double(raw), value.isFinite, range.contains(value) else {
+            return nil
+        }
+        return value
+    }
+
     // MARK: - Private
 
     /// 署名列表提取（**合规必需**，故即便无数据也带回）。

@@ -423,6 +423,25 @@ actor QWeatherCredentialProviding: QWeatherProviding {
                                             hours: hours)
     }
 
+    /// 取回坐标反查结果（GeoAPI city lookup，按当前凭据解析服务）。
+    ///
+    /// 🔴⚠️ **本端点未实测**（2026-10-08 实测该 Host 下404 空响应体），
+    ///   真机行为未经验证。
+    ///
+    /// ⚠️ 与前两条链路**完全同构**，只有端点与参数不同。
+    ///   🔴 特别提醒：本端点坐标顺序是**经度在前**
+    ///   （`location={lon},{lat}`），与逐日/逐时的**纬度在前**相反——
+    ///   但**参数名仍是 `latitude:` / `longitude:`**，
+    ///   顺序由 `QWeatherGeoEndpoint` 内部负责，**不在这里手工拼接**。
+    func fetchCityLookup(latitude: Double,
+                         longitude: Double,
+                         number: Int = QWeatherGeoEndpoint.defaultNumber) async throws -> QWeatherResolvedPlaces {
+        let service = await resolveService()
+        return try await service.fetchCityLookup(latitude: latitude,
+                                                longitude: longitude,
+                                                number: number)
+    }
+
     // MARK: - Private
 
     /// 当前应使用的服务：凭据未变则复用，变了则重建。
