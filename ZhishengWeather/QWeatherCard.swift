@@ -586,11 +586,16 @@ struct QWeatherCard: View {
         temperatureText(high) + " ~ " + temperatureText(low)
     }
 
-    /// 单个温度值 → 文本（**必须经此函数**，两源共用）。
+    /// 单个温度值 → 文本（保留一位小数）。
     ///
-    /// ⚠️ `nonisolated`：纯格式化，`String(format:)` 不碰任何隔离状态。
+    /// ⚠️ **本文件里唯一的温度格式化实现**（`nonisolated`，纯 `String(format:)`，
+    ///   不碰任何隔离状态）。和风侧与 Open-Meteo 侧**都调它** ——
+    ///   刻意**不写第二份** `String(format: "%.1f")`（两份同款代码必然漂移）。
+    ///   存在两份的教训：2026-10-08新增 Open-Meteo 渲染时又写了一份，
+    ///   CI run#37786448018 报 `invalid redeclaration of 'temperatureText'`。
+    /// ⚠️ 单位用上游给的（实测 `°C`），**不硬编码** ——
+    ///   若将来请求 `lang`/`unit` 变了，单位应跟着变。
     nonisolated static func temperatureText(_ value: Double) -> String {
-        //⚠️ 与既有和风侧**逐字一致**（一位小数），共用它避免两源漂移。
         String(format: "%.1f", value)
     }
 
@@ -639,18 +644,6 @@ struct QWeatherCard: View {
         case (nil, nil):
             return "暂无"
         }
-    }
-
-    /// 单个温度值 → 文本（保留一位小数）。
-    ///
-    /// ⚠️ **本文件里唯一的温度格式化实现**（`nonisolated`，见上方说明）。
-    /// 和风侧与 Open-Meteo 侧**都调它** —— 本轮新增 Open-Meteo 渲染时
-    /// 刻意**没有**再写第二份 `String(format: "%.1f")`（两份同款代码必然漂移）。
-    ///
-    /// ⚠️ 单位用上游给的（实测 `°C`），**不硬编码** ——
-    ///   若将来请求 `lang`/`unit` 变了，单位应跟着变。
-    nonisolated static func temperatureText(_ value: Double) -> String {
-        String(format: "%.1f", value)
     }
 
     /// 日期文本：把上游的 **UTC ISO8601** 串按城市时区渲染。
