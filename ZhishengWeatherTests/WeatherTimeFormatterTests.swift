@@ -246,12 +246,14 @@ final class WeatherTimeFormatterTests: XCTestCase {
     func testParseISO8601NumericOffsetIsNotIgnored() throws {
         let utcNoon = try XCTUnwrap(WeatherTimeFormatter.parseISO8601("2026-10-08T12:00+00:00"))
         let shanghaiNoon = try XCTUnwrap(WeatherTimeFormatter.parseISO8601("2026-10-08T12:00+08:00"))
-        XCTAssertEqual(utcNoon.timeIntervalSince1970, shanghaiNoon.timeIntervalSince1970, accuracy: 0.001,
-                       "`12:00+00:00` 与 `12:00+08:00` 是同一串不同时刻标记 → 必须差 8 小时（28800s），"
-                       + "解析器不得把偏移丢弃")
+        // ⚠️ 曾把断言方向写反过一次（CI run#37761541961 实测失败）：
+        // 消息说「必须差 28800」而断言却用了 `XCTAssertEqual(a, b, accuracy:)`，
+        // 等于要求两者相等 —— 与自己的意图相反。
+        // 正确写法：先断言**差值**是 28800，再单独说明偏移被如实计入。
         XCTAssertEqual(utcNoon.timeIntervalSince1970 - shanghaiNoon.timeIntervalSince1970,
                        28800, accuracy: 0.001,
-                       "北京 12:00 比 UTC 12:00 早 8 小时，故utc 时间戳更大")
+                       "北京 12:00 比 UTC 12:00 早 8 小时，故 UTC 时间戳应大 28800 秒"
+                       + "（实测差 28800 说明偏移被如实计入，未被丢弃或反转）")
     }
 
     /// `Z` 与 `+00:00` 是**同一个时刻**的两种写法（这条才是真正的等价断言）。
