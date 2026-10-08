@@ -67,6 +67,22 @@
 - **重要教训**：run3 修掉 3 个错后 run4 才暴露这 10 个——**错误是分层
   暴露的**，语法错会挡住类型检查，别指望一轮修完。
 
+### P-06b 类型级 `@MainActor` 的 static 方法在 `async let` 闭包里需 `await`（run#37757972635，4 处）
+- **现象**：`async let x: Void = { guard !SomeStore.isHidden(.x) else { return }; await model.load() }()`
+  报 `expression is 'async' but is not marked with 'await'`。
+- **根因**：**类型级 `@MainActor` 会传染到它的 `static` 方法**——
+  `struct CardVisibilityStore`整体 `@MainActor`，则连
+  `static func isHidden` 也是 MainActor 隔离的；
+  而 `async let` 的闭包是**非隔离** async 上下文，跨 actor 调用**必须** `await`。
+  （实例方法同理；若是 `@MainActor class` 的方法则毫无区别地需要 `await`。）
+- **修法（推荐）**：**不要**给闭包内的每次调用加 `await`，而是
+  **在进入 `async let` 之前**（`body`/`.task` 闭包本身在 MainActor 上）
+  同步读出所需的 `Bool` 到局部常量，闭包内只做纯值判断。
+  附带收益：一次读取即定格，多路并发用同一批快照，不会撕裂。
+- **判据**：ViewBuilder 里直接调同类方法**不受影响**（`body` 是 MainActor）——
+  本次同一文件里 9 处渲染守卫都在 ViewBuilder 内，只有 `.task` 里的 4 处报错。
+  报错集中在同一行号附近 ×4 → 基本可断定是同一根因而非四个独立错误。
+
 ### P-07 属性与方法重名 = invalid redeclaration（run3）
 - **现象**：`@State private var showMinimumHint: Bool` 和
   `private func showMinimumHint()` 同名 → redeclaration 错误。
