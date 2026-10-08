@@ -216,14 +216,41 @@ final class DataAttributionTests: XCTestCase {
     ///
     /// 列一个没在用的源等于虚假署名，比不署名更糟（用户会去访问一个我们根本没用的
     /// 服务，且误以为数据来自它）。这条钉住「只用实际在用的源」。
+    ///
+    /// 🔴 **2026-10-08 更新**：`和风` **已从本列表移除** ——第九源和风天气当日
+    /// 接线完成（`SourceDescriptor(id: .qWeather, …)` 已登记、
+    /// `QWeatherCard` 已挂进 `ContentView`，且带 `displayName` 派生署名，
+    /// 故 `allEntries` 出现「和风天气」是**如实署名**而非虚假署名）。
+    /// ⚠️ 前提：**若将来把和风从主屏摘掉，必须同时把它加回本列表** ——
+    /// 否则这份守卫会变成"看着绿、其实源已下线"的假警报。
+    /// 判据见 `SourceDirectory.all`（`registeredSourceEntries` 由它派生）。
+    ///
+    /// 仍禁止的三个源**确实未接入**（本轮 grep 实测：署名表里 0 处）。
     func testNoUnwiredPaidSourcesInAttribution() {
         let text = DataAttribution.unifiedStatement
             + DataAttribution.allEntries.map(\.displayName).joined()
-        for forbidden in ["和风", "QWeather", "彩云", "Caiyun", "心知", "XinZhi"] {
+        for forbidden in ["彩云", "Caiyun", "心知", "XinZhi"] {
             XCTAssertFalse(text.contains(forbidden),
                            "署名里出现了未接入的付费源「\(forbidden)」—— "
                            + "列没用过的源等于虚假署名")
         }
+    }
+
+    /// 🔴 已接入的付费源**必须**在署名里（与上一条互为反面）。
+    ///
+    /// 上一条防"列没用过的源"，这一条防"**用了却不署名**" ——
+    /// 后者在 CC BY 4.0 / 和风许可条件下是**合规缺口**，
+    /// 比"多列一个"严重得多。
+    func testWiredPaidSourcesAreAttributed() {
+        let text = DataAttribution.unifiedStatement
+            + DataAttribution.allEntries.map(\.displayName).joined()
+        // 第九源和风：已接线（descriptor + 卡片 + 主屏）→ 必须署名。
+        XCTAssertTrue(text.contains("和风"),
+                      "和风已于 2026-10-08 接线，署名里**必须**有它"
+                      + "（CC BY / 和风许可条件的合规缺口）")
+        // 第十源USGS 地震：已接线 → 同样必须署名。
+        XCTAssertTrue(text.contains("USGS"),
+                      "USGS 地震已于 2026-10-08 接线，署名里必须有它")
     }
 
     // MARK: - 辅助
