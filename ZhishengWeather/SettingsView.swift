@@ -438,6 +438,60 @@ struct SettingsView: View {
                 }
             }
 
+            // 🔴 主屏附加卡片管理（2026-10-08 新增）。
+            //
+            // ⚠️ **与下方「多源管理」的区别**（别混淆）：
+            // · 这里管的是「**主屏上显不显示这张卡**」（纯UI 偏好）；
+            // · 那里管的是「这个**数据源**能不能取到数」（健康状态）。
+            // 一张卡可能"显示但无数据"（源挂了），也可能"隐藏但源是好的"
+            //（用户不想看）—— 两个维度**互不干涉**。
+            Section("主屏卡片") {
+                // ⚠️ 诚实说明：折叠态本轮**暂未接UI**（数据层已就绪，
+                // `CardVisibilityStore.collapsed()` 可用）。先让用户能关卡片，
+                // 折叠是下一步 —— 宁可少做，也不要做个半吊子的折叠交互。
+                Text("关闭的卡片不会显示，也不会再发起网络请求。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+
+                ForEach(CardVisibilityStore.order()) { card in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(card.displayName)
+                            Text(card.detailText)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                        Spacer(minLength: 8)
+                        // 🔴 **不可隐藏的卡不给开关**（本仓当前 8 张全部可关，
+                        // 但保留这条分支以便将来加"必选卡"）。
+                        if card.allowsHiding {
+                            // ⚠️ 标签**留空**：左侧已有大标题写卡名，这里再写一遍
+                            // 就重复了。**不用** `.labelsHidden()` 把标签藏起来 ——
+                            // 该修饰符在本仓**无既有用例**（`SatelliteCard` 里明确
+                            // 标注过「不用它，因为未核实」）。P-31：无编译器时
+                            // 「参考周围代码但没核实」是独立错误类，
+                            // 本仓已因此编造 API 四次 —— 空标签只是不显示文字，
+                            // 而 `Toggle` 本身是本仓**已验证使用过**的控件。
+                            Toggle("", isOn: Binding(
+                                get: { !CardVisibilityStore.isHidden(card) },
+                                set: { _ in CardVisibilityStore.toggleHidden(card) }
+                            ))
+                        } else {
+                            Text("必选")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    }
+                }
+
+                HStack {
+                    Button("恢复默认") { CardVisibilityStore.reset() }
+                    Spacer(minLength: 8)
+                    Button("全部隐藏") { CardVisibilityStore.hideAll() }
+                }
+                .font(.system(size: 13))
+            }
+
             Section("数据源") {
                 HStack {
                     Text("天气数据")

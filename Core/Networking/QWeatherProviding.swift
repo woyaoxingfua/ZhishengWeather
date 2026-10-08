@@ -10,7 +10,14 @@
 //  · 不带 Authorization → HTTP 401；带正确 JWT → HTTP 200
 //  · 端点 `/weather/v1/daily/{lat}/{lon}?days=N`（不是 `/v7/…`）
 //  · `humidity` / `cloudCover` / `probability` 是 `[0,1]`（实测 0.32 / 0）
-//  ══════════════════════════════════════════════════════════════════════════
+//
+//  ── 🔴 逐时实测补记（2026-10-09，`?hours=24` → **HTTP 200**）────────────
+//  · 端点 `/weather/v1/hourly/{lat}/{lon}?hours=N`（**路径段是 `hourly`**）；
+//  · 🔴🔴 但**响应顶层键逐字是 `hours`** —— 两者不是同一个词。写错**不报错**，
+//    只会让整源静默变成「无数据」（详见 `QWeatherHourlyResponse` 文件头）；
+//  · 逐时 `humidity = 0.33` / `cloudCover = 0` → **与逐日同一量纲 `[0,1]`**
+//    → mapper 复用同一套 `unitFraction` 净化，**不另立口径**。
+// ══════════════════════════════════════════════════════════════════════════
 //
 //  ── 🔴 凭据从哪来（Core 不读凭据，`SC-42a` 硬门禁）────────────────────
 //  Core **不**读 UserDefaults / Keychain / 任何存储（`SC-42a` 静态门禁会扫）。
@@ -46,6 +53,17 @@ protocol QWeatherProviding: Sendable {
     func fetchDaily(latitude: Double,
                     longitude: Double,
                     days: Int) async throws -> QWeatherDailyForecast
+
+    /// 取回逐时预报；所有**真故障**路径收敛为 `WeatherError`。
+    ///
+    /// 🔴 **实测基准 2026-10-09**：`/weather/v1/hourly/{lat}/{lon}?hours=24`
+    /// 带正确 JWT → **HTTP 200**，响应顶层键逐字是 **`hours`**。
+    ///
+    /// - Note: 与 `fetchDaily` 同款纪律 —— 凭据缺失抛 `dataMissing`，
+    ///   **不**返回空模型（「没配置」与「真的没数据」必须可区分）。
+    func fetchHourly(latitude: Double,
+                     longitude: Double,
+                     hours: Int) async throws -> QWeatherHourlyForecast
 }
 
 /// 基于和风天气 Web API 的取数实现。
@@ -60,16 +78,21 @@ actor QWeatherService: QWeatherProviding {
     ///   - session: 可注入的 `URLSession`（测试传带 `URLProtocol` 桩的配置）。
     ///   - credentials: **由 App 侧注入**的凭据；`nil` = 未配置（每次调用抛错）。
     ///   - signer: JWT 签名器（测试可注入固定 token 的桩）。
-    /// - Parameter now: 取当前时刻的闭包（Core禁 `Date()`，故**必须注入**）。
+    ///   - now: 取当前时刻的闭包。
+    ///
+    /// 🔴 **`now` 没有默认值**（2026-10-08 静态门禁 SC-11 实测教训）：
+    ///   Core层**禁`Date()`** —— 默认参数 `{ Date() }` 写在 Core 里同样被扫到
+    ///   （报 `SC-11 Core/ 内出现非注释 Date()`）。
+    ///   故**由 App 侧显式传`Date()`**（App 层不在 SC-11 范围内）。
+    ///   ⚠️ 上一轮我在这里留了 `= { Date() }`，门禁当场抓出来了 ——
+    ///   这正是「静态门禁存在的意义」，比等到 CI 快一个数量级。
     init(session: URLSession = .shared,
          credentials: QWeatherCredentials? = nil,
          signer: (any QWeatherTokenSigning)? = nil,
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date) {
         self.session = session
         self.credentials = credentials
-        // ⚠️ `QWeatherTokenSigner.init(now:)` **没有默认值**（Core 内禁 `Date()`，
-        // 门禁 SC-11 会扫），故此处**显式构造**并把时间闭包透传下去。
-        // `signer` 给了桩就用桩，没给就建真的。
+        // `signer` 给了桩就用桩，没给就建真的（`QWeatherTokenSigner` 同样要 `now`）。
         self.signer = signer ?? QWeatherTokenSigner(now: now)
     }
 
@@ -77,21 +100,93 @@ actor QWeatherService: QWeatherProviding {
     func fetchDaily(latitude: Double,
                     longitude: Double,
                     days: Int) async throws -> QWeatherDailyForecast {
-        // ① 凭据（先于 URL 拼装：没凭据时连 URL 都拼不出来，报错更直接）。
-        guard let credentials else {
-            throw WeatherError.dataMissing("未配置和风天气凭据"
-                + "（需要 API Host / Project ID / Credential ID / Ed25519 私钥）")
-        }
-        // ② 签名（内部含凭据完整性校验 + token 缓存/过期重签）。
-        let token = try await signer.token(for: credentials)
+        // ① 凭据（先于 URL 拼装：没凭据时连URL 都拼不出来，报错更直接）。
+        let token = try await resolveToken()
+        let host = try apiHost()
 
-        guard let url = QWeatherEndpoint.dailyURL(apiHost: credentials.apiHost,
+        // ② URL（`days` 越界 → nil → `badURL`，**绝不**静默改成 7）。
+        guard let url = QWeatherEndpoint.dailyURL(apiHost: host,
                                                    latitude: latitude,
                                                    longitude: longitude,
                                                    days: days) else {
             throw WeatherError.badURL
         }
 
+        let data = try await performRequest(url: url, token: token)
+        // ④ 解码（走统一入口，保留 codingPath 便于排障）。
+        return QWeatherMapper.map(
+            try ResponseDecoding.decode(QWeatherDailyResponse.self, from: data))
+    }
+
+    /// 取回逐时预报（**实测可用**：2026-10-09 `?hours=24` → HTTP 200）。
+    ///
+    /// 🔴 与 `fetchDaily` **完全同构**（同一 Host / 同一 Bearer JWT / 同一错误处置），
+    ///    唯一差别是路径段`hourly` 与参数 `hours`，以及**响应顶层键是 `hours`**。
+    ///    → 共享逻辑抽到 `resolveToken()` 与 `performRequest(url:token:)`，
+    ///      避免两份鉴权/状态码处置**各自演化**（那正是本仓吃过亏的地方：
+    ///      逐日与实况曾各写一遍 401 处置，措辞悄悄漂移）。
+    func fetchHourly(latitude: Double,
+                     longitude: Double,
+                     hours: Int) async throws -> QWeatherHourlyForecast {
+        // ① 凭据（同逐日：先于 URL 拼装）。
+        let token = try await resolveToken()
+        let host = try apiHost()
+
+        // ② URL（`hours` 越界 → nil → `badURL`，**绝不**静默改成 24）。
+        guard let url = QWeatherEndpoint.hourlyURL(apiHost: host,
+                                                   latitude: latitude,
+                                                   longitude: longitude,
+                                                   hours: hours) else {
+            throw WeatherError.badURL
+        }
+
+        let data = try await performRequest(url: url, token: token)
+        // ④ 解码 → 映射（顶层键 `hours`，见 `QWeatherMapper.mapHourly`）。
+        return QWeatherMapper.mapHourly(
+            try ResponseDecoding.decode(QWeatherHourlyResponse.self, from: data))
+    }
+
+    // MARK: - Private
+
+    /// 取回凭据并签出**当前有效**的 JWT（逐日/ 逐时共用）。
+    ///
+    /// - Returns: Bearer token。
+    /// - Throws: `WeatherError.dataMissing`（未配置凭据）。
+    private func resolveToken() async throws -> String {
+        guard let credentials else {
+            throw WeatherError.dataMissing("未配置和风天气凭据"
+                + "（需要 API Host / Project ID / Credential ID / Ed25519 私钥）")
+        }
+        // 签名（内部含凭据完整性校验 + token 缓存/过期重签）。
+        return try await signer.token(for: credentials)
+    }
+
+    /// 已配置凭据里的 API Host（逐日 / 逐时共用）。
+    ///
+    /// ⚠️ **独立于 `resolveToken()` 存在**是为了让两条链路的步骤顺序
+    ///   **逐字一致**（① 凭据 → ② 签 token → ③ 取 Host → ④ 拼 URL），
+    ///   免得读代码时要在一处里推断「Host 是在检查凭据前还是后取的」。
+    ///
+    /// - Returns: 控制台分配的专属 API Host。
+    /// - Throws: `WeatherError.dataMissing`（未配置凭据）。
+    private func apiHost() throws -> String {
+        guard let credentials else {
+            throw WeatherError.dataMissing("未配置和风天气凭据"
+                + "（需要 API Host / Project ID / Credential ID / Ed25519 私钥）")
+        }
+        return credentials.apiHost
+    }
+
+    /// 发起请求并返回**已确认 2xx** 的响应体（逐日 / 逐时共用）。
+    ///
+    /// ⚠️ 状态码**先于解码**判定（实测 401/403 的响应体**不是**预报 JSON，
+    ///   硬解会把 HTML 当 JSON 解析 → 报成「解码失败」，掩盖真正的鉴权问题）。
+    ///
+    /// - Parameters:
+    ///   - url: 已拼装好的请求地址。
+    ///   - token: Bearer JWT。
+    /// - Returns: 2xx 响应体字节。
+    private func performRequest(url: URL, token: String) async throws -> Data {
         var request = URLRequest(url: url)
         // 🔴 官方现行鉴权是 **Bearer JWT**（**不是**老式的 `?key=xxx`）。
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -110,17 +205,11 @@ actor QWeatherService: QWeatherProviding {
         guard let http = response as? HTTPURLResponse else {
             throw WeatherError.network("非 HTTP 响应")
         }
-        // ③ 状态码**先于解码**（实测 401/403 的响应体不是预报 JSON）。
         guard (200..<300).contains(http.statusCode) else {
             throw Self.statusError(statusCode: http.statusCode)
         }
-
-        // ④ 解码（走统一入口，保留 codingPath 便于排障）。
-        return QWeatherMapper.map(
-            try ResponseDecoding.decode(QWeatherDailyResponse.self, from: data))
+        return data
     }
-
-    // MARK: - Private
 
     /// 状态码 → 错误（**只保留原始状态码**，说明文字另走`authenticationHint`）。
     ///
