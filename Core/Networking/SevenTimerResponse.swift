@@ -29,7 +29,8 @@
 //
 //  ⚠️ **`timepoint` 不是时间戳**（实测逐条确认）：它是「相对 `init` 的小时数」，
 //    取值 3,6,9,...,192（步长 3，共 64 条 = 192h = 8 天）。
-//    **绝对时刻 = `init` + `timepoint` 小时**（`init` 见下方 `init` 字段）。
+//    **绝对时刻 = `init` + `timepoint` 小时**（JSON 键 `init`；Swift 侧属性
+//    名为 `initTime`，改名理由见该属性的文档注释）。
 //
 //  ⚠️ **`init` 是 10 位 `YYYYMMDDHH`**（实测值 `2026100706`，len==10）。
 //    它**没有分钟位** —— 早期按 `%Y%m%d%H%M` 解析会把 `06` 读成「0 点 6 分」
@@ -57,10 +58,29 @@ struct SevenTimerResponse: Decodable {
 
     /// 产品名（实测恒为 `"meteo"`；缺 `product` 时是纯文本 `ERR:` 而非本结构）。
     let product: String?
+
     /// 模型初始化时刻，**10 位 `YYYYMMDDHH`**（实测 `"2026100706"`）。
-    let init: String?
+    ///
+    /// ⚠️ **Swift 侧叫 `initTime`，不叫 `init`** —— 上游 JSON 键确实叫 `"init"`，
+    /// 但 `init` 是 Swift 保留字，写成 `let init: String?` 直接编译不过
+    /// （2026-10-08 CI 实测两条错）：
+    ///   `error: property declaration does not bind any variables`
+    ///   `error: keyword 'init' cannot be used as an identifier here`
+    /// 而且就算加反引号，读取处 `response.init` 也会被解析成「引用构造器」
+    /// 而不是「取属性」。故此处**改名不改语义**：用下面的显式 `CodingKeys`
+    /// 把 `initTime` 映射回 JSON 键 `"init"`，**对外 JSON 契约一字未变**。
+    let initTime: String?
+
     /// 逐 3 小时序列（实测 64 条）。
     let dataseries: [Entry?]?
+
+    /// 显式键映射 —— **只因为 `init` 是保留字**（见 `initTime` 说明）。
+    /// 除 `initTime` 外其余键与属性同名，逐条列出以免将来加字段时静默漏映射。
+    private enum CodingKeys: String, CodingKey {
+        case product
+        case initTime = "init"
+        case dataseries
+    }
 
     /// 单条时序（实测字段名逐字如下，全部可空）。
     struct Entry: Decodable {

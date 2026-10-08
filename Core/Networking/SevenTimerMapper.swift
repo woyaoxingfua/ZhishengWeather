@@ -78,7 +78,7 @@ enum SevenTimerMapper {
     static func map(_ response: SevenTimerResponse, now: Date) -> FieldPatch {
         var patch = FieldPatch(sourceID: .sevenTimer, capturedAt: now)
 
-        guard let initText = response.init,
+        guard let initText = response.initTime,
               let base = baseDate(fromInit: initText),
               let entry = nearestEntry(in: response.dataseries,
                                        base: base,
