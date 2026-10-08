@@ -139,7 +139,9 @@ enum QWeatherCredentialProbe {
         }
 
         // ③ 真发一次请求。`now` 由 App 侧显式传（Core 禁 `Date()`，SC-11）。
-        let service = QWeatherService(now: { Date() }, credentials: credentials)
+        // ⚠️ 参数顺序须与 init 的**声明顺序**一致，`now` 在最后
+        //   （CI run#37779824984 实测）。
+        let service = QWeatherService(credentials: credentials, now: { Date() })
         do {
             let forecast = try await service.fetchDaily(latitude: latitude,
                                                          longitude: longitude,

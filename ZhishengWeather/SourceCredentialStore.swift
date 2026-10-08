@@ -437,7 +437,9 @@ actor QWeatherCredentialProviding: QWeatherProviding {
             return service
         }
         // `now` 由 App 侧显式传（Core 禁 `Date()`，SC-11；本文件在 App 层，合规）。
-        let service = QWeatherService(now: { Date() }, credentials: current)
+        // ⚠️ 参数顺序必须与 `QWeatherService.init(session:credentials:signer:now:)` 的
+        //   **声明顺序**一致 —— `now` 是最后一个（CI run#37779824984 实测）。
+        let service = QWeatherService(credentials: current, now: { Date() })
         cachedService = service
         cachedCredentials = current
         return service
