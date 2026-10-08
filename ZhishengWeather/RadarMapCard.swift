@@ -20,6 +20,14 @@
 //  故纠偏模式由 `RadarCoordinateModeStore`（App 本地偏好）驱动，
 //  **默认档未经真机验证**，见 `CoordinateTransform.defaultMode` 的判断依据。
 //
+//  ── 🆕 本轮：相机缩放上限（`RadarZoomCap.swift`）────────────────────────
+//  RainViewer 只有 z4–z7 的瓦片，而 Apple 文档明写 `maximumZ` 之外
+//  **MapKit 根本不去取瓦片**（`MKTileOverlay.maximumZ`："The map doesn't
+//  attempt to load tiles for a zoom level greater than…"）→ 一旦 MapKit
+//  开始索取 z8，就**只剩底图**。故把相机上限卡在"刚好不让它开口要 z8"
+//  的位置：用户既能用到**真实的 z7 瓦片**，又绝不会空白。
+//  ⚠️ **绝不**去请求/伪造 z8+ 的瓦片（RainViewer 没有那个数据）。
+//
 //  ── 🆕 本轮：像素级平移机制（`ShiftedTileOverlayRenderer`）────────────────
 //  昨天证明「改瓦片索引」在 z4–z7 是恒等变换，做不到纠偏。本轮改用
 //  **绘制期平移**：`MKOverlayRenderer.draw(_:zoomScale:in:)` 是 Apple 文档
@@ -422,6 +430,19 @@ final class ShiftedTileOverlayRenderer: MKTileOverlayRenderer {
 // MARK: - MKMapView 包装
 
 /// `MKMapView` 的 SwiftUI 包装（承载 `MKTileOverlay` 的唯一途径）。
+///
+/// ── 相机缩放上限（本轮新增，根因修复）────────────────────────────────
+/// RainViewer 只有 z4–z7；一旦 MapKit 开始索取 z8，它就**不再取瓦片**
+/// → 只剩底图。本视图据 `RadarZoomCap` 把相机最近距离钳在"刚好不触发
+/// z8 索取"处，于是用户看到的最大范围**就是有回波的范围**。
+/// ⚠️ 缩放上限**必须在这里、且只能在运行时实测**：`MKMapCamera` 没有
+/// `distance` 属性（只有已废弃的 `altitude`），而距离 ↔ 层级隔着 Apple
+/// 未公开的相机 FOV —— 详见 `RadarZoomCap` 文件头。
+///
+/// - Note: 本类型整体标`@MainActor`（与 `TyphoonTrackMapView` 同款判定：
+///   `MKMapView` 是 `UIViewRepresentable`，`makeUIView` / `updateUIView`
+///   均在主 actor 上执行，且本视图要读写 `RadarZoomCap` 这个 `@MainActor` 类型）。
+@MainActor
 struct RadarMapView: UIViewRepresentable {
 
     /// 当前要显示的帧路径；nil = 不叠回波。
@@ -437,15 +458,24 @@ struct RadarMapView: UIViewRepresentable {
     /// 地图中心（选中城市）。
     let center: CLLocationCoordinate2D
 
+    /// 「用户已放大到回波精度上限」→ 由 Coordinator 写回，供本卡显示提示。
+    ///
+    /// ⚠️ 用`@Binding` 而非回调：Coordinator 是 `MKMapViewDelegate`，
+    /// 在主线程上写 Binding 是 SwiftUI 的标准做法，且能让提示与地图
+    /// 状态保持单一真源（不会出现"地图动了、提示没动"）。
+    @Binding var isAtMaximumZoom: Bool
+
     func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
-        // 双保险：覆盖层已设 maximumZ，相机范围再夹一层（R5）。
-        // minCenterCoordinateDistance ≈ z4，maxCenterCoordinateDistance ≈ z6。
+        // 🆕 缩放上限：这里只设**兜底**值（此时 `bounds.width == 0`，
+        // 视口未就绪 ⇒ `RadarZoomCap.calibration(of:)` 必然返回 nil）。
+        // 真正的实测值由 `updateUIView` 在布局完成后装上。
         map.cameraZoomRange = MKMapView.CameraZoomRange(
-            minCenterCoordinateDistance: 200_000,
-            maxCenterCoordinateDistance: 24_000_000
+            minCenterCoordinateDistance: RadarZoomCap.fallbackMinimumCenterDistance,
+            maxCenterCoordinateDistance: RadarZoomCap.maximumCenterDistance
         )
         map.setRegion(MKCoordinateRegion(center: center,
                                          latitudinalMeters: 800_000,
@@ -455,7 +485,16 @@ struct RadarMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
-        // ⚠️ **换帧必须重建 overlay，不能只 `reloadData()`**：
+        //⓪ 回写通道：把 Binding 交给 Coordinator（每次 update 幂等重设，
+        //   因为 SwiftUI 可能在 Coordinator 存活期间重建 Binding）。
+        context.coordinator.isAtMaximumZoom = $isAtMaximumZoom
+
+        // ① 缩放上限（**每次 update 都重算**）：
+        //   视口尺寸会随布局/旋转变化，而实测标定依赖 `bounds` 与
+        //   `visibleMapRect` —— 只在 `makeUIView` 装一次会拿到兜底值。
+        context.coordinator.installZoomCap(on: map)
+
+        // ⚠️ **换帧必须重建overlay，不能只 `reloadData()`**：
         // `framePath` 与纠偏模式都是 overlay 的不可变初值，`reloadData()` 只会用
         // **同一个** framePath 重新取瓦片 —— 那样时间轴滑动会"看起来在动、底图不变"。
         // 判据：帧路径 / 纠偏模式 / 平移档位任一变化 → 换实例。
@@ -493,6 +532,64 @@ struct RadarMapView: UIViewRepresentable {
         /// 待施加的平移向量（点；`nil` = 不平移）。
         var shift: CGVector?
 
+        /// 「已到放大上限」的回写通道（由 `RadarMapView` 注入）。
+        var isAtMaximumZoom: Binding<Bool>?
+
+        /// 本次生效的相机最近距离（米）；nil = 尚未装上任何上限。
+        private(set) var installedMinimumCenterDistance: Double?
+
+        /// 把实测出的缩放上限装到地图上，并把「是否触顶」写回 SwiftUI。
+        ///
+        /// ⚠️ **为什么 `isZoomEnabled` 一类"禁用缩放"的开关不用**：那会让用户
+        /// 连正常的放大都做不了，体验更差。这里只**钳住上限**，放大手势照常
+        /// 可用，只是到回波极限就不再生长 —— 这正是我们要的语义。
+        ///
+        /// - Parameter map: 活地图。
+        func installZoomCap(on map: MKMapView) {
+            let minimum = RadarZoomCap.minimumCenterDistance(
+                calibration: RadarZoomCap.calibration(of: map))
+                ?? RadarZoomCap.fallbackMinimumCenterDistance
+            //⚠️ 用**相对阈值**而非 `!=` 比较：实测标定每次都带浮点噪声，
+            //   `!=` 会让 `cameraZoomRange` 被反复重设，而重设会打断
+            //   用户正在进行的缩放手势（地图会"黏手"）。
+            //   变化不足 `capRecalibrationThreshold`（2%）就当作没变。
+            if shouldApplyZoomCap(minimum) {
+                map.cameraZoomRange = MKMapView.CameraZoomRange(
+                    minCenterCoordinateDistance: minimum,
+                    maxCenterCoordinateDistance: RadarZoomCap.maximumCenterDistance
+                )
+                installedMinimumCenterDistance = minimum
+            }
+            refreshMaximumZoomFlag(on: map)
+        }
+
+        /// 上限是否变化到值得重设 `cameraZoomRange`（相对阈值判定）。
+        ///
+        /// - Parameter minimum: 本次实测出的上限（米）。
+        /// - Returns: 需要重设 → `true`。
+        private func shouldApplyZoomCap(_ minimum: Double) -> Bool {
+            guard let previous = installedMinimumCenterDistance else { return true }
+            guard previous > 0 else { return true }
+            let drift = abs(minimum - previous) / previous
+            return drift >= RadarZoomCap.capRecalibrationThreshold
+        }
+
+        /// 区域变化后刷新「已触顶」标记。
+        ///
+        /// - Parameter map: 活地图。
+        func refreshMaximumZoomFlag(on map: MKMapView) {
+            guard let binding = isAtMaximumZoom else { return }
+            let reached = RadarZoomCap.isAtMaximumZoom(
+                mapView: map,
+                minimumDistance: installedMinimumCenterDistance
+                    ?? RadarZoomCap.fallbackMinimumCenterDistance)
+            // ⚠️ 只在**值真的变了**时写 Binding：写 `State` 会触发一次
+            // 视图更新，若无条件写就成"update → 写 State → update"的循环。
+            if binding.wrappedValue != reached {
+                binding.wrappedValue = reached
+            }
+        }
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
                 //
@@ -509,6 +606,20 @@ struct RadarMapView: UIViewRepresentable {
                 return ShiftedTileOverlayRenderer(tileOverlay: tileOverlay, shift: shift)
             }
             return MKOverlayRenderer(overlay: overlay)
+        }
+
+        /// 区域变化（缩放**或平移**）后回调。
+        ///
+        /// ⚠️ **平移也必须重算上限**：上限是一个标量距离，而"该距离对应哪一级"
+        /// **随纬度变化**（见 `RadarZoomCap` 文件头的纬度归一化推导）。
+        /// 用户从海口拖到哈尔滨，若不重算，边界就会偏 0.6 个层级。
+        /// 故这里调`installZoomCap`（内部有 2% 防抖阈值，不会打断手势）。
+        ///
+        /// - Parameters:
+        ///   - mapView: 活地图。
+        ///   - animated: 是否动画过渡。
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            installZoomCap(on: mapView)
         }
     }
 }
@@ -536,6 +647,12 @@ struct RadarMapCard: View {
     /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
     @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.radar)
 
+    /// 用户是否已把雷达地图放大到**回波精度上限**（由 `RadarMapView` 回写）。
+    ///
+    /// ⚠️ 存在的理由：上限是**静默**的——手指继续张开但地图不再响应，
+    /// 用户无从判断"到头了"还是"坏了"。故必须**如实告知为什么到头了**。
+    @State private var isAtMaximumZoom: Bool = false
+
     /// 地图高度（pt）。
     private let mapHeight: CGFloat = 220
 
@@ -549,6 +666,7 @@ struct RadarMapCard: View {
             // （非降级），标题行仍在、按钮仍可点回展开，故不违反该要求。
             if !isCollapsed {
                 mapArea
+                maximumZoomNote
                 pixelShiftNote
                 if availability.allowsScrubbing, let timeline {
                     timelineBar(timeline)
@@ -566,6 +684,47 @@ struct RadarMapCard: View {
                 .stroke(Theme.divider, lineWidth: 0.5)
         )
     }
+
+    // MARK: - 🔴 缩放上限提示（如实告知"为什么到头了"）
+
+    /// 已放大到回波精度上限时的一行提示；未触顶时**不渲染任何东西**。
+    ///
+    /// ── 为什么选「地图下方一行文字」而不是「地图上的小标记」────────────
+    /// ① **冲突**：地图只有 220 pt 高，左下角被 RainViewer 署名**硬性**占着
+    ///    （许可要求），左上角被降级说明占着（降级态硬要求）。再往地图上叠
+    ///    第三个浮层 ⇒ 三者互相压字，而这三样**每一件都是硬要求**。
+    ///    放在地图**下方**是唯一不与任何硬要求争夺像素的位置。
+    /// ② **诚实性**：要解释"为什么到头了"，需要说清"数据源只到 z几"，
+    ///    一行文字承载得下，一个 8 pt 的小图标承载不下。
+    ///
+    /// ⚠️ **只在触顶时出现**：未触顶时显示"你还能继续放大"是噪音。
+    /// 触顶判定由 `RadarMapView` 实测回写（`RadarZoomCap.isAtMaximumZoom`），
+    /// 本视图**不自行判定**。
+    ///
+    /// ⚠️ 文案里的 z 数字**由`RadarTileZoomRange.maximum` 生成**，不写死
+    /// "7" —— 那个常量哪天变了，说明文字必须跟着变，否则就是**假话**。
+    @ViewBuilder
+    private var maximumZoomNote: some View {
+        if isAtMaximumZoom {
+            Text(Self.maximumZoomNoteText)
+                .font(.system(size: Theme.FontSize.footnote))
+                .foregroundStyle(Theme.accentSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 触顶提示文案（`static let`）。
+    ///
+    /// ⚠️ **必须是 `static let` 而不是 ViewBuilder 里的内联拼接**：
+    /// 多个 `+` 串起来的字符串表达式会让类型检查器指数爆炸
+    /// （"unable to type-check this expression in reasonable time"）。
+    /// 提到类型级常量上，语义完全不变。
+    private static let maximumZoomNoteText: String = {
+        let zoomLabel = String(RadarTileZoomRange.maximum)
+        let source = "RainViewer 回波数据只提供到 z" + zoomLabel
+        let reason = "更高层级无数据，再放大也不会更清晰"
+        return "已到回波最高精度 · " + source + " · " + reason
+    }()
 
     // MARK: - 🔴 像素级平移读数（如实显示，**不得写成"已纠偏"**）
 
@@ -665,7 +824,8 @@ struct RadarMapCard: View {
                     mode: model.coordinateMode,
                     pixelShift: model.pixelShiftMode,
                     cache: model.tileCache,
-                    center: model.center.mapCoordinate
+                    center: model.center.mapCoordinate,
+                    isAtMaximumZoom: $isAtMaximumZoom
                 )
                 .frame(height: mapHeight)
 
