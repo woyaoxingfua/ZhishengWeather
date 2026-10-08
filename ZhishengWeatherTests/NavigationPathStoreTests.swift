@@ -45,31 +45,51 @@ final class NavigationPathStoreTests: XCTestCase {
 
     /// 编码 → 解码 → 再编码：三次结果必须一致（栈内容与顺序都没丢）。
     ///
-    /// 断言方式说明：`NavigationPath` 是**类型擦除**容器，没有公开的
-    /// 「按下标取元素」接口，故这里通过 `Equatable`（Apple 文档：
-    /// `NavigationPath` `Conforms To: Equatable`）整体比对 —— 它比的是
-    /// **栈内容**而非引用，故这正是「内容一致」的强断言。
-    func testRoundTripPreservesStackContent() {
+    /// 🔴🔴 **断言方式已更正**（CI run#37801357216 实测失败）：
+    /// 原实现写的是 `XCTAssertEqual(restored.path, path)`，
+    /// 理由是「`NavigationPath` Conforms To `Equatable`，比的是栈内容」。
+    /// ⚠️ **这个推理是错的** —— `Conforms To` 那一栏**确实**有 `Equatable`，
+    ///   但**类型擦除容器无法逐元素比对**，其 `==` 对**含元素的两个栈恒为 false**
+    ///   （CI 实测：两栈明明都是 `[cities, settings]`，断言仍失败）。
+    ///   ⇒ 「文档里写了 Conforms To: Equatable」**不能推出**「可用于内容断言」。
+    ///
+    /// ✅ **正确判据：比对 `path.codable` 编码出的字节** ——
+    ///   `CodableRepresentation` 是 `Encodable`，字节相同即内容与顺序完全相同，
+    ///   这才是「内容一致」的强断言（且不依赖任何未文档化的 `==` 语义）。
+    func testRoundTripPreservesStackContent() throws {
         var path = NavigationPath()
         path.append(CityRoute.cities)
         path.append(CityRoute.settings)
+        let expected = try Self.encodedBytes(of: path)
 
         store.save(path)
         let restored = store.restore()
 
         XCTAssertEqual(restored.outcome, .restored(depth: 2))
-        XCTAssertEqual(restored.path, path, "恢复后的栈必须与保存前逐元素一致")
         XCTAssertEqual(restored.path.count, 2)
+        XCTAssertEqual(try Self.encodedBytes(of: restored.path), expected,
+                       "恢复后的栈内容与顺序必须与保存前逐字节一致")
 
         // 再存一次：二次编码必须产出**同样的字节**（序列化稳定，不引入随机性）。
         store.save(restored.path)
         let second = store.restore()
-        XCTAssertEqual(second.path, path, "二次往返后栈内容仍须一致")
+        XCTAssertEqual(try Self.encodedBytes(of: second.path), expected,
+                       "二次往返后栈内容与顺序仍须一致")
         XCTAssertEqual(second.outcome, .restored(depth: 2))
     }
 
+    /// 🔴 路径 → `CodableRepresentation` 的**字节**（比对内容与顺序的唯一可靠方式）。
+    ///
+    /// ⚠️ `path.codable` 在**任一元素不满足 `Codable`** 时为 `nil`（Apple 文档原文），
+    ///   故此处必须 `XCTUnwrap`，nil 意味着测试环境已破坏。
+    private static func encodedBytes(of path: NavigationPath) throws -> Data {
+        let representation = try XCTUnwrap(path.codable,
+                                           "路径应可编码；若为 nil 说明元素不满足 Codable")
+        return try JSONEncoder().encode(representation)
+    }
+
     /// 单元素栈（最常见：只进了设置页）。
-    func testRoundTripSingleElement() {
+    func testRoundTripSingleElement() throws {
         var path = NavigationPath()
         path.append(CityRoute.settings)
 
@@ -77,7 +97,12 @@ final class NavigationPathStoreTests: XCTestCase {
         let restored = store.restore()
 
         XCTAssertEqual(restored.outcome, .restored(depth: 1))
-        XCTAssertEqual(restored.path, path)
+        XCTAssertEqual(restored.path.count, 1)
+        // 🔴 逐字节比对，**不用** `XCTAssertEqual(restored.path, path)`
+        //   —— 类型擦除容器的 `==` 对含元素的两栈恒为 false（CI run#37801357216 实测）。
+        XCTAssertEqual(try Self.encodedBytes(of: restored.path),
+                       try Self.encodedBytes(of: path),
+                       "单元素栈的内容与顺序也须逐字节一致")
     }
 
     // MARK: - 空路径是合法初始态（不是失败）
@@ -157,7 +182,7 @@ final class NavigationPathStoreTests: XCTestCase {
     }
 
     /// 降级后再存一次正常栈 → 能恢复（坏数据被自然修正，不永久卡死）。
-    func testGoodWriteAfterDegradeRecovers() {
+    func testGoodWriteAfterDegradeRecovers() throws {
         defaults.set(Data("corrupt".utf8), forKey: NavigationPathStore.key)
         _ = store.restore()
 
@@ -167,7 +192,12 @@ final class NavigationPathStoreTests: XCTestCase {
 
         let restored = store.restore()
         XCTAssertEqual(restored.outcome, .restored(depth: 1))
-        XCTAssertEqual(restored.path, path)
+        XCTAssertEqual(restored.path.count, 1)
+        // 🔴 逐字节比对，**不用** `XCTAssertEqual(restored.path, path)`
+        //   —— 类型擦除容器的 `==` 对含元素的两栈恒为 false（CI run#37801357216 实测）。
+        XCTAssertEqual(try Self.encodedBytes(of: restored.path),
+                       try Self.encodedBytes(of: path),
+                       "单元素栈的内容与顺序也须逐字节一致")
     }
 
     // MARK: - CityRoute 可编码性（NavigationPath 落盘的前置条件）
