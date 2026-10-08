@@ -66,9 +66,13 @@ final class SevenTimerTests: XCTestCase {
     /// `init = 2026100800`（2026-10-08T00:00:00Z）对应的 epoch（由 UTC 手工核算）。
     private static let initEpoch: TimeInterval = 1_791_417_600
     /// `now` 恰落在 `timepoint = 3` 的格点上（03:00Z，漂移 0）。
-    private let nowAt0300 = Date(timeIntervalSince1970: Self.initEpoch + 3 * 3600)
+    // ⚠️ 存储属性的初始化器里**不能写 `Self.`** —— 会报
+    // `covariant 'Self' type cannot be referenced from a stored property initializer`（CI 实测）。
+    // 必须写死类名。方法体内用 `Self.` 没问题（例如下面的 `Self.meteoJSON`），
+    // 只有**存储属性初始化器**这一处受限，因为那时 `Self` 还没确定。
+    private let nowAt0300 = Date(timeIntervalSince1970: SevenTimerTests.initEpoch + 3 * 3600)
     /// `now` 落在 tp=3 与 tp=6 之间偏 tp=6（05:00Z）——用于验证「取最近」而非「取首条」。
-    private let nowAt0500 = Date(timeIntervalSince1970: Self.initEpoch + 5 * 3600)
+    private let nowAt0500 = Date(timeIntervalSince1970: SevenTimerTests.initEpoch + 5 * 3600)
 
     /// 一份形态完整的 `product=meteo` 缩影（逐字字段名取自实测响应）。
     private static let meteoJSON = #"""

@@ -53,7 +53,11 @@ private final class TyphoonStubURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
-    override func startLoading() throws {
+    // ⚠️ **不能给 `startLoading()` 加 `throws`**：`URLProtocol.startLoading()` 在
+    // Swift 里是非 throwing 的，加 `throws` 会报
+    // `cannot override non-throwing instance method with throwing instance method`（CI 实测）。
+    // 本体内抛错由 `do/catch` 自行消化，不需要向外抛。
+    override func startLoading() {
         guard let handler = Self.handler else {
             client?.urlProtocolDidFinishLoading(self)
             return

@@ -687,3 +687,33 @@ git merge-base --is-ancestor <引入SHA> <run 的 head SHA>   # 判断它进了�
 - **可用的两个判据（已验证低误报）**：
   - 保留字 / 标准库函数遮蔽（P-25 / P-32）：`grep -nE '(let|var)\s*(stride|min|max|abs|count|first|last|map|filter)\s*[:=]'`
   - 多行字符串缩进：结束定界符判据必须是「**去前导空白后以定界符开头**」，不是整行相等。
+
+### P-34 给**非 throwing 的系统覆写**加 `throws` → `cannot override non-throwing instance method`
+
+- **现象**（CI 注解原文，`17a1597`）：
+  `NmcTyphoonTests.swift:56:19: error: cannot override non-throwing instance method with throwing instance method`
+- **真因**：`URLProtocol.startLoading()` 在 Swift 里**是非 throwing 的**，
+  测试桩写成了 `override func startLoading() throws`。
+- **正解**：去掉 `throws`，把可能抛错的部分**在函数体内自己 `do/catch` 消化**
+  （本仓桩本来就是这样做的，所以去掉后体里没有漏网的 `try`）。
+- **同类高危覆写**（这些基类方法都**不**抛错，别加 `throws`）：
+  `URLProtocol.startLoading()` / `stopLoading()` / `canInit(with:)` / `canonicalRequest(for:)`、
+  `XCTestCase.setUp()` / `tearDown()`（要抛错请改覆写 `setUpWithError()` / `tearDownWithError()`）、
+  `NSObject` 的各种 `override`。
+- **自查**：
+  `grep -rnE "^    override func (setUp|tearDown|startLoading|stopLoading|canInit|main)\(\) throws" --include=*.swift .`
+
+### P-35 **存储属性的初始化器里不能写 `Self.`**
+
+- **现象**（CI 注解原文，`17a1597`）：
+  `SevenTimerTests.swift:69:57: error: covariant 'Self' type cannot be referenced from a stored property initializer`
+- **真因**：写了
+  `private let nowAt0300 = Date(timeIntervalSince1970: Self.initEpoch + 3 * 3600)`
+  —— 存储属性初始化时类型还没定下来，`Self` 不可用。
+- **正解**：**写死类名**（`SevenTimerTests.initEpoch`）。
+- **⚠️ 极易误判**：**方法体内**用 `Self.` 是**完全合法**的，本仓测试里几十处
+  （`Self.meteoJSON` / `Self.beijing` / `Self.sampleSnapshot(...)`）都没问题。
+  只有**存储属性初始化器**这一处受限 —— 所以「把文件里所有 `Self.` 都换掉」是**错**的，
+  会白白改动几十处好代码。**必须按作用域区分。**
+- **自查（只匹配类作用域，缩进 4）**：
+  `grep -rnE "^    (private |public |internal |static |final )*(let|var) [A-Za-z0-9_]+( *:[^=]*)? *= *.*\bSelf\." --include=*.swift .`
