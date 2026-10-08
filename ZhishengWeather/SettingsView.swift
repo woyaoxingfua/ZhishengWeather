@@ -912,7 +912,11 @@ struct SettingsView: View {
         }
         guard descriptor.countsUsage else { return "未接入" }
         guard let usage = row.todayUsage else { return "0 次" }
-        return usage + " 次"
+        // ⚠️ `usage` 是 **Int**，`" 次"` 是 String —— 直接 `usage + " 次"`
+        // 会被 Swift 解析成 `+(Int, Int)` 并报
+        // `cannot convert value of type 'Int' to expected argument type 'String'`
+        //（CI run#37767438766 实测）。**用字符串插值，别用 `+`。**
+        return "\(usage) 次"
     }
 
     /// 该源是否参与自动摘除（= 是否给它「手动停用」入口）。
