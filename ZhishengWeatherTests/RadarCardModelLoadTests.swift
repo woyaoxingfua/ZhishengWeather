@@ -112,8 +112,12 @@ final class RadarCardModelLoadTests: XCTestCase {
     }
 
     /// 预算常量本身钉死：若有人改动 `loadTimeout`，此用例提醒同步更新预期。
+    /// 🔴 2026-10-08：由 12 上调到 **25**（主理人反馈「经常提示超时」，
+    ///    与其串行排队同批修；本用例当时漏同步，CI run#37758888046 报错）。
+    ///    证据：`RadarCardModel.loadTimeout = 25`（实测grep），
+    ///    `Flood/Earthquake/QWeather` 同为 25，`Satellite` 为 20。
     func testLoadTimeoutConstant() {
-        XCTAssertEqual(RadarCardModel.loadTimeout, 12, accuracy: 0.001,
+        XCTAssertEqual(RadarCardModel.loadTimeout, 25, accuracy: 0.001,
                        "超时预算变更需同步更新 README / 设计与本用例")
     }
 }

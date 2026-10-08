@@ -217,7 +217,15 @@ struct QWeatherHourlyCard: View {
             // ⚠️ 上游没给时刻 → **不编造**。
             return "时刻待定"
         }
-        guard let parsed = isoFormatter.date(from: raw) else {
+        // ⚠️ **共用Core 的容错解析器**（`WeatherTimeFormatter.parseISO8601`）。
+        // 🔴 此前这里用的是本文件私有的 `ISO8601DateFormatter` +
+        //    `.withInternetDateTime`，而该选项**要求串里有秒**，
+        //    和风实测下发的 `15:00Z` 是**无秒**的 → 解析失败 → 退回原始串，
+        //    卡片上显示 `2026-10-08T15:00Z` 而不是 `23:00`
+        //    （CI run#37758888046 实测失败）。
+        //    逐日卡的 `dayText` 同款形态（`16:00Z`）**同样有这个问题**，
+        //    已一并改为共用本解析器。
+        guard let parsed = WeatherTimeFormatter.parseISO8601(raw) else {
             return raw
         }
         return WeatherTimeFormatter.string(from: parsed, format: "HH:mm", timeZone: timeZone)
@@ -241,18 +249,4 @@ struct QWeatherHourlyCard: View {
         guard let probability = hour.precipitation?.probability else { return missingText }
         return QWeatherCard.fractionText(probability)
     }
-
-    /// ISO8601 解析器（**UTC**；实测 `2026-10-08T15:00Z`）。
-    ///
-    /// ⚠️ 与 `QWeatherCard.isoFormatter` 是**两个实例**而非抽公共单例：
-    ///   `ISO8601DateFormatter` 不是线程安全的 `Sendable` 类型，
-    ///   而 `QWeatherCard` 那个是 `private`（跨文件不可见）。
-    ///   抽到Core 会给 Widget 也拖进一个格式化器（而 Widget 不用它），
-    ///   收益不抵成本。故此处**照抄一份**，并在两处都注明同步修改。
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter
-    }()
 }

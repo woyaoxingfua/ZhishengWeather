@@ -306,26 +306,25 @@ struct QWeatherCard: View {
     /// 日期文本：把上游的 **UTC ISO8601** 串按城市时区渲染。
     ///
     /// ⚠️ 实测 `forecastStartTime = "2026-10-07T16:00Z"`（**UTC**）。
-    /// → 直接 `DateFormatter` 解析**可能失败**（缺毫秒、格式细节差异），
-    ///   故用 `ISO8601DateFormatter`；解析失败则**如实退回原始串**，
-    ///   **绝不**显示空白或错日期。
+    ///
+    /// 🔴🔴 **本函数此前一直解析失败，只是从没有测试覆盖过**
+    ///   （首次被测：CI run#37758888046 的逐时用例，同根因连带暴露本卡）。
+    ///   原因：原来用的是本文件私有的 `ISO8601DateFormatter` +
+    ///   `.withInternetDateTime`，而该选项**要求串里有秒**（`hh:mm:ss`），
+    ///   实测的 `16:00Z` 是**无秒**的 → `date(from:)` 返回 nil
+    ///   → 如实退回原始串 → **卡片上一直显示 `2026-10-07T16:00Z` 而不是 `10-08`**。
+    ///   即：这条路径「看起来一直能跑」，实际一直在显示原始串。
+    ///   → 现改为共用 Core 的容错解析器（多格式回退）。
+    ///   解析失败仍**如实退回原始串**，**绝不**显示空白或错日期。
     static func dayText(_ day: QWeatherDay, timeZone: TimeZone) -> String {
         guard let raw = day.forecastStartTime else {
             // ⚠️ 上游没给开始时间 → 不编造日期。
             return "日期待定"
         }
-        guard let parsed = Self.isoFormatter.date(from: raw) else {
+        guard let parsed = WeatherTimeFormatter.parseISO8601(raw) else {
             // 解析不了 → 显示上游原文（仍是有用信息），不假装成合法日期。
             return raw
         }
         return WeatherTimeFormatter.string(from: parsed, format: "MM-dd", timeZone: timeZone)
     }
-
-    /// ISO8601 解析器（**UTC**；实测 `2026-10-07T16:00Z`）。
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter
-    }()
 }

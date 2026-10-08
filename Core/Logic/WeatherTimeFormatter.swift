@@ -92,4 +92,75 @@ enum WeatherTimeFormatter {
     static func string(from date: Date, format: String, timeZone: TimeZone) -> String {
         formatter(format: format, timeZone: timeZone).string(from: date)
     }
+
+    // MARK: - ISO8601 解析（容错）
+
+    /// 🔴 **容错 ISO8601 解析**：依次尝试多个候选格式，返回第一个成功的。
+    ///
+    /// ══════════════════════════════════════════════════════════════════════
+    /// ⚠️ **为什么不能用单个 `ISO8601DateFormatter` + `.withInternetDateTime`**
+    /// ══════════════════════════════════════════════════════════════════════
+    /// **实测（CI run#37758888046，`QWeatherHourlyTests.testHourTextRendersInGivenTimeZone`）**：
+    /// `.withInternetDateTime` 要求串里**必须有秒**（`hh:mm:ss`），
+    /// 而和风下发的逐时 / 逐日 `forecastTime` **实测是无秒的**：
+    ///   · 逐时 `2026-10-08T15:00Z`  → **解析失败**
+    ///   · 逐日 `2026-10-07T16:00Z`  → 同款形态（**同样失败，此前从未被测到**）
+    /// → 表现为 `date(from:)` 返回 nil，代码如实退回**上游原始串**，
+    ///   于是卡片上显示 `2026-10-08T15:00Z` 而不是 `23:00`。
+    ///   这是**本项目「声明 ≠ 渲染 ≠ 用户可见」最典型的一次**：
+    ///   类型签名、模型字段、单测全绿，只有真机渲染才暴露。
+    ///
+    /// ⚠️ 加 `.withFractionalSeconds` **也不对**（社区实测 + Apple 文档）：
+    ///   那是为 `ss.sss`（带毫秒）准备的，加了反而**不再**解析无秒/无毫秒的形态。
+    ///
+    /// ══════════════════════════════════════════════════════════════════════
+    /// → 故此处用 `DateFormatter` + **多格式回退链**，逐个试到成功为止。
+    ///   覆盖 ISO8601 允许的四种常见形态（带/不带秒、带/不带毫秒），
+    ///   外加 `+08:00` 数字时区偏移。
+    /// ══════════════════════════════════════════════════════════════════════
+    ///
+    /// - Parameters:
+    ///   - raw: 上游时刻**原始串**（例如 `2026-10-08T15:00Z`）。
+    ///   - locale: 解析用 locale；nil → `en_US_POSIX`（🔴 **必须**固定，
+    ///     否则在非公历 / 非拉丁数字 locale（如 `th_TH`、阿拉伯语）下
+    ///     `yyyy`/`MM` 解析会被本地化规则改写）。
+    /// - Returns: 解析出的绝对时刻；**全部格式都失败 → nil**
+    ///   （调用方据此如实退回原始串，**绝不**编造时刻）。
+    static func parseISO8601(_ raw: String, locale: Locale? = nil) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let resolvedLocale = locale ?? Locale(identifier: "en_US_POSIX")
+        for format in iso8601CandidateFormats {
+            let formatter = DateFormatter()
+            formatter.locale = resolvedLocale
+            // 🔴 解析基准固定 UTC：串尾的 `Z` / 偏移只是被解析，不参与运算。
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: trimmed) { return parsed }
+        }
+        return nil
+    }
+
+    /// 🔴 ISO8601 候选格式链（**顺序敏感**：先精确后宽松）。
+    ///
+    /// ⚠️ **实测只有前两种形态真出现过**（见文件头）：
+    ///   `2026-10-08T15:00Z`（无秒）/ `2026-10-07T16:00Z`（无秒）；
+    ///   带秒、带毫秒、带数字偏移的形态是按 ISO8601 规范补的防御项，
+    ///   **未在本机实测**（本机无编译器）。
+    ///
+    /// 🔴 **为什么 `XXX` 与 `'Z'` 两套都要列**：
+    ///   `XXX`（ISO8601 扩展时区占位符）社区实测能同时吃 `Z` 与 `+08:00`，
+    ///   但那是社区口径、**本机未实测**；而把 `Z` 写成**字面量** `'Z'`
+    ///   只能吃 `Z`、吃不了 `+08:00`，却是**最无争议**的写法。
+    ///   → 两套都列进回退链：谁先命中都用，**都不命中就返回 nil**
+    ///     （调用方如实退回原始串，绝不编造）。
+    ///   这是「没有编译器时用回退链对冲不确定」的常规做法。
+    static let iso8601CandidateFormats: [String] = [
+        "yyyy-MM-dd'T'HH:mmXXX",// 🔴 无秒 + 扩展时区（实测形态，最常见）
+        "yyyy-MM-dd'T'HH:mm'Z'",        // 无秒 + 字面 Z（最无争议的兜底）
+        "yyyy-MM-dd'T'HH:mm:ssXXX",     // 有秒 + 扩展时区
+        "yyyy-MM-dd'T'HH:mm:ss'Z'",     // 有秒 + 字面 Z
+        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", // 有毫秒 + 扩展时区
+        "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"  // 有毫秒 + 字面 Z
+    ]
 }

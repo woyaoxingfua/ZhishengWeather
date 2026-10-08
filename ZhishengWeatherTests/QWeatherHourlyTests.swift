@@ -636,6 +636,43 @@ final class QWeatherHourlyTests: XCTestCase {
                        "解析失败 → 显示上游原文（仍是有用信息），不假装成合法时刻")
     }
 
+    /// 🔴 **逐日卡 `dayText` 的回归守卫**（2026-10-08 新增）。
+    ///
+    ///⚠️ 这条路径**此前完全没有测试覆盖**，因此一直静默失败：
+    ///   实测 `forecastStartTime = "2026-10-07T16:00Z"` 是**无秒**的，
+    ///   而旧实现用 `ISO8601DateFormatter` + `.withInternetDateTime`
+    ///   （**要求有秒**）→ `date(from:)` 返回 nil → 如实退回原始串
+    ///   → **卡片上一直显示 `2026-10-07T16:00Z` 而不是 `10-08`**。
+    ///   它「看起来一直能跑」（类型签名对、单测全绿），只有真机渲染才暴露。
+    ///   本用例把它钉死，防止同类回归。
+    @MainActor
+    func testDailyDayTextParsesNoSecondsUTCString() throws {
+        let shanghai = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let day = QWeatherDay(sequenceIndex: 0,
+                           forecastStartTime: "2026-10-07T16:00Z",
+                           forecastEndTime: nil,
+                           astro: nil,
+                           temperatureMax: nil, temperatureMin: nil,
+                           temperatureAvg: nil, uvIndexMax: nil,
+                           daytime: nil, nighttime: nil)
+        // UTC 16:00 → 北京次日 00:00 → 渲染为 "10-08"。
+        XCTAssertEqual(QWeatherCard.dayText(day, timeZone: shanghai), "10-08",
+                       "🔴 逐日卡此前解析失败一直显示原始串（无测试覆盖）；必须解析成日期")
+    }
+
+    /// 逐日卡：无时刻 → 「日期待定」，**不编造**日期。
+    @MainActor
+    func testDailyDayTextMissingTimeStaysPending() {
+        let day = QWeatherDay(sequenceIndex: 0,
+                              forecastStartTime: nil,
+                              forecastEndTime: nil,
+                              astro: nil,
+                              temperatureMax: nil, temperatureMin: nil,
+                              temperatureAvg: nil, uvIndexMax: nil,
+                              daytime: nil, nighttime: nil)
+        XCTAssertEqual(QWeatherCard.dayText(day, timeZone: .current), "日期待定")
+    }
+
     /// 缺测 vs 零值：温度缺测 → 「暂无」，**不用 0 顶替**。
     @MainActor
     func testTemperatureAndProbabilityDistinguishMissingFromZero() {
