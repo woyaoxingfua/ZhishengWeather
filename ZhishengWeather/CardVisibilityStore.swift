@@ -70,7 +70,14 @@ enum MainCard: String, CaseIterable, Identifiable, Sendable {
         case .satellite: return "卫星云图"
         case .flood: return "河道流量"
         case .earthquake: return "附近地震"
-        case .qWeather: return "和风天气"
+        // 🔴 2026-10-11：卡片已改为**区域化双源**（国内和风为主 / 海外
+        // Open-Meteo 为主），卡片标题也从「和风天气」改成了「天气预报」
+        // → 设置页必须**同步**，否则用户在这里看到「和风天气」、进 App 看到
+        // 「天气预报」，会以为是两张不同的卡。
+        // ⚠️ **只改展示名，绝不改 enum case 名**：case 名（`rawValue`）是
+        // UserDefaults 的持久化键，改名会让所有用户已保存的卡片顺序与
+        // 隐藏状态**全部失效**（静默丢失用户偏好）。
+        case .qWeather: return "天气预报"
         }
     }
 
@@ -84,7 +91,9 @@ enum MainCard: String, CaseIterable, Identifiable, Sendable {
         case .satellite: return "风云卫星云图（默认关闭）"
         case .flood: return "河道流量（m³/s）"
         case .earthquake: return "附近有感地震"
-        case .qWeather: return "和风天气逐日预报（需凭据）"
+        // ⚠️ 副标题必须说清「需凭据」仍在（和风未配凭据时它是次源 / 空态），
+        //   但**不能**再说「和风天气逐日预报」—— 现在是**两个源**并列。
+        case .qWeather: return "逐日预报 · 国内和风 / 海外 Open-Meteo（和风需凭据）"
         }
     }
 

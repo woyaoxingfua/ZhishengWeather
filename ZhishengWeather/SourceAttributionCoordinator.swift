@@ -58,10 +58,12 @@ final class SourceAttributionCoordinator: ObservableObject {
     /// 导致 `DaylightCard`（`overlay?.X ?? snapshot.X`）显示跨日陈旧值（旧值锁定）。
     ///
     /// T10 后本属性**按能力泛化**：`handledCapabilities` 里任何能力产出的字段都会进这里
-    /// （名字里的 "solar" 是历史遗留）。当前**唯一消费者**是 `DaylightCard`（只读 solar
-    /// 字段）；MET Norway 的数值字段进来后**没有任何视图读取** —— 这正是上述不变量的
-    /// 直接受益点：MET 成功也**不会**把主源 solar 值偷渡进 overlay。若将来要上屏 MET
-    /// 数值或做对比 UI：可把这个覆盖层按能力拆开（或改名），但**不变量不变**。
+    /// （名字里的 "solar" 是历史遗留）。solar 字段的消费者是 `DaylightCard`（只读 solar
+    /// 字段）；MET Norway / 7timer 的**数值**字段自 2026-10-11 起由
+    /// `FallbackSourceNote` 消费（指标区下方的「备源」提示行，**只在主源缺该字段时**
+    /// 显示，绝不覆盖主源值）。上述不变量的直接受益点仍在：MET 成功也**不会**把主源
+    /// solar 值偷渡进 overlay。若将来要做**多源数值对比** UI，可把这个覆盖层按能力
+    /// 拆开（或改名），但**不变量不变**。
     @Published private(set) var solarOverlay: FieldPatch?
     /// 逐字段来源图（L2 标注依据）。
     @Published private(set) var solarProvenance: FieldProvenanceMap?
@@ -114,12 +116,12 @@ final class SourceAttributionCoordinator: ObservableObject {
     /// 一行"备用"的正常源 —— 这就是本仓库反复出现的**静默哑火**位置。
     ///
     /// 当前三项：
-    /// - `.solarEvents`：日出/日落覆盖层（`DaylightCard` 逐字段叠加，唯一有消费者的能力面）；
-    /// - `.basicNumericFields`：MET Norway 的温/压/湿/云/风。本轮**只**参与
-    ///   「逐字段降级链 + 多源管理状态行」，**没有**上屏消费者
-    ///   （对比/诊断 UI 属后续批次）—— 故这些值进入 overlay 后无任何视图读取。
+    /// - `.solarEvents`：日出/日落覆盖层（`DaylightCard` 逐字段叠加）；
+    /// - `.basicNumericFields`：MET Norway 的温/压/湿/云/风。参与
+    ///   「逐字段降级链 + 多源管理状态行」，并由 `FallbackSourceNote`
+    ///   在**主源缺该字段时**以小字上屏（2026-10-11 起有了消费者）。
     /// - `.coarseFallbackFields`：第八源 7timer! 的兜底标量（温/压/风向）。它在链**末位**，
-    ///   只有前序源都没给出该字段时才被选中；同样**没有**上屏消费者（与 MET 同处境）。
+    ///   只有前序源都没给出该字段时才被选中；同样由 `FallbackSourceNote` 上屏。
     static let handledCapabilities: Set<SourceCapability> =
         [.solarEvents, .basicNumericFields, .coarseFallbackFields]
 

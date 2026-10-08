@@ -147,6 +147,10 @@ final class FloodCardModel {
     func load(latitude: Double, longitude: Double, now: Date = Date()) async {
         isLoading = true
         hasTimedOut = false
+        // 🔴 每次加载**先清**网格来源：城市切换时若新请求失败，必须显示
+        //   「距离不可知」而不是**上一个城市**的网格点距离（同 `discharge`
+        //   在 catch 分支被置 nil 的理由）。
+        gridOrigin = nil
         defer { isLoading = false }
 
         do {
@@ -161,15 +165,23 @@ final class FloodCardModel {
             //   断流是真实读数，把它说成缺测是另一种谎报。
             if fetched.isEffectivelyEmpty {
                 discharge = nil
+                // 🔴 网格来源**独立保存**：上游回显了网格却没给序列
+                //   （实测存在该形态）时，这个坐标是「这一带没有河道数据」
+                //   这一事实的**唯一佐证**，跟着 `discharge = nil` 一起丢就白取了。
+                gridOrigin = fetched.gridOrigin
                 state = .noData
             } else {
                 discharge = fetched
+                gridOrigin = fetched.gridOrigin
                 state = .available
             }
         } catch {
             // ⚠️ 故障 → `.unavailable`，**绝不**落到 `.noData`
             //（否则网络失败会被显示成「这一带没有河道」）。
             discharge = nil
+            // 🔴 取不到响应 → 无从得知网格 → 清空（**绝不**保留上一次的，
+            //   否则会把上一个城市的网格点说成当前城市的）。
+            gridOrigin = nil
             state = .unavailable(Self.describe(error))
         }
 
@@ -190,6 +202,28 @@ final class FloodCardModel {
     /// 故这不是重复实现，而是同一判据的两种问法。
     var firstMeasuredPoint: RiverDischargePoint? {
         discharge?.daily.first { $0.cubicMetresPerSecond != nil }
+    }
+
+    // MARK: - 网格来源（诚实性：告诉用户数据取自哪儿）
+
+    /// 本次数据的网格来源（请求点 vs 上游回显网格点）。
+    ///
+    /// 🔴 **独立槽位**（不放在 `discharge` 里）：`.noData` 态下 `discharge`
+    /// 被置 nil（没有序列可渲染），但**网格坐标仍然拿得到** —— 而那正是最需要
+    /// 告诉用户「上游在这片网格上没给河道数据」的时刻。若把它挂在
+    /// `discharge` 上，该态下就会一起消失（又一次「静默丢信息」）。
+    private(set) var gridOrigin: FloodGridOrigin?
+
+    /// 请求点到数据网格点的距离（**km**；本应用按 Haversine 算，非上游测距）。
+    ///
+    /// nil = 上游未回显网格坐标（**不可知**，绝不回填成 0）。
+    var gridDistanceKilometers: Double? {
+        gridOrigin?.distanceKilometers
+    }
+
+    /// 上游**是否**回显了网格坐标（视图据此决定要不要显示距离行）。
+    var hasEchoedGridPoint: Bool {
+        gridOrigin?.hasEchoedGridPoint ?? false
     }
 
     // MARK: - 错误文案

@@ -30,6 +30,74 @@
 
 import Foundation
 
+/// 河道流量数据的**地理来源**：请求点 vs 实际网格点。
+///
+/// 🔴 **存在理由（诚实性）**：上游**不返回河名**，用户问「这是哪条河」时
+/// 本应用**无法回答**（官方文档 + 本机实测双重确认）。唯一能如实给出的
+/// 是「数据取自距你多远的网格点」。
+///
+/// ⚠️ **距离由本应用按 Haversine 算出**（复用既有的 `GeoDistance`，R = 6371 km），
+/// **不是**上游测距 —— 页脚必须如实标注这一点（同 `EarthquakeCard` 纪律）。
+///
+/// ⚠️ **距离为 nil 有两种截然不同的原因，UI 必须分开说**：
+///   1. 上游没回显网格坐标（`gridLatitude` / `gridLongitude` 为 nil）→ **不知道**；
+///   2. 坐标非有限值 → `GeoDistance` 返回 nil（**如实缺测，绝不返回 0** ——
+///      返回 0 会被渲染成「数据点就在你脚下」）。
+/// 绝不用请求坐标回填网格坐标来「凑出」一个距离。
+struct FloodGridOrigin: Codable, Equatable, Sendable {
+
+    /// **请求点**纬度（调用方传入的城市 / 当前位置坐标）。
+    var requestedLatitude: Double
+
+    /// **请求点**经度。
+    var requestedLongitude: Double
+
+    /// 上游**回显**的网格中心纬度。nil = 上游未回显（距离不可知）。
+    var gridLatitude: Double?
+
+    /// 上游**回显**的网格中心经度。nil = 上游未回显。
+    var gridLongitude: Double?
+
+    /// 请求点到网格点的球面距离（**km**；由 `GeoDistance` 计算）。
+    ///
+    /// nil = 网格坐标缺失，或坐标非有限值（**绝不用 0 顶替**）。
+    var distanceKilometers: Double?
+
+    /// 由请求坐标 + DTO 回显坐标构造（**唯一构造入口**）。
+    ///
+    /// - Parameters:
+    ///   - requestedLatitude: 请求纬度。
+    ///   - requestedLongitude: 请求经度。
+    ///   - gridLatitude: 响应回显纬度（可缺）。
+    ///   - gridLongitude: 响应回显经度（可缺）。
+    init(requestedLatitude: Double,
+         requestedLongitude: Double,
+         gridLatitude: Double?,
+         gridLongitude: Double?) {
+        self.requestedLatitude = requestedLatitude
+        self.requestedLongitude = requestedLongitude
+        self.gridLatitude = gridLatitude
+        self.gridLongitude = gridLongitude
+        // 🔴 网格坐标**任一**缺失 → 距离不可知（nil）。
+        // 绝不用请求坐标回填 —— 那会把「偏移几公里」永远显示成 0。
+        if let gridLatitude, let gridLongitude {
+            self.distanceKilometers = GeoDistance.kilometers(
+                originLatitude: requestedLatitude,
+                originLongitude: requestedLongitude,
+                targetLatitude: gridLatitude,
+                targetLongitude: gridLongitude
+            )
+        } else {
+            self.distanceKilometers = nil
+        }
+    }
+
+    /// 网格坐标是否**确实**回显了（两者皆非 nil）。
+    var hasEchoedGridPoint: Bool {
+        gridLatitude != nil && gridLongitude != nil
+    }
+}
+
 /// 河道流量逐日序列中的一个点。
 struct RiverDischargePoint: Codable, Equatable, Identifiable, Sendable {
 
@@ -55,6 +123,16 @@ struct RiverDischarge: Codable, Equatable, Sendable {
     ///
     /// 空数组 = 无任何可用数据（见 `isEffectivelyEmpty`）。
     var daily: [RiverDischargePoint]
+
+    /// 🔴 数据实际取自哪个网格点（2026-10-11 新增）。
+    ///
+    /// ⚠️ **默认 nil**：无请求坐标上下文时（如 mapper 的「缺 `daily` 块」回落路径、
+    /// 单测直接构造）**不编造网格来源**。nil ≠ 距离为 0。
+    ///
+    /// ⚠️ **合成 Codable 兼容**：可选 + 默认值 → 旧载荷缺此键解码为 nil、
+    ///    解码不失败（同 `WeatherSnapshot` 的 v1.1 范式）。本类型**不落盘**
+    ///    （不在 `WeatherSnapshot` 域内），但保持解码安全是本仓纪律。
+    var gridOrigin: FloodGridOrigin? = nil
 }
 
 extension RiverDischarge {
@@ -63,10 +141,15 @@ extension RiverDischarge {
     ///
     /// ⚠️ 判据的**权威不在本模型**，而在 `SnapshotCompleteness`（与天气快照 /
     /// 海浪共用同一处，见该文件「独立链路」小节）。
+    ///
+    /// ⚠️ **只看 `daily`，不看 `gridOrigin`**：网格来源缺失**不是**「没有河道数据」
+    ///   （那是两件事）。有网格坐标但序列为空 → 仍是实质无数据。
     var isEffectivelyEmpty: Bool {
         SnapshotCompleteness.isEffectivelyEmpty(self)
     }
 
     /// 无任何数据的空模型（供 mapper 的"缺块"回落路径使用）。
+    ///
+    /// ⚠️ `gridOrigin` 恒为 nil：回落路径**不知道**网格来源，**不编造**。
     static let empty = RiverDischarge(daily: [])
 }

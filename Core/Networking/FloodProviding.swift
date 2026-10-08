@@ -72,7 +72,12 @@ actor FloodService: FloodProviding {
         // 统一解码入口：失败携带 codingPath（可诊断性）。
         let dto = try ResponseDecoding.decode(FloodResponse.self, from: data)
 
-        // mapper 逐元素判非空：全null → empty（不冒充"断流 0"）。
-        return FloodMapper.map(dto)
+        // ⚠️ **请求坐标必须原样传入**（本服务已持有，无需再查一次）：
+        // mapper 要用它与响应**回显**的网格中心算距离，填错会让「数据取自
+        // 距你约 N km 的网格点」显示成错误值（比不显示更糟）。
+        // mapper 逐元素判非空：全null → 空序列（不冒充"断流 0"）。
+        return FloodMapper.map(dto,
+                               requestedLatitude: latitude,
+                               requestedLongitude: longitude)
     }
 }

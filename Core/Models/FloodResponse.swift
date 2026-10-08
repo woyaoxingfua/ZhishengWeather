@@ -34,13 +34,36 @@
 //  → 故 DTO 的数组元素**必须**是可选（`[Double?]`），且 mapper **必须**逐元素
 //  判非空。否则"没数据"会被当成"流量 0"画到屏幕上 —— 把一条缺测说成断流。
 //
-//  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
+// ── 🔴 网格回显坐标（本轮新增，2026-10-11）────────────────────────────
+// 实测（北京 39.909,116.397 请求）：响应顶层 `latitude=39.925003`、
+// `longitude=116.375` —— 与**请求值不同**，这正是官方文档所说
+//「Due to the **5 km resolution** the closest river might not be selected
+// correctly. Varying coordinates by 0.1° can help ...」的实证。
+//
+// ⚠️ **这两个字段是「数据实际来自哪个网格点」的唯一证据**，故必须解码：
+// 上游**不返回河名**（实测 `daily` 块只有 `time` 与 `river_discharge`，
+// 含 name / river 的键 **0 个**），所以「这是哪条河」无法回答；
+// 能如实回答的只有「数据取自距你多远」。
+//
+// ⚠️ **可选 + 解码失败安全**：字段缺失 → nil（视图不显示距离行），
+// **绝不**用请求坐标回填（那会让「网格偏移 3 km」永远显示不出来）。
+//
+// Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError.
 //
 
 import Foundation
 
 /// Open-Meteo Flood 原始响应（解码失败安全：全部可选）。
 struct FloodResponse: Decodable, Sendable {
+
+    /// 响应**回显**的网格中心纬度（实测精度约 5 位小数）。
+    ///
+    /// ⚠️ 这**不是**请求纬度 —— 官方 flood 端点按 5 km 网格取最近格点，
+    /// 故两者可能相差数公里。nil = 上游未回显（此时不显示距离行）。
+    var latitude: Double?
+
+    /// 响应**回显**的网格中心经度（语义同 `latitude`）。
+    var longitude: Double?
 
     /// `daily` 块（逐日）。整键可选：静默省略时为 nil。
     struct Daily: Decodable, Sendable {

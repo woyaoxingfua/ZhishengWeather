@@ -576,9 +576,20 @@ if !CardVisibilityStore.isHidden(.radar) {
                 // 🔴🔴 **`attributions` 必须渲染**（和风官方明文：
                 // 「必须与当前数据共同显示」）—— 这是**许可条件，非可选**。
                 // 漏渲染 = 违反许可条件，比少一个 UI 元素严重得多。
+                //
+                // 🔴 2026-10-11（区域化双源）：本卡现在**同时**显示两个源
+                // （国内和风为主 / 海外 Open-Meteo 为主，可点按切换），故传入：
+                // · `openMeteoDaily: snapshot.daily` —— Open-Meteo 侧逐日**复用既有
+                //   主源快照**，**不发新请求**（否则重复取数 + 重复计配额）；
+                // · `country/latitude/longitude` —— 供 `RegionalSourcePolicy`
+                //   裁定「默认谁当主源」（`country` 缺失时才退到坐标粗判）。
                 if !CardVisibilityStore.isHidden(.qWeather) {
                     QWeatherCard(model: qWeatherModel,
-                                 timeZone: viewModel.selectedTimeZone)
+                                 timeZone: viewModel.selectedTimeZone,
+                                 openMeteoDaily: snapshot.daily,
+                                 country: viewModel.directory.selectedCity?.country,
+                                 latitude: snapshot.location.latitude,
+                                 longitude: snapshot.location.longitude)
                 }
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
@@ -818,6 +829,9 @@ if !CardVisibilityStore.isHidden(.radar) {
     private func metricsSection(snapshot: WeatherSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             metricsGrid(snapshot: snapshot)
+            // 🔴 兜底源提示行（2026-10-11）：紧跟指标格 —— 备源补的正是
+            //   这几个量。主源有值时它整段不渲染（判据在 `FallbackSourceNote`）。
+            fallbackSourceNote(snapshot: snapshot)
             // D-C2：逐时平均风速（实心）/ 阵风（空心）同尺并列（AC-C6）。
             // ⚠️ 逐时风向未请求（`OpenMeteoEndpoint.hourlyFields` 无 `wind_direction_10m`）
             // → 不画风向，卡内如实说明（AC-C4 属数据面缺口，见卡片文件头）。
@@ -854,6 +868,21 @@ if !CardVisibilityStore.isHidden(.radar) {
                        value: Self.windGustText(snapshot.windGusts),
                        caption: "阵风")
         }
+    }
+
+    /// 🔴 兜底源数值提示行（2026-10-11 新增）。
+    ///
+    /// ⚠️ **只在主源缺该字段时**才有内容（判据全在 `FallbackSourceNote.lines`，
+    ///   视图只渲染不判定）—— 主源有值时它**整段不渲染**（不留空槽）。
+    /// ⚠️ **绝不覆盖主源值**：那是 `FieldFallbackResolver.merge` 的语义，
+    ///   本轮**一个字都没改**那个文件。
+    /// ⚠️ 挂在指标格**之后**：那正是备源补的几个量（温度/气压/湿度/云量/风）
+    ///   在主屏的位置，用户不用多滚一屏就能看到「这个值来自备源」。
+    @ViewBuilder
+    private func fallbackSourceNote(snapshot: WeatherSnapshot) -> some View {
+        FallbackSourceNote(snapshot: snapshot,
+                           overlay: attributionCoordinator.solarOverlay,
+                           provenance: attributionCoordinator.solarProvenance)
     }
 
     // MARK: - ④ 逐小时预报

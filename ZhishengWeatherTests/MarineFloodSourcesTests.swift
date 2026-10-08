@@ -77,8 +77,21 @@ final class MarineFloodSourcesTests: XCTestCase {
     }
 
     private func flood(_ json: String) throws -> RiverDischarge {
-        FloodMapper.map(try decodeFlood(json))
+        FloodMapper.map(try decodeFlood(json),
+                        requestedLatitude: Self.testLatitude,
+                        requestedLongitude: Self.testLongitude)
     }
+
+    /// 测试用「请求点」坐标（北京 39.909,116.397 —— 逐字取自实测探针）。
+    ///
+    /// ⚠️ 之所以提成常量：mapper 自 2026-10-11 起**必须**收请求坐标
+    ///   （要算「请求点 → 网格点」的距离），故每个调用点都得给一对。
+    /// ⚠️ 这个常量**只对本文件里断言「网格距离」的那两个用例有意义**。
+    ///   其余用例（`wuhanJSON` 等）只是借它满足 mapper 的签名要求 ——
+    ///   它们断言的是 `daily` 映射，**与 gridOrigin 无关**，故那个
+    ///   「毫无意义的距离值」不会造成假绿（没有用例断言它）。
+    private static let testLatitude: Double = 39.909
+    private static let testLongitude: Double = 116.397
 
     // MARK: - 1．端点：独立子域名（本轮硬要求）
 
@@ -441,7 +454,9 @@ final class MarineFloodSourcesTests: XCTestCase {
                        "含 null 元素的数组必须能解码（否则整包失败 → 主屏与小组件同时无数据）")
 
         // 时刻为 null 的该日被跳过（不编造日期），且不与后续值串位。
-        let mapped = FloodMapper.map(nullElements)
+        let mapped = FloodMapper.map(nullElements,
+                                     requestedLatitude: Self.testLatitude,
+                                     requestedLongitude: Self.testLongitude)
         XCTAssertEqual(mapped.daily.count, 2, "时刻为 null 的该日被跳过")
         // ⚠️ 显式写 [Double?]：让 nil 有确定的 Optional<Double> 类型，
         // 避免字面量 `[5.0, nil]` 的类型推断在编译期产生歧义。
@@ -463,6 +478,87 @@ final class MarineFloodSourcesTests: XCTestCase {
         """#)
         XCTAssertEqual(longer.daily.count, 1, "值数组更长 -> 只取交集（不串位）")
         XCTAssertEqual(longer.daily.first?.cubicMetresPerSecond, 5.0)
+    }
+
+    // MARK: - 4b．网格来源（2026-10-11 新增）
+
+    /// DTO 必须解码顶层 `latitude` / `longitude` —— 那是「数据实际来自哪个
+    /// 网格点」的**唯一证据**（上游不返回河名，用户问「这是哪条河」无法回答）。
+    ///
+    /// ⚠️ 本仓库真机事故模式是「DTO 没建模某个键 → 字段恒 nil → 那一整类
+    ///   信息永远显示不出来」，且**不报错**。故直接钉解码。
+    func testFloodDecodesEchoedGridCoordinates() throws {
+        // ⚠️ 逐字取自实测响应（北京 39.909,116.397 请求）：
+        //   顶层 latitude/longitude 与请求值**不同** → 这正是 5 km 网格的偏移。
+        let dto = try decodeFlood(#"""
+        {"latitude":39.925003,"longitude":116.375,
+         "utc_offset_seconds":28800,
+         "daily":{"time":[1791388800],"river_discharge":[5.05]}}
+        """#)
+        XCTAssertEqual(dto.latitude, 39.925003, "网格回显纬度必须被解码")
+        XCTAssertEqual(dto.longitude, 116.375, "网格回显经度必须被解码")
+    }
+
+    /// 网格坐标**缺失** → 距离不可知（nil），**绝不**用请求坐标回填。
+    ///
+    /// 🔴 这条是诚实性红线：回填会让「偏移 3 km」永远显示成「重合」——
+    /// 那等于对用户谎报数据的空间来源。
+    func testMissingEchoedGridYieldsNilDistanceNotZero() throws {
+        let mapped = FloodMapper.map(try decodeFlood(#"""
+        {"daily":{"time":[1791388800],"river_discharge":[5.05]}}
+        """#),
+                                     requestedLatitude: 39.909,
+                                     requestedLongitude: 116.397)
+        let origin = try XCTUnwrap(mapped.gridOrigin)
+        XCTAssertFalse(origin.hasEchoedGridPoint, "未回显网格坐标时不得声称有网格点")
+        XCTAssertNil(origin.distanceKilometers,
+                     "网格坐标缺失 → 距离不可知（nil）；回填请求坐标会谎报为 0 km")
+    }
+
+    /// 请求点与网格点**确有偏移**时，距离必须如实算出来（非 0、非 nil）。
+    ///
+    /// ⚠️ 这条锚的是「距离不是装饰」—— 若某天有人把距离写死成 0 或删掉计算，
+    ///   本用例会红。
+    func testGridOffsetDistanceIsComputedFromEchoedCoordinates() throws {
+        let mapped = try flood(#"""
+        {"latitude":39.925003,"longitude":116.375,
+         "utc_offset_seconds":28800,
+         "daily":{"time":[1791388800],"river_discharge":[5.05]}}
+        """#)
+        let origin = try XCTUnwrap(mapped.gridOrigin)
+        XCTAssertTrue(origin.hasEchoedGridPoint)
+        let distance = try XCTUnwrap(origin.distanceKilometers)
+        // 请求 39.909,116.397 → 网格 39.925003,116.375：约 2~3 km。
+        // 锚**性质**（正数、且在官方 5 km 分辨率的量级内），不锚字面量。
+        XCTAssertGreaterThan(distance, 0, "回显坐标与请求坐标不同 → 距离必须为正，绝不为 0")
+        XCTAssertLessThan(distance, 5.0, "偏移应在官方 5 km 网格量级内（实测约 2~3 km）")
+    }
+
+    /// 「缺 `daily` 整块」的回落路径**也**必须带上 gridOrigin。
+    ///
+    /// ⚠️ 坐标回显与「有没有序列」是**两件独立的事**。丢掉它会让 `.noData`
+    ///   态下用户看不到「这片网格上本来就没有河道数据」这个有用事实。
+    func testEmptyPathStillCarriesGridOrigin() throws {
+        let mapped = FloodMapper.map(try decodeFlood(#"""
+        {"latitude":39.925003,"longitude":116.375}
+        """#),
+                                     requestedLatitude: 39.909,
+                                     requestedLongitude: 116.397)
+        XCTAssertTrue(mapped.isEffectivelyEmpty, "缺 daily 整块 → 实质无数据")
+        XCTAssertNotNil(mapped.gridOrigin, "回落实落路径也必须带网格来源")
+    }
+
+    /// 请求点与网格点**重合**时距离为 0 —— UI 必须能区分「重合」与「不可知」。
+    ///
+    /// ⚠️ 0 与 nil 是**两件不同的事**：0 = 确实重合；nil = 不知道。
+    ///   把两者混同会让 UI 说不清「数据点就在你脚下」还是「网格偏移未知」。
+    func testCoincidentGridPointYieldsZeroNotNil() throws {
+        let origin = FloodGridOrigin(requestedLatitude: 39.909,
+                                      requestedLongitude: 116.397,
+                                      gridLatitude: 39.909,
+                                      gridLongitude: 116.397)
+        XCTAssertEqual(origin.distanceKilometers, 0,
+                       "坐标完全重合 → 距离确实为 0（这与 nil「不可知」是两件事）")
     }
 
     // MARK: - 5．坐标判据边界
