@@ -83,9 +83,11 @@ struct SmallWeatherView: View {
         entry.displayCityName ?? "—"
     }
 
+    /// 🔴 v1.6：`temperature` 可选 → nil 走 `currentTemperatureText` 的 `--°` 分支，
+    ///   **绝不**显示 `0°`（缺测 ≠ 零值）。
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
+        return snapshot.currentTemperatureText
     }
 
     /// 现象位（有数据 → WMO 描述；空态 → `WidgetCopy` 的如实状态句）。

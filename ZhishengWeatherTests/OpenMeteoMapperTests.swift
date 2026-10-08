@@ -136,7 +136,7 @@ final class OpenMeteoMapperTests: XCTestCase {
         XCTAssertTrue(snapshot.hourly.isEmpty)
         XCTAssertEqual(snapshot.dailyHigh, 17.5, accuracy: 1e-9)
         XCTAssertEqual(snapshot.dailyLow, 17.5, accuracy: 1e-9)
-        XCTAssertEqual(snapshot.temperature, 17.5, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.temperature ?? -999, 17.5, accuracy: 1e-9)
     }
 
     // MARK: - daily 回退矩阵
@@ -226,12 +226,12 @@ final class OpenMeteoMapperTests: XCTestCase {
         )
 
         XCTAssertFalse(snapshot.isDay)
-        XCTAssertEqual(snapshot.temperature, 18.3, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.temperature ?? -999, 18.3, accuracy: 1e-9)
         XCTAssertEqual(snapshot.apparentTemperature, 17.3, accuracy: 1e-9)
         XCTAssertEqual(snapshot.weatherCode, 3)
-        XCTAssertEqual(snapshot.humidity, 50)
-        XCTAssertEqual(snapshot.windSpeed, 1.0, accuracy: 1e-9)
-        XCTAssertEqual(snapshot.windDirection, 90.0, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.humidity ?? -1, 50, "湿度可选化后仍须映射为真实值 50")
+        XCTAssertEqual(snapshot.windSpeed ?? -999, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.windDirection ?? -999, 90.0, accuracy: 1e-9)
     }
 
     func testFetchedAtEqualsInjectedNow() {

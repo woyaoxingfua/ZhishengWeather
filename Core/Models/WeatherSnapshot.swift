@@ -32,6 +32,24 @@
 //  `uvIndex` 为实况值，与 `DailyForecast.uvIndexMax`（当日峰值）语义不同，UI 分标签。
 //  snowfall 单位实测为 cm（Open-Meteo 原值，透传，换算归 UI）。
 //
+//  v1.6 修订（多源常显交叉对照）：`temperature` / `windSpeed` / `windDirection`
+//  由非可选 `Double` 改为 `Double?`，`humidity` 由 `Int` 改为 `Int?`。
+//  **位置一个字都没动**（仍是声明序第 2/5/6/7 位）—— 本项目今天已两次栽在
+//  「新字段插中间」上（`developerID` 击穿全部调用点），故此处只改**类型**，
+//  绝不重排、绝不追加。
+//
+//  ⚠️ **刻意不给这四个字段默认值 `= nil`**：合成逐成员初始化器里，带默认值的
+//   参数可被省略，而本仓已真实踩过「属性有默认值 → mapper 漏传也编译通过 →
+//   静默哑火」（见本文件 `HourlyPoint` 处的 P2 复盘注释）。这里让它们**保持必填**，
+//   于是「忘记传值」在编译期就暴露，而不会退化成 nil 上屏。
+//   （下方 v1.3–v1.5 那批字段带 `= nil` 是因为它们**新增**、需要旧调用点零改动；
+//   本次是**改类型**，既有调用点本来就全在传值，不存在该需求。）
+//
+//  兼容性事实：合成 Codable 对**可选**属性用 `decodeIfPresent` —— 旧缓存 JSON
+//  有这些键 → 正常解出；没有 → nil 且**不抛错**。正因如此本仓铁律「缺测 ≠ 零值」
+//  在这四项上首次**结构上可表达**：mapper 拿不到就写 nil，UI 如实显示「暂无」，
+//  绝不再用 0.0 冒充。Widget 共享载荷走同一合成 Codable，兼容面与既有可选字段一致。
+//
 
 import Foundation
 
@@ -40,18 +58,24 @@ struct WeatherSnapshot: Codable, Equatable, Sendable {
 
     /// 查询所用的位置。
     var location: LocationInfo
-    /// 当前气温（℃）。
-    var temperature: Double
+    /// 当前气温（℃）。**可选**（v1.6）：nil = 服务端未返回 / 旧缓存无此键。
+    ///
+    /// 🔴 nil 语义是「**没测到**」，**绝不是 0℃**——UI 必须显示「暂无」或隐藏，
+    ///   绝不把 nil 当 0 渲染（本仓铁律，AC-A5 / AC-A1-3 同款）。
+    var temperature: Double?
     /// 当前体感温度（℃）。
     var apparentTemperature: Double
     /// 当前 WMO 天气码。
     var weatherCode: Int
-    /// 当前风速（m/s）。
-    var windSpeed: Double
-    /// 当前风向（0–360 度）。
-    var windDirection: Double
-    /// 当前相对湿度（%）。
-    var humidity: Int
+    /// 当前风速（m/s）。**可选**（v1.6），nil 语义同 `temperature`（缺测 ≠ 静风 0 m/s）。
+    var windSpeed: Double?
+    /// 当前风向（0–360 度）。**可选**（v1.6），nil 语义同 `temperature`。
+    ///
+    /// ⚠️ **0 与 360 都是合法风向**，绝不可规范化成 nil（见 `HourlyPoint.windDirection`
+    ///   的逐点红线 AC-C4c：本字段是实况单值，**永远不许**去填任何逐时点）。
+    var windDirection: Double?
+    /// 当前相对湿度（%）。**可选**（v1.6），nil 语义同 `temperature`（缺测 ≠ 0%）。
+    var humidity: Int?
     /// 当前是否白天。
     var isDay: Bool
     /// 逐小时预报（已按 now 起截取，≤ 24 条，A1-2 由 12 放宽）。

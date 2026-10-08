@@ -244,6 +244,11 @@ final class WeatherActivityManager {
         // 避免活动长期空态（见 `pushLatestIfRunning`）。仅缓存真实数据。
         latestSnapshot = (snapshot, city)
         let timeZone = WeatherTimeFormatter.timeZone(for: city)
+        // 🔴 v1.6：`snapshot.temperature` 已可选，而
+        // `WeatherActivityContentBuilder.buildContentState` 的 `temperatureCelsius`
+        // 形参**本来就是** `Double?`（该 builder 早有缺测诚实红线），
+        // 故此处**逐字不改**即语义正确：nil 透传 → ContentState.temperatureText
+        // 为 nil → `WeatherLiveActivityContent` 渲染「—」。绝不在此补 0℃。
         let content = WeatherActivityContentBuilder.buildContentState(
             cityName: snapshot.location.name,
             temperatureCelsius: snapshot.temperature,

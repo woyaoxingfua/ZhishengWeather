@@ -887,6 +887,10 @@ if !CardVisibilityStore.isHidden(.radar) {
             // 🔴 兜底源提示行（2026-10-11）：紧跟指标格 —— 备源补的正是
             //   这几个量。主源有值时它整段不渲染（判据在 `FallbackSourceNote`）。
             fallbackSourceNote(snapshot: snapshot)
+            // 🔴 多源常显交叉对照（v1.6）：主源**有**值时，把备源读数并列
+            //   显示并标注来源名 + 明示「以主源为准」。与上面那层判据互斥
+            //   （缺 → 补缺层；缺 → 对照层），同一字段不会出两行。
+            fallbackCrossCheck(snapshot: snapshot)
             // D-C2：逐时平均风速（实心）/ 阵风（空心）同尺并列（AC-C6）。
             // ⚠️ 逐时风向未请求（`OpenMeteoEndpoint.hourlyFields` 无 `wind_direction_10m`）
             // → 不画风向，卡内如实说明（AC-C4 属数据面缺口，见卡片文件头）。
@@ -940,6 +944,21 @@ if !CardVisibilityStore.isHidden(.radar) {
     @ViewBuilder
     private func fallbackSourceNote(snapshot: WeatherSnapshot) -> some View {
         FallbackSourceNote(snapshot: snapshot,
+                           overlay: attributionCoordinator.solarOverlay,
+                           provenance: attributionCoordinator.solarProvenance)
+    }
+
+    /// 🔴 多源常显交叉对照行（v1.6 新增）。
+    ///
+    /// ⚠️ **只在「主源有值 且 备源该字段有值」时**出行（判据全在
+    ///   `FallbackCrossCheck.lines`，本视图只渲染不判定）。
+    /// ⚠️ **绝不替换主源值**：末句固定写明「以主源为准，仅供参照」。
+    /// ⚠️ **零新增网络请求**：数据来自 `attributionCoordinator.solarOverlay`
+    ///   —— 那是辅助源**既已取回**的内存值（MET / 7timer 早就在跑）。
+    /// ⚠️ 挂在指标格之后：备源对照的正是这几个量，用户不必多滚一屏。
+    @ViewBuilder
+    private func fallbackCrossCheck(snapshot: WeatherSnapshot) -> some View {
+        FallbackCrossCheck(snapshot: snapshot,
                            overlay: attributionCoordinator.solarOverlay,
                            provenance: attributionCoordinator.solarProvenance)
     }
@@ -1193,5 +1212,31 @@ if !CardVisibilityStore.isHidden(.radar) {
         guard let ms, ms.isFinite else { return "--" }
         let value = UnitPreference.displayWindSpeed(ms: ms)
         return "\(String(format: "%.1f", value)) \(UnitPreference.windSpeedSymbol())"
+    }
+
+    // MARK: - v1.6 四字段可选化后的文案（缺测 ≠ 零值）
+
+    /// Hero 大字温度：nil / 非有限 → `"--°"`（**绝不** `"0°"`）。
+    private static func heroTemperatureText(_ celsius: Double?) -> String {
+        guard let celsius, celsius.isFinite else { return "--°" }
+        return "\(Int(celsius.rounded()))°"
+    }
+
+    /// 风速格文案：`风速 风向` 成对（换算与 8 方位均走既有单一真源）。
+    ///
+    /// 🔴 任一缺测 → 整格 `"--"`。**刻意不显示半截**（如 `2.0 m/s --`）：
+    ///   缺测的风向与「正北」在用户眼里无法区分，宁可整格缺测也不给半真值假象。
+    private static func windMetricText(speed: Double?, degrees: Double?) -> String {
+        guard let speed, speed.isFinite, let degrees, degrees.isFinite else { return "--" }
+        let displayed: Double = UnitPreference.displayWindSpeed(ms: speed)
+        let speedPart: String = "\(String(format: "%.1f", displayed))"
+            + " \(UnitPreference.windSpeedSymbol())"
+        return "\(speedPart) \(WindDirectionFormatter.text(from: degrees))"
+    }
+
+    /// 湿度格文案：nil → `"--"`（**绝不** `"0%"`：0% 是合法值，缺测不是 0%**）。
+    private static func humidityMetricText(_ percent: Int?) -> String {
+        guard let percent else { return "--" }
+        return "\(percent)%"
     }
 }

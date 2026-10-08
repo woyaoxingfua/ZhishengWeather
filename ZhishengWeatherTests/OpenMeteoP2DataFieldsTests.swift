@@ -284,7 +284,7 @@ final class OpenMeteoP2DataFieldsTests: XCTestCase {
                                           now: Date(timeIntervalSince1970: TimeInterval(baseEpoch)))
         let point = try XCTUnwrap(snapshot.hourly.first)
 
-        XCTAssertEqual(snapshot.windDirection, 123.0, accuracy: 1e-9,
+        XCTAssertEqual(snapshot.windDirection ?? -999, 123.0, accuracy: 1e-9,
                        "实况风向本身照常解析（它是合法字段）")
         XCTAssertNil(point.windDirection,
                      "逐时风向缺失时必须为 nil —— 绝不可用实况单值（123.0）兜底（AC-C4c 红线）")

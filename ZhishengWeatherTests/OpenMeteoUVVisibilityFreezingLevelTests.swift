@@ -93,7 +93,7 @@ final class OpenMeteoUVVisibilityFreezingLevelTests: XCTestCase {
         XCTAssertNil(snapshot.hourly.first?.uvIndex)
         XCTAssertNil(snapshot.hourly.first?.visibility)
         XCTAssertNil(snapshot.hourly.first?.freezingLevelHeight)
-        XCTAssertEqual(snapshot.temperature, 19.0, accuracy: 1e-9, "实况不受影响")
+        XCTAssertEqual(snapshot.temperature ?? -999, 19.0, accuracy: 1e-9, "实况不受影响")
     }
 
     /// 键存在但**元素为 null**（v1.6 截断日形态）→ 解码成功、该点该字段 nil。

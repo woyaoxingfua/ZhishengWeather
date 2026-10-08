@@ -26,6 +26,17 @@
 //  ⚠️ **因此本文件永远不会与主源「并列显示两个温度」** —— 那会让用户
 //   不知道该信哪个。缺 → 显示备源值并标注来源；不缺 → **整行不渲染**。
 //
+// ── 🔴 v1.6 分工澄清（「多源常显交叉对照」上线后）──────────────────────────
+//  本文件与新增的 `FallbackCrossCheck` 是**两层，判据互斥**：
+//  · **本文件 = 「补缺」层**：主源**缺** → 显示备源值并标注来源名。
+//    （v1.6 起 `.temperature` / `.humidity` / `.windSpeed` / `.windDirection`
+//    在 `WeatherSnapshot` 里已可选，故这四项**第一次真的可能缺**，
+//    `isPrimaryMissing` 已相应改为真判 nil。）
+//  · **`FallbackCrossCheck` = 「对照」层**：主源**有**值 → 把备源读数
+//    并列显示为「对照」，并显式写明「参照主源显示、不替换主源值」。
+//  →同一字段**不会**同时出两行（缺/有 互斥）。
+//  🔴 `FieldFallbackResolver.merge` 本轮**一个字都没改**（全仓地基）。
+//
 // ── 为什么放在指标区（而不是独立卡片）────────────────────────────────────
 //  · 备源补的正是「温度 / 气压 / 湿度 / 云量 / 风速」这几个量，
 //    它们在主屏的**同一个位置**就是 `ContentView.metricsSection` 的指标格；
@@ -151,31 +162,30 @@ extension FallbackSourceNote {
     ///
     /// ⚠️ **只问「nil 与否」，不做任何换算或比较** ——
     ///   判据是「主源**根本没有**这个值」，不是「两个源数值差得多」。
-    ///   后者是「交叉校验」，是另一件事（本轮不做，也不该混进降级链）。
+    ///   后者是「交叉校验」，由**另一个**类型 `FallbackCrossCheck` 承担
+    ///   （见该文件：主源有值时也把备源读数并列显示，明确标注是对照）。
     ///
-    /// ⚠️ `.temperature` 等在 `WeatherSnapshot` 里是**非可选** `Double`
-    ///   （领域模型在 mapper 阶段就保证了），故这些字段**恒不为缺** →
-    ///   永远不产生提示行。这不是 bug，是**如实反映**：
-    ///   主源确实给出了温度，备源就不该来「补」它。
+    /// 🔴 **v1.6 修订**：`.temperature` / `.humidity` / `.windSpeed` /
+    ///   `.windDirection` 原为**非可选**，故此处恒 `return false` ——
+    ///   备源在这四项上**永远没有可补的位**（本文件 2026-10-11 首版即如此）。
+    ///   `WeatherSnapshot` 已把这四项改为可选，故这里改为**真的去判 nil**：
+    ///   主源确实缺 → 备源可以补、也应该被显示出来。
+    ///   （改判据常量必须回源头核对：本仓铁律「有测试 ≠ 事实正确」。）
     nonisolated static func isPrimaryMissing(_ field: WeatherFieldKey,
                                              snapshot: WeatherSnapshot) -> Bool {
         switch field {
         case .temperature:
-            // 主源恒有值（非可选 Double）→ 恒不缺失。
-            return false
+            return snapshot.temperature == nil
         case .pressure:
             return snapshot.pressureMSL == nil
         case .humidity:
-            // 主源 `humidity` 是非可选 Int → 恒不缺失。
-            return false
+            return snapshot.humidity == nil
         case .cloudCover:
             return snapshot.cloudCover == nil
         case .windSpeed:
-            // 主源 `windSpeed` 是非可选 Double → 恒不缺失。
-            return false
+            return snapshot.windSpeed == nil
         case .windDirection:
-            // 主源 `windDirection` 是非可选 Double → 恒不缺失。
-            return false
+            return snapshot.windDirection == nil
         default:
             // 🔴 **不是候选字段** → 一律不显示（不猜、不顺手多显示一个）。
             return false

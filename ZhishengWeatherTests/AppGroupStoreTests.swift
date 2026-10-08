@@ -54,7 +54,7 @@ final class AppGroupStoreTests: XCTestCase {
         try store.save(SharedWeatherPayload(snapshot: snapshot, updatedAt: updatedAt))
 
         let loaded = try XCTUnwrap(store.load())
-        XCTAssertEqual(loaded.snapshot.temperature, snapshot.temperature, accuracy: 0.001)
+        XCTAssertEqual(loaded.snapshot.temperature ?? -999, snapshot.temperature ?? -999, accuracy: 0.001)
         XCTAssertEqual(loaded.snapshot.location.name, "北京")
         XCTAssertEqual(loaded.snapshot.hourly.count, snapshot.hourly.count)
         XCTAssertEqual(loaded.snapshot.hourly.first?.time, fetchedAt)
@@ -91,7 +91,7 @@ final class AppGroupStoreTests: XCTestCase {
                        at: Date(timeIntervalSince1970: 1_700_007_200))
 
         let loaded = try XCTUnwrap(store.loadSnapshot())
-        XCTAssertEqual(loaded.temperature, 30, accuracy: 0.001)
+        XCTAssertEqual(loaded.temperature ?? -999, 30, accuracy: 0.001, "温度可选化后仍须往返保值")
         XCTAssertEqual(try XCTUnwrap(store.updatedAt).timeIntervalSince1970, 1_700_007_200, accuracy: 1)
     }
 

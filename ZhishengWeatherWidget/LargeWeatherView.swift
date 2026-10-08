@@ -296,9 +296,10 @@ struct LargeWeatherView: View {
         snapshot?.location.isFallback == true
     }
 
+    /// 🔴 v1.6：温度可选 → nil 显示 `--°`（缺测 ≠ 零值），换算单一真源同 Small。
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
+        return snapshot.currentTemperatureText
     }
 
     /// 现象位（有数据 → WMO 描述；空态 → `WidgetCopy` 的如实状态句）。

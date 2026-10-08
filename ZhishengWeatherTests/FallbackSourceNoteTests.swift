@@ -10,11 +10,20 @@
 //  走了健康判定，用户永远看不到。本文件钉住「现在有消费者了，且守规矩」。
 //
 //  ── 本文件钉住的三条纪律 ──────────────────────────────────────────────
-//  ① **主源有值 → 一行都不出**（绝不覆盖、绝不与主源并列显示两个温度）；
+//  ① **主源有值 → 一行都不出**（绝不覆盖；并列对照是**另一个**类型
+//     `FallbackCrossCheck` 的职责 —— 两层判据互斥：缺→本层，有→对照层，
+//     同一字段绝不会同时出两行）；
 //  ② **主源缺该字段 → 才显示**，且**必须标注来源名**（来源查不到就不显示）；
 //  ③ **只显示备源真实映射了的字段** —— 一个都不多接
 //    （7timer 的 `rh2m` / `cloudcover` / `wind10m.speed` 是**档位码不是物理量**，
 //      见 `SevenTimerMapper.swift:8-26` 的逐字段诚实性对照表）。
+//
+// ── v1.6 修订：纪律①的前提变了（**回源头核对，不靠「有测试」**）─────────
+// 本文件 2026-10-11 首版写下时，`WeatherSnapshot` 的 temperature / humidity /
+// windSpeed / windDirection 是**非可选**（mapper 阶段就保证了），故主源
+// **结构上不可能缺**它们 → 备源在这四项上永远没有可补的位 → 提示行永远不出。
+// v1.6 把这四项改成可选后，它们**第一次真的可能缺** → `isPrimaryMissing`
+// 已改为真判 nil，本文件相应把「恒不出行」反转成「有值→不出、nil→出」。
 //
 // ⚠️ 纯逻辑测试：不联网、不读时钟、不渲染视图。
 //
@@ -26,19 +35,27 @@ final class FallbackSourceNoteTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// 一份主源快照（各可缺字段**有值** = 「主源正常」）。
+    /// 一份主源快照。
     ///
     /// ⚠️ `fetchedAt` 是**必填**（合成逐成员初始化器里它没有默认值），
     ///   固定成一个常量值 → 本文件**不读真实时钟**，断言可重复。
+    ///
+    /// 🔴 v1.6：`temperature` / `humidity` / `windSpeed` / `windDirection`
+    ///   在 `WeatherSnapshot` 里已改为**可选**，故这里也做成可注入 nil，
+    ///   用于钉住「主源缺 → 备源可补」这条**新**成立的性质。
     private func snapshot(pressureMSL: Double? = 1013.0,
-                          cloudCover: Double? = 40.0) -> WeatherSnapshot {
+                          cloudCover: Double? = 40.0,
+                          temperature: Double? = 21.5,
+                          humidity: Int? = 50,
+                          windSpeed: Double? = 3.0,
+                          windDirection: Double? = 90) -> WeatherSnapshot {
         WeatherSnapshot(location: .beijing,
-                        temperature: 21.5,
+                        temperature: temperature,
                         apparentTemperature: 20.0,
                         weatherCode: 1,
-                        windSpeed: 3.0,
-                        windDirection: 90,
-                        humidity: 50,
+                        windSpeed: windSpeed,
+                        windDirection: windDirection,
+                        humidity: humidity,
                         isDay: true,
                         hourly: [],
                         dailyHigh: 24.0,
@@ -221,23 +238,53 @@ final class FallbackSourceNoteTests: XCTestCase {
                       "7timer 实际映射的 3 个字段必须在集合内（否则它的值永远显示不了）")
     }
 
-    /// ⚠️ **主源的非可选字段恒不出行**（温度/湿度/风速/风向）。
+    /// 🔴 **有值 → 不算缺；nil → 算缺**（v1.6 修订：判据已反转）。
     ///
-    /// 🔴 这条钉的是一条**反直觉但正确**的性质：`WeatherSnapshot` 里
-    ///   `temperature` / `humidity` / `windSpeed` / `windDirection` 是
-    ///   **非可选**（mapper 阶段就保证了），所以主源**结构上不可能缺**它们
-    ///   → 备源在这些字段上**永远没有可补的位**→ 提示行永远不为它们出现。
-    /// 若将来这些字段改成可选，本用例会提醒重新评估 `isPrimaryMissing`。
-    func testNonOptionalSnapshotFieldsNeverProduceLines() {
+    /// 🔴 这条钉的是一条**本轮刚发生变化的性质**：`WeatherSnapshot` 里
+    ///   `temperature` / `humidity` / `windSpeed` / `windDirection` 原是
+    ///   **非可选**（mapper 阶段就保证了），所以它们**恒不缺失** →
+    ///   备源在这四项上**永远没有可补的位**。
+    ///   v1.6 把这四项改成可选后，「缺 / 不缺」第一次成为可区分的状态，
+    ///   `isPrimaryMissing` 已相应改为**真判 nil**。
+    /// ⚠️ 本仓铁律：「有测试」≠「事实正确」—— 改判据类常量必须回源头核对，
+    ///   故此处同时钉住**两个方向**（有值→false、nil→true），防再次漂移。
+    func testOptionalSnapshotFieldsAreMissingOnlyWhenNil() {
+        // 默认快照：四项都有值 → 都不算缺（备源不该来「补」它们）。
         for field in [WeatherFieldKey.temperature, .humidity, .windSpeed, .windDirection] {
             XCTAssertFalse(FallbackSourceNote.isPrimaryMissing(field, snapshot: snapshot()),
-                           "\(field) 在主源快照里是非可选 → 结构上不可能缺失")
+                           "\(field) 主源有值 → 结构上不算缺失")
         }
-        // 而这两个是**可选**的 → 可以缺 → 可以被备源补。
+        // 四项**分别**置 nil → 各自算缺（备源可以补，也应该被显示）。
+        let nilTemperature = snapshot(temperature: nil)
+        XCTAssertTrue(FallbackSourceNote.isPrimaryMissing(.temperature, snapshot: nilTemperature))
+        let nilHumidity = snapshot(humidity: nil)
+        XCTAssertTrue(FallbackSourceNote.isPrimaryMissing(.humidity, snapshot: nilHumidity))
+        let nilWindSpeed = snapshot(windSpeed: nil)
+        XCTAssertTrue(FallbackSourceNote.isPrimaryMissing(.windSpeed, snapshot: nilWindSpeed))
+        let nilWindDirection = snapshot(windDirection: nil)
+        XCTAssertTrue(FallbackSourceNote.isPrimaryMissing(.windDirection,
+                                                          snapshot: nilWindDirection))
+        // 而这两个是**原本**就可选的 → 同样可以缺。
         XCTAssertTrue(FallbackSourceNote.isPrimaryMissing(.pressure,
                                                           snapshot: snapshot(pressureMSL: nil)))
         XCTAssertTrue(FallbackSourceNote.isPrimaryMissing(.cloudCover,
                                                           snapshot: snapshot(cloudCover: nil)))
+    }
+
+    /// 🔴 v1.6 新增：主源温度缺失 + 备源有值 → **真的出提示行**了。
+    ///
+    /// ⚠️ 这条在 v1.6 之前**不可能通过**（`temperature` 恒非可选 →
+    ///   `isPrimaryMissing` 恒 false → 一行都不出）。它是「四字段可选化」
+    ///   这项改动**唯一可观测的行为收益**的机械守卫。
+    func testPrimaryMissingTemperatureNowProducesLine() throws {
+        let lines = FallbackSourceNote.lines(
+            snapshot: snapshot(temperature: nil),
+            overlay: overlay(temperature: 18.0),
+            provenance: provenance([.temperature]))
+        let line = try XCTUnwrap(lines.first, "主源缺温度 + 备源补上 → 必须出一行")
+        XCTAssertTrue(line.text.contains("温度"), "必须点明是哪个量")
+        XCTAssertTrue(line.text.contains("18.0"), "显示的必须是overlay 里的真实值")
+        XCTAssertTrue(line.text.contains("MET Norway"), "必须标明具体来源名")
     }
 
     /// 非候选字段（如 `solarNoon`）→ 绝不出行。

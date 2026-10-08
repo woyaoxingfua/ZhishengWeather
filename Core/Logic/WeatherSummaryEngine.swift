@@ -96,8 +96,13 @@ enum WeatherSummaryEngine {
     }
 
     /// ④ 大风：windSpeed ≥10 m/s → "大风注意"。
+    ///
+    /// 🔴 v1.6：`windSpeed` 已可选 —— nil = **没测到**，**不是 0 m/s**。
+    ///   缺测时**返回 nil**（不出「大风注意」）：把「没测到风速」说成「没有大风」
+    ///   是一次**方向相反**的说谎（真有大风时反而可能漏报）。缺测 ≠ 静风。
     static func windSummary(for snapshot: WeatherSnapshot) -> String? {
-        guard snapshot.windSpeed >= windSpeedThreshold else { return nil }
+        guard let windSpeed = snapshot.windSpeed else { return nil }
+        guard windSpeed >= windSpeedThreshold else { return nil }
         return "大风注意"
     }
 

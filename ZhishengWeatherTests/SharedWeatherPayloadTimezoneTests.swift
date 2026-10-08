@@ -55,7 +55,7 @@ final class SharedWeatherPayloadTimezoneTests: XCTestCase {
         let payload = try JSONDecoder().decode(SharedWeatherPayload.self, from: Data(json.utf8))
         XCTAssertNil(payload.timeZoneIdentifier, "旧缓存无该键必须解码为 nil（不失败，R3）")
         XCTAssertEqual(payload.snapshot.location.name, "杭州")
-        XCTAssertEqual(payload.snapshot.temperature, 23.4, accuracy: 0.001)
+        XCTAssertEqual(payload.snapshot.temperature ?? -999, 23.4, accuracy: 0.001)
     }
 
     func testPayloadRoundTripsTimeZoneIdentifier() throws {

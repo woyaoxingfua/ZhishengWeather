@@ -196,6 +196,17 @@ enum OpenMeteoMapper {
         }
 
         // ── 6. 组装快照 ─────────────────────────────────────────────────
+        //
+        // 🔴 v1.6：`temperature` / `windSpeed` / `windDirection` / `humidity`
+        // 在 `WeatherSnapshot` 里已改为**可选**。此处**逐字不改** —— DTO 的
+        // `current.temperature_2m` 等仍是**非可选** `Double` / `Int`
+        // （`Core/Models/OpenMeteoResponse.swift:63-68`），Swift 会隐式提升为
+        // `Double?` / `Int?`，语义为「服务端确实给了这个值」。
+        //
+        // ⚠️ **本仓铁律：缺测 ≠ 零值。** 这里**绝不**写 `?? 0` 兜底 ——
+        //   那正是「DTO 缺键 → 快照记0 → UI 显示 0℃/0 m/s/0%」的说谎路径。
+        //   DTO 侧本就是必填键（缺键会在 `ResponseDecoding` 层解码失败、
+        //   整个请求走 `.failed`，根本走不到这里），故此处无需也不该判空。
         return WeatherSnapshot(
             location: location,
             temperature: current.temperature_2m,

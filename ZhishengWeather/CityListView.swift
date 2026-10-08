@@ -205,8 +205,12 @@ struct CityListView: View {
     }
 
     /// 「23°」或「--」（AC-B16）。
+    ///
+    /// 🔴 v1.6：温度可选 —— nil（没测到）与「无快照」同口径，都显示 `--`。
+    ///   **绝不**显示 `0°`：那会让用户以为此地真的是 0℃。
     private func temperatureText(for city: City) -> String {
-        guard let snapshot = viewModel.snapshotsByCity[city.id] else { return "--" }
-        return "\(Int(snapshot.temperature.rounded()))°"
+        guard let snapshot = viewModel.snapshotsByCity[city.id],
+              let celsius = snapshot.temperature, celsius.isFinite else { return "--" }
+        return "\(Int(celsius.rounded()))°"
     }
 }

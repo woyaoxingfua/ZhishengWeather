@@ -160,8 +160,16 @@ enum WeatherSpotlightBuilder {
             // 有真实数据才写数值：温度按**摄氏度**显式带单位符号 —— 索引在
             // 系统搜索框里展示，读不到 App 内的单位偏好，省略符号会让 "20"
             // 与华氏混淆；宁可多一个符号，也不给一个有歧义的数字。
-            let temperature: String = "\(Int(snapshot.temperature.rounded()))°C"
-            description = "\(temperature) · \(WMOCodeMapper.description(for: snapshot.weatherCode))"
+            //
+            // 🔴 v1.6：`temperature` 已可选。nil = 没测到 → **只写现象、不写数值**
+            //   （绝不补0℃、绝不显示 "0°C"）。天气码仍非可选，故现象恒有。
+            let condition: String = WMOCodeMapper.description(for: snapshot.weatherCode)
+            if let celsius = snapshot.temperature, celsius.isFinite {
+                let temperature: String = "\(Int(celsius.rounded()))°C"
+                description = "\(temperature) · \(condition)"
+            } else {
+                description = condition
+            }
         } else {
             description = placeholderDescription
         }

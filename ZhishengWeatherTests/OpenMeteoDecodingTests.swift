@@ -23,12 +23,12 @@ final class OpenMeteoDecodingTests: XCTestCase {
         let snapshot = OpenMeteoMapper.map(dto, location: .beijing, now: now)
 
         XCTAssertEqual(snapshot.location.name, "北京")
-        XCTAssertEqual(snapshot.temperature, 23.4, accuracy: 0.001)
+        XCTAssertEqual(snapshot.temperature ?? -999, 23.4, accuracy: 0.001)
         XCTAssertEqual(snapshot.apparentTemperature, 21.0, accuracy: 0.001)
         XCTAssertEqual(snapshot.weatherCode, 2)
-        XCTAssertEqual(snapshot.humidity, 58)
-        XCTAssertEqual(snapshot.windSpeed, 3.2, accuracy: 0.001)
-        XCTAssertEqual(snapshot.windDirection, 135.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.humidity ?? -1, 58, "湿度可选化后仍须解码为真实值 58（绝不当缺失）")
+        XCTAssertEqual(snapshot.windSpeed ?? -999, 3.2, accuracy: 0.001)
+        XCTAssertEqual(snapshot.windDirection ?? -999, 135.0, accuracy: 0.001)
         XCTAssertTrue(snapshot.isDay)
         XCTAssertEqual(snapshot.fetchedAt, now)
     }

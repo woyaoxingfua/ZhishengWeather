@@ -19,6 +19,13 @@
 //    但现象位仍如实表达状态（「暂无数据」/「共享数据不可用」/「未能获取天气」）。
 //    归属校验（R-C2）经 WeatherProvider 天然继承。
 //
+//  🔴 v1.6（三族共用）：`WeatherSnapshot.temperature` 已改为可选。三族的
+//   `temperatureText` 一律改调 `MetricGridLayout.swift` 里的
+//   `snapshot.currentTemperatureText`（**本 target 内的唯一实现**）——
+//   nil =没测到 → `--°`，**绝不** `0°`（缺测 ≠ 零值）。
+//   本仓曾因同一段温度格式化在多个文件各写一份而漂移过一次，
+//   故此处刻意收口，三族不再各写一份。
+//
 
 import SwiftUI
 import WidgetKit
@@ -50,7 +57,7 @@ struct AccessoryCircularWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
+        return snapshot.currentTemperatureText
     }
 
     private var weatherCode: Int {
@@ -101,7 +108,7 @@ struct AccessoryRectangularWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
+        return snapshot.currentTemperatureText
     }
 
     private var conditionText: String {
@@ -139,7 +146,7 @@ struct AccessoryInlineWeatherView: View {
 
     private var temperatureText: String {
         guard let snapshot else { return "--°" }
-        return "\(Int(UnitPreference.displayTemperature(celsius: snapshot.temperature).rounded()))°"
+        return snapshot.currentTemperatureText
     }
 
     private var conditionText: String {
