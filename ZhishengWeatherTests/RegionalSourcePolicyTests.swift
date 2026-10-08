@@ -175,8 +175,20 @@ final class RegionalSourcePolicyTests: XCTestCase {
                        "矩形粗判确实会把乌兰巴托判成中国（已知误差，靠 country 优先来缓解）")
     }
 
-    /// 坐标粗判对**明显的海外**必须正确（矩形东边界外的欧美）。
-    func testBoundingBoxRejectsFarOverseasCoordinates() {
+    /// 🔴 坐标粗判在矩形之外 → **返回 `.unknown`，不是 `.overseas`**。
+    ///
+    /// ⚠️ 本用例此前断言 `.overseas`，CI run#37787813497 实测失败（得到 `"unknown"`）。
+    ///
+    /// **实现的写法是对的，测试的期望是错的** —— 这是本仓纪律
+    /// 「`.none`（查过了没有）vs `.unavailable`（取不到）必须两套文案」的同源：
+    /// `country == nil` 且坐标落在矩形外时，我们**无法区分**
+    /// 「该点确实在海外」与「我们的矩形覆盖不全/数据缺失」。
+    /// 判成 `.overseas` 就是**谎报地区**；所以实现刻意返回 `.unknown`，
+    /// 且 `RegionalSourcePolicy.swift:57-60` 明写「不并入 overseas 就是谎报」。
+    ///
+    /// → 本用例改为钉住 `.unknown`，并在**有 country 时**才是 `.overseas`
+    ///   （见 `testCountryTakesPriorityOverCoordinates`）。
+    func testBoundingBoxOutsideReturnsUnknownNotOverseas() {
         let far: [(String, Double, Double)] = [
             ("伦敦", 51.51, -0.13), ("纽约", 40.71, -74.01),
             ("悉尼", -33.87, 151.21), ("圣保罗", -23.55, -46.63),
@@ -184,7 +196,22 @@ final class RegionalSourcePolicyTests: XCTestCase {
         for (name, lat, lon) in far {
             XCTAssertEqual(RegionalSourcePolicy.region(country: nil,
                                                        latitude: lat, longitude: lon),
-                           .overseas, "\(name) 明显在海外，矩形粗判也必须放行到 .overseas")
+                           .unknown,
+                           "\(name) 在矩形外且 country 缺失 → 必须 `.unknown`"
+                           + "（判不出地区 ≠ 判成海外，后者是谎报）")
         }
     }
-}
+
+    /// 有 `country` 且非中国 → **直接 `.overseas`**，不再看坐标。
+    ///
+    /// ⚠️ 这是「矩形外判为 `.unknown`」的**对照用例**：同样是境外，
+    ///   **有 country 时能确定判成海外**，没有时才只能说「未知」。
+    ///   两条一起看，才是完整的语义。
+    func testCountryTakesPriorityOverCoordinates() {
+        for name in ["英国", "United States", "Australia"] {
+            XCTAssertEqual(RegionalSourcePolicy.region(country: name,
+                                                       latitude: 51.51, longitude: -0.13),
+                           .overseas,
+                           "country=\(name) 非中国 → 确定判海外（不等同于上面的 unknown）")
+        }
+    }
