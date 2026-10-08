@@ -94,6 +94,9 @@ final class QWeatherCardModel {
 
     private let service: any QWeatherProviding
 
+    /// 用量计数落点（测试注入隔离实例；理由同 `EarthquakeCardModel.health`）。
+    private let health: SourceHealthTracker
+
     /// 初始化。
     /// - Parameter service: 取数实现（测试注入 Stub）。
     ///
@@ -101,8 +104,13 @@ final class QWeatherCardModel {
     ///   Core层禁 `Date()`，所以 `QWeatherService.init` 的 `now` 参数**没有默认值**；
     ///   本类在 **App 层**（`ZhishengWeather/`），此处传 `Date()` 是合规的
     ///   —— SC-11 只扫 `Core/`。
-    init(service: any QWeatherProviding = QWeatherService(now: { Date() })) {
+    /// - Parameters:
+    ///   - service: 取数实现（测试注入 Stub）。
+    ///   - health: 用量计数落点（默认共享实例；测试注入隔离 ledger）。
+    init(service: any QWeatherProviding = QWeatherService(now: { Date() }),
+         health: SourceHealthTracker = .shared) {
         self.service = service
+        self.health = health
     }
 
     // MARK: - 取数
@@ -159,6 +167,9 @@ final class QWeatherCardModel {
             //（判据的权威在 Core `QWeatherDailyForecast.isEffectivelyEmpty`，
             //  此处只转发，不重算）。
             forecast = fetched
+            // 和风源用量计数（逐日链路）。`.noData`（上游没给数据）**也算成功**——
+            // 请求成功返回、只是内容为空，与 `.unavailable`（鉴权/网络失败）严格分开。
+            await health.recordSuccess(.qWeather, at: Date())
             state = fetched.isEffectivelyEmpty ? .noData : .available
         } catch {
             // ⚠️ 故障 → `.unavailable`，**绝不**落到 `.noData`
@@ -178,6 +189,8 @@ final class QWeatherCardModel {
                                                         longitude: longitude,
                                                         hours: hours)
             hourlyForecast = fetched
+            // 和风源用量计数（逐时链路）—— 逐日/逐时是**两次独立请求**，各计一次。
+            await health.recordSuccess(.qWeather, at: Date())
             hourlyState = fetched.isEffectivelyEmpty ? .noData : .available
         } catch {
             hourlyForecast = nil

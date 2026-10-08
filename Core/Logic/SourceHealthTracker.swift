@@ -139,36 +139,74 @@ actor SourceHealthTracker {
     /// 设置页「多源管理」的数据源：逐源状态 + 最近成功 + 今日用量。
     ///
     /// 主源恒为「在用」；辅助源按 手动停用 / 会话摘除 / 冷却 / 备用 推导。
+    ///
+    /// ⚠️ **为什么 `todayUsage` 不再兜底成 0**（2026-10-09修复）：
+    /// 原先每个分支都写 `?.todayUsageCount ?? 0`，把「本地无该源记录」
+    /// 压成「今日用量 0」。这正是设置页「数据源调用次数全为 0」的**显示侧根因**：
+    /// 它让「从未接入计数」与「接入了但今天真的一次没成功」显示成同一个数字，
+    /// 而两者对用户含义相反。现在如实传 `nil`，由 UI 渲染成「—」。
+    /// 计数不全责在无自增路径，已逐源接线 + 由
+    /// `ZhishengWeatherTests/SourceUsageCountingGuardTests` 机械守卫。
     func snapshot(now: Date) -> [SourceStatusRow] {
         SourceCatalog.all.map { item in
             let id = item.id
+            let entry = ledger.loadAll()[id]
             if preferences.isDisabled(id) {
                 return SourceStatusRow(id: id,
                                       displayName: item.displayName,
                                       state: .excluded(.userDisabled),
-                                      lastSuccessAt: ledger.loadAll()[id]?.lastSuccessAt,
-                                      todayUsage: ledger.loadAll()[id]?.todayUsageCount ?? 0)
+                                      lastSuccessAt: entry?.lastSuccessAt,
+                                      todayUsage: entry?.todayUsageCount)
             }
             if let reason = sessionExclusions[id] {
                 return SourceStatusRow(id: id,
                                       displayName: item.displayName,
                                       state: .excluded(reason),
-                                      lastSuccessAt: ledger.loadAll()[id]?.lastSuccessAt,
-                                      todayUsage: ledger.loadAll()[id]?.todayUsageCount ?? 0)
+                                      lastSuccessAt: entry?.lastSuccessAt,
+                                      todayUsage: entry?.todayUsageCount)
             }
             if isCoolingDown(id, now: now) {
                 return SourceStatusRow(id: id,
                                       displayName: item.displayName,
                                       state: .excluded(.rateLimit(until: ledger.loadAll()[id]?.cooldownUntil ?? now)),
-                                      lastSuccessAt: ledger.loadAll()[id]?.lastSuccessAt,
-                                      todayUsage: ledger.loadAll()[id]?.todayUsageCount ?? 0)
+                                      lastSuccessAt: entry?.lastSuccessAt,
+                                      todayUsage: entry?.todayUsageCount)
             }
             let state: SourceStatusState = (item.role == .primary) ? .primaryActive : .standby
             return SourceStatusRow(id: id,
                                   displayName: item.displayName,
                                   state: state,
-                                  lastSuccessAt: ledger.loadAll()[id]?.lastSuccessAt,
-                                  todayUsage: ledger.loadAll()[id]?.todayUsageCount ?? 0)
+                                  lastSuccessAt: entry?.lastSuccessAt,
+                                  todayUsage: entry?.todayUsageCount)
         }
+    }
+
+    // MARK: - 用量占比（设置页「多源管理」逐源占比条）
+
+    /// 全部源的今日用量**合计**（只累加**已接入计数且有记录**的源）。
+    ///
+    /// ⚠️ **口径纪律**：分母**只由已接入计数的源构成**。把未接入的源算进分母
+    /// 会让所有真实源的占比被凭空稀释（读者以为"它占了 0%"，其实它压根没参与）。
+    /// 未接入的源在 UI 上显示「—」且**不画占比条**，不参与分母。
+    ///
+    /// - Returns: 合计次数；无任何记录时为 0。
+    static func totalCountedUsage(rows: [SourceStatusRow]) -> Int {
+        rows.reduce(into: 0) { running, row in
+            // `countsUsage == false` 的源不参与合计（见上文口径纪律）。
+            guard SourceDirectory.descriptor(for: row.id)?.countsUsage == true else { return }
+            running += row.todayUsage ?? 0
+        }
+    }
+
+    /// 单源占比（0…1）。**未接入计数的源一律返回 nil**（UI 据此不画占比条）。
+    ///
+    /// - Parameters:
+    ///   - row: 目标源行。
+    ///   - total: 全部已接入计数源的合计（由 `totalCountedUsage` 给出）。
+    /// - Returns: 占比；未接入 / 无记录 / 合计为 0 时为 nil。
+    static func usageShare(for row: SourceStatusRow, total: Int) -> Double? {
+        guard SourceDirectory.descriptor(for: row.id)?.countsUsage == true else { return nil }
+        guard let usage = row.todayUsage, total > 0 else { return nil }
+        return Double(usage) / Double(total)
     }
 }

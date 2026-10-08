@@ -340,6 +340,10 @@ final class WeatherViewModel {
             var snapshot = try await service.fetch(latitude: latitude,
                                                    longitude: longitude)
             await LinkHealthRecorder.shared.recordSuccess(.forecast, at: Date())
+            // 设置页「多源管理 › 今日用量」计数（`SourceHealthTracker`，与 `LinkHealthRecorder`
+            // 是**两套账**：后者只管链路成败、不持久化、不计数）。
+            // ⚠️ 只在**取数成功后**自增，失败绝不加（否则数字虚高）。
+            await SourceHealthTracker.shared.recordSuccess(.openMeteoForecast, at: Date())
             // ── R-3（最高回归风险，改造即必踩）────────────────────────────
             // 快照 location 的覆盖源 = **选中城市**（selectedCity.locationInfo），
             // 不是定位结果。若沿用旧行为"用定位结果覆盖"，用户切到"杭州"后
@@ -517,6 +521,8 @@ final class WeatherViewModel {
             var snapshot = try await service.fetch(latitude: city.latitude,
                                                    longitude: city.longitude)
             await LinkHealthRecorder.shared.recordSuccess(.forecast, at: Date())
+            // 同refresh 路径：主源用量计数（失败不加）。
+            await SourceHealthTracker.shared.recordSuccess(.openMeteoForecast, at: Date())
             // R-3：覆盖源 = 选中城市（与 refresh 路径同一覆盖点，ARCH-FB §3.2）。
             snapshot.location = city.locationInfo
 
@@ -629,6 +635,8 @@ final class WeatherViewModel {
             let aq = try await airService.fetch(latitude: city.latitude,
                                                 longitude: city.longitude)
             await LinkHealthRecorder.shared.recordSuccess(.airQuality, at: Date())
+            // 空气源用量计数（设置页「今日用量」；失败不加）。
+            await SourceHealthTracker.shared.recordSuccess(.openMeteoAirQuality, at: Date())
             guard directory.selectedID == city.id else { return }
             airQuality = aq
             airState = .loaded
@@ -657,8 +665,14 @@ final class WeatherViewModel {
     /// - Parameter city: 本次取数目标城市。
     private func loadMarine(for city: City) async {
         do {
-            let result = try await marineService.fetch(latitude: city.latitude,
-                                                        longitude: city.longitude)
+let result = try await marineService.fetch(latitude: city.latitude,
+                longitude: city.longitude)
+            // 海洋源用量计数。
+            // ⚠️ **计数点在跨城守卫之前**（有意）：`fetch` 成功即计数，与结果
+            // 是否会被丢弃无关 —— 请求确实发出去了。只有 throw（真失败）才不加。
+            // ⚠️ 内陆城市 service **不联网**直接回空（`requestEligibility` 判据），
+            // 那条路径也走这里，故它会计数 —— 这是**如实**的：service 被调用了一次。
+            await SourceHealthTracker.shared.recordSuccess(.marineForecast, at: Date())
             // 跨城守卫：丢弃滞后于切城的过期结果（P1-A 纪律平移，同 loadAir）。
             guard directory.selectedID == city.id else { return }
             // ⚠️ 海浪（`result.wave`）本轮**不接UI**：既有 marine 链路从未接进主屏
@@ -689,6 +703,10 @@ final class WeatherViewModel {
             // 一次拉**全国**列表（实测当日 161 条 ≈ 45 KB，免 Key），
             // 筛选在本地做 —— 免得为每个城市各发一次请求。
             let all = try await alarmService.fetchAllWarnings(timeZone: timeZone)
+            // 官方预警源用量计数（列表端点成功即计数）。
+            // ⚠️ 计数点在跨城守卫与 `enrich` 之前：请求成功就计数，
+            // 后续的本地筛选 / 正文补源失败都不影响「这次请求成功了」这个事实。
+            await SourceHealthTracker.shared.recordSuccess(.nmcAlarm, at: Date())
             let matched = NmcAlarmMapper.warnings(in: all,
                                                   matchingCityName: city.name,
                                                   cityCode: nil)

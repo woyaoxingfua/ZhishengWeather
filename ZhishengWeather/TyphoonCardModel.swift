@@ -93,12 +93,26 @@ final class TyphoonCardModel {
 
     private let service: any NmcTyphoonProviding
 
+/// 用量计数落点（测试注入隔离实例）。
+    ///
+    /// ⚠️ **为什么可注入**：设置页「今日用量」的数字必须能被单测**真的观察到
+    /// 变化**。若这里写死 `.shared`，测试就只能去读进程级共享账本 ——
+    /// 那既污染真实 `UserDefaults.standard`，又让「失败不加」这类断言
+    /// 依赖上一个测试留下的残留（典型的**顺序依赖假绿**）。
+    /// 故与 `service` 同款做成注入项。
+    private let health: SourceHealthTracker
+
     // MARK: - 构造
 
     /// 初始化。
     /// - Parameter service: 取数实现（测试注入 Stub）。
-    init(service: any NmcTyphoonProviding = NmcTyphoonService()) {
+    /// - Parameters:
+    ///   - service: 取数实现（测试注入 Stub）。
+    ///   - health: 用量计数落点（默认共享实例；测试注入隔离 ledger）。
+    init(service: any NmcTyphoonProviding = NmcTyphoonService(),
+         health: SourceHealthTracker = .shared) {
         self.service = service
+        self.health = health
     }
 
     // MARK: - 生命周期
@@ -126,6 +140,10 @@ final class TyphoonCardModel {
                 summaries = try await service.fetchSummaries()
             }
             let active = NmcTyphoonMapper.activeOnly(summaries)
+            // 台风源用量计数（设置页「今日用量」）。
+            // ⚠️ **`.none`（无活跃台风）也计数**：请求成功返回、只是结果为空，
+            // 把它算成失败会让用量虚低 —— 与 `.unavailable`（真取不到）严格分开。
+            await health.recordSuccess(.nmcTyphoon, at: Date())
             // ⚠️ 空数组 = **真的没有活跃台风**（不是失败）→ `.none`。
             state = active.isEmpty ? .none : .active(active)
         } catch {

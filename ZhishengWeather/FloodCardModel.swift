@@ -114,12 +114,26 @@ final class FloodCardModel {
     /// 取数服务（测试注入 Stub）。
     private let service: any FloodProviding
 
+/// 用量计数落点（测试注入隔离实例）。
+    ///
+    /// ⚠️ **为什么可注入**：设置页「今日用量」的数字必须能被单测**真的观察到
+    /// 变化**。若这里写死 `.shared`，测试就只能去读进程级共享账本 ——
+    /// 那既污染真实 `UserDefaults.standard`，又让「失败不加」这类断言
+    /// 依赖上一个测试留下的残留（典型的**顺序依赖假绿**）。
+    /// 故与 `service` 同款做成注入项。
+    private let health: SourceHealthTracker
+
     // MARK: - 构造
 
     /// 初始化。
     /// - Parameter service: 取数实现（测试注入 Stub）。
-    init(service: any FloodProviding = FloodService()) {
+    /// - Parameters:
+    ///   - service: 取数实现（测试注入 Stub）。
+    ///   - health: 用量计数落点（默认共享实例；测试注入隔离 ledger）。
+    init(service: any FloodProviding = FloodService(),
+         health: SourceHealthTracker = .shared) {
         self.service = service
+        self.health = health
     }
 
     // MARK: - 生命周期
@@ -137,6 +151,9 @@ final class FloodCardModel {
 
         do {
             let fetched = try await service.fetch(latitude: latitude, longitude: longitude)
+            // 河道流量源用量计数。⚠️ `.noData`（该坐标无河道数据）**也算成功**——
+            // 请求成功返回、只是内容为空，与 `.unavailable`（真取不到）严格分开。
+            await health.recordSuccess(.floodForecast, at: Date())
             // ⚠️ 实质无数据 → `.noData`，**不抛错、不当故障**
             //（判据的权威在 Core `SnapshotCompleteness`，此处只转发）。
             //

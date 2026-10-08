@@ -553,10 +553,19 @@ struct SettingsView: View {
                             Text("今日用量")
                                 .foregroundStyle(Theme.secondaryText)
                             Spacer(minLength: 8)
-                            Text("\(row.todayUsage)")
+                            Text(Self.usageText(for: row))
                                 .foregroundStyle(Theme.secondaryText)
                         }
                         .font(.system(size: 12))
+                        // 占比条：**仅已接入计数的源**绘制（比例 = 本源 / 已接入源合计）。
+                        // ⚠️ 未接入的源**不画条、也不进分母** —— 画一条 0% 的条等于宣称
+                        // 「它占了 0%」，而真相是「它压根没参与计数」，那是另一回事。
+                        if let share = SourceHealthTracker.usageShare(for: row,
+                                                                     total: totalCountedUsage) {
+                            ProgressView(value: share)
+                                .progressViewStyle(.linear)
+                                .tint(Theme.secondaryText)
+                        }
                         // 手动停用入口：对**每个参与自动摘除的源**生成（按描述符派生，
                         // 不写死任何源 id）。停用只影响该源的降级参与，不换城市、
                         // 不影响其余源。新增辅助源**自动**获得该入口（T10 §E9）。
@@ -875,6 +884,35 @@ struct SettingsView: View {
         sourceStatusRows = await SourceHealthTracker.shared.snapshot(now: Date())
         // 按**全部已声明源**读一次停用偏好（不写死某个源 id）。
         disabledSourceIDs = Set(SourceID.allCases.filter { SourcePreferences.shared.isDisabled($0) })
+    }
+
+    /// 已接入计数源的今日用量**合计**（占比条的分母）。
+    ///
+    /// ⚠️ 分母**只由已接入计数的源构成**（判据在 `SourceDescriptor.countsUsage`）。
+    /// 把未接入的源算进分母会让真实源的占比被凭空稀释。
+    private var totalCountedUsage: Int {
+        SourceHealthTracker.totalCountedUsage(rows: sourceStatusRows)
+    }
+
+    /// 「今日用量」文案：**「0 次」与「未接入」必须两套说法**（诚实纪律）。
+    ///
+    /// ⚠️ 这是「数据源调用次数全为 0」修复的**显示侧核心**：
+    ///  · `countsUsage == false` → 「未接入」。该源**压根没有计数路径**，
+    ///    显示「0 次」等于宣称「它今天一次都没成功」，是**内容错误**。
+    ///  · `todayUsage == nil`（已接入但本地无记录）→ 「0 次」，
+    ///    这是**如实的**（确实一次都没成功过）。
+    ///  · 否则 → 「N 次」。
+    ///
+    /// - Parameter row: 目标源行。
+    /// - Returns: 面向用户的短文案。
+    static func usageText(for row: SourceStatusRow) -> String {
+        guard let descriptor = SourceDirectory.descriptor(for: row.id) else {
+            // 未登记的源（fail-closed）：不谎报它「0 次」。
+            return "未接入"
+        }
+        guard descriptor.countsUsage else { return "未接入" }
+        guard let usage = row.todayUsage else { return "0 次" }
+        return usage + " 次"
     }
 
     /// 该源是否参与自动摘除（= 是否给它「手动停用」入口）。

@@ -45,6 +45,19 @@ struct SourceDescriptor: Sendable {
     /// 风险：改展示文案的人可能顺手改了摘除行为。主源恒为 `false`（R-7：主源只记录、
     /// 不自动摘除）。
     let participatesInAutoExclusion: Bool
+    /// 该源是否**已接入「今日用量」计数**（设置页「多源管理」逐源显示的那个数字）。
+    ///
+    /// ⚠️ **为什么必须是显式声明而不是「看有没有调用点」**：本项目反复出现的病灶是
+    /// 「声明进目录了、设置页也列出它了，但**永远没有自增路径**」—— 于是设置页
+    /// 常年显示「今日用量 0」，读起来像「这个源今天一次都没成功」，实际是
+    /// **这个源压根没接计数**。两者对用户的含义完全相反，混淆即谎报。
+    /// 故把「是否接入」**声明**下来，让设置页据此显示「—」而不是「0」，
+    /// 并由 `ZhishengWeatherTests/SourceUsageCountingGuardTests` 反查
+    /// **声明与实际调用点是否一致**（防将来又出现新的哑火源）。
+    ///
+    /// - `true`：本源存在真实自增路径（经 `SourceHealthTracker.recordSuccess`）。
+    /// - `false`：**尚未接入** → 设置页显示「—」，**绝不**显示「0 次」。
+    let countsUsage: Bool
     /// 该源的**官网 / 文档地址**（CC BY 4.0 署名义务要求的「可追溯的credit」）。
     ///
     /// ⚠️ 为什么是**非可选**：CC BY 4.0 要求 "giving appropriate credit"，而
@@ -99,6 +112,9 @@ enum SourceDirectory {
                          requiredFields: [.temperature, .weatherCode],
                          needsCredential: false,
                          participatesInAutoExclusion: false,
+                         // 主源：`WeatherViewModel.fetchAndApply` / `refresh`
+                         // 在 `service.fetch` 成功后调用 `recordSuccess`。
+                         countsUsage: true,
                          websiteURLString: "https://open-meteo.com/",
                          usageNote: nil),
 
@@ -118,6 +134,8 @@ enum SourceDirectory {
                          // 一旦把空气源接进摘除链，把这里改成 `true`：
                          // 自动摘除与设置页停用入口会**同时**生效（同一处声明）。
                          participatesInAutoExclusion: false,
+                         // `WeatherViewModel.loadAir` 在 `airService.fetch` 成功后计数。
+                         countsUsage: true,
                          websiteURLString: "https://open-meteo.com/en/docs/air-quality-api",
                          usageNote: nil),
 
@@ -128,6 +146,9 @@ enum SourceDirectory {
                          requiredFields: [.sunrise, .sunset, .daylightDuration],
                          needsCredential: false,
                          participatesInAutoExclusion: true,
+                         // 由 `SourceAttributionCoordinator.refresh` 统一计数
+                         // （辅助源在降级链里被拉取成功后 `recordSuccess`）。
+                         countsUsage: true,
                          websiteURLString: "https://sunrise-sunset.org/api",
                          usageNote: nil),
 
@@ -147,6 +168,8 @@ enum SourceDirectory {
                                           .cloudCover, .windSpeed, .windDirection],
                          needsCredential: false,
                          participatesInAutoExclusion: true,
+                         // 同 sunriseSunset：由 `SourceAttributionCoordinator` 计数。
+                         countsUsage: true,
                          websiteURLString: "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
                          usageNote: nil),
 
@@ -167,6 +190,9 @@ enum SourceDirectory {
                          // `recordHTTPStatus`，故 `false` —— 不给设置页一个
                          // 点了没反应的开关（保持诚实纪律）。接线后再改 `true`。
                          participatesInAutoExclusion: false,
+                         // `WeatherViewModel.loadMarine` 在 `marineService.fetch`
+                         // 成功后计数。
+                         countsUsage: true,
                          // ⚠️ 端点已迁到独立子域名，文档地址与之对应（写主站会 404）。
                          websiteURLString: "https://open-meteo.com/en/docs/marine-weather-api",
                          // `nil` = 无需额外说明。**这是核实过的结论，不是省略**：
@@ -195,6 +221,8 @@ enum SourceDirectory {
                          // "该源声明的字段无人需要"，而本源的字段不在该域内，
                          // 参与会出现"摘了它界面也没变化"的假开关）。
                          participatesInAutoExclusion: false,
+                         // `FloodCardModel.load` 在 `service.fetch` 成功后计数。
+                         countsUsage: true,
                          websiteURLString: "https://open-meteo.com/en/docs/flood-api",
                          // 同 marine：官方免费档功能表**逐字列出** "Flood API" → 无需备注。
                          usageNote: nil),
@@ -218,6 +246,9 @@ enum SourceDirectory {
                          // `recordMissingFields` / `recordHTTPStatus` → 诚实置false，
                          // 不在设置页给一个"点了没反应"的开关。
                          participatesInAutoExclusion: false,
+                         // `WeatherViewModel.loadOfficialWarnings` 在
+                         // `alarmService.fetchAllWarnings` 成功后计数。
+                         countsUsage: true,
                          // 实测 2026-10-06 经代理：`http://www.nmc.cn/` → **HTTP 200**
                          //（https 亦 200）。CC BY 4.0 署名义务要求可追溯的 credit，
                          // 故这里填官网首页。
@@ -254,6 +285,9 @@ enum SourceDirectory {
                          // 无调用点上报 `recordMissingFields` / `recordHTTPStatus`
                          // → 诚实置false，不在设置页给一个「点了没反应」的开关。
                          participatesInAutoExclusion: false,
+                         // `TyphoonCardModel.load` 在 `service.fetchSummaries`
+                         // 成功后计数（空数组 = 真的没有活跃台风，**仍是成功**）。
+                         countsUsage: true,
                          // 实测 2026-10-07：`https://typhoon.nmc.cn/` → **HTTP 200**。
                          // CC BY 4.0 署名义务要求可追溯的 credit，故填官网首页。
                          websiteURLString: "https://typhoon.nmc.cn/",
@@ -290,6 +324,8 @@ enum SourceDirectory {
                          // 参与自动摘除：它是**在链的真实取数源**（与 MET Norway 同款纪律），
                          // 连续 3 次缺字段 / 非 2xx 时由 EV-1 / EV-3 摘除，设置页给停用入口。
                          participatesInAutoExclusion: true,
+                         // 同 sunriseSunset：由 `SourceAttributionCoordinator` 计数。
+                         countsUsage: true,
                          // 实测 2026-10-08：`https://www.7timer.info/` → HTTP 200。
                          // CC BY 4.0 署名义务要求可追溯的 credit，故填官网首页。
                          websiteURLString: "https://www.7timer.info/",
@@ -329,6 +365,9 @@ enum SourceDirectory {
                          //  `recordHTTPStatus` → 置 true 会给设置页一个
                          //  「点了没反应」的开关（违反诚实纪律）。
                          participatesInAutoExclusion: false,
+                         // `QWeatherCardModel.loadDaily` / `loadHourly` 各自在
+                         // fetch 成功后计数（两条链路是**两次独立请求**）。
+                         countsUsage: true,
                          // ⚠️ 填**开发者门户**而非某个具体 API 路径：
                          // 本源的关键前提（专属 API Host 因账号而异）只在该站说明，
                          // 写死某条文档路径会在文档改版后 404。
@@ -367,6 +406,11 @@ enum SourceDirectory {
                          // 地震要素不在 `WeatherFieldKey` 域内 → 无按字段摘除信号；
                          // 置 true 只会给设置页一个「点了没反应」的开关。
                          participatesInAutoExclusion: false,
+                         // `EarthquakeCardModel.load` 在
+                         // `service.fetchNearbyEvents` 成功后计数。
+                         // ⚠️ `.none`（查过了、附近确实没有地震）**也算成功**——
+                        // 请求成功返回、只是结果为空，把它算成失败会让用量虚低。
+                         countsUsage: true,
                          websiteURLString: "https://earthquake.usgs.gov/",
                          // ⚠️ 如实写明**查询口径**（这是最容易被误读的地方）：
                          // 本源说的「附近无地震」**不等于**「附近没有震动」——

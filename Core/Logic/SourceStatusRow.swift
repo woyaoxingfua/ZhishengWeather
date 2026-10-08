@@ -43,7 +43,21 @@ struct SourceStatusRow: Identifiable, Equatable, Sendable {
     var displayName: String
     var state: SourceStatusState
     var lastSuccessAt: Date?
-    var todayUsage: Int
+    /// 该源**已接入计数时**的累计成功次数；`nil` = 该源在本地**无任何计数记录**。
+    ///
+    /// ⚠️ **为什么改成可选（这是「数据源调用次数全为 0」修复的核心之一）**：
+    /// 原先是 `Int` 且读账本时写死 `?? 0`，于是**「压根没接入计数」与
+    /// 「接入了但今天确实一次都没成功」被压成同一个 0**。用户读到「今日用量 0」
+    /// 会理解成「这个源今天一直在失败」，而真相往往是「这个源从来没被接线」。
+    /// 两者对用户的含义完全相反，混为一谈即谎报。
+    ///
+    /// 现在 `nil` 如实表示「无记录」，由 UI 渲染成「—」/「未接入」；
+    /// `0` 则只在**确实接入且已记录过 0 次**时出现，语义明确。
+    ///
+    /// - 注意：`0` 与 `nil` 的区分**不代表**该源一定有自增路径 ——
+    ///   「声明了 `countsUsage` 却没有调用点」这种哑火由
+    ///   `ZhishengWeatherTests/SourceUsageCountingGuardTests` 机械守卫。
+    var todayUsage: Int?
 }
 
 /// 全部已配置数据源的静态目录（展示用，**派生**自 `SourceDirectory`）。
