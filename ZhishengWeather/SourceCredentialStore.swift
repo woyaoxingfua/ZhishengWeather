@@ -264,9 +264,12 @@ final class SourceCredentialStore {
         return QWeatherCredentials(
             apiHost: host,
             projectID: projectID,
-            developerID: developerID.isBlank ? nil : developerID,
             credentialID: credentialID,
-            privateKeyPEM: privateKeyPEM
+            privateKeyPEM: privateKeyPEM,
+            // ⚠️ 必须**放最后**：`developerID` 已调整到结构体声明的末尾
+            //   （Swift 成员构造器按声明顺序校验实参顺序，
+            //   插在中间会让所有既有调用点编译失败 —— CI run#37774888643 实测）。
+            developerID: developerID.isBlank ? nil : developerID
         )
     }
 

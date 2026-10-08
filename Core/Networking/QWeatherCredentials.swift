@@ -67,22 +67,6 @@ struct QWeatherCredentials: Equatable, Sendable {
     /// 项目 ID（JWT Payload 的 `sub`）。
     let projectID: String
 
-    /// 开发者 ID（JWT Payload 的 `iss`）。
-    ///
-    /// 🔴 **2026-10-08 新增。此前本实现完全缺失 `iss`。**
-    ///   依据：和风官方 iOS SDK 的 `JWTGenerator` 签名（逐字读自
-    ///   `QWeatherSDK.swiftinterface:1348`）：
-    ///   `public init(privateKey: String, sub: String, kid: String, iss: String)`
-    ///   —— `iss` 是**必需参数且无默认值**。
-    ///
-    /// ⚠️ **取值未知 → 故为可选**：主理人尚未提供开发者 ID，
-    ///   我**不编**这个值（编值= 编造事实，属P-24 同类错误）。
-    ///   缺失时 payload **不带** `iss`（保持改动前的行为），
-    ///   待拿到真实值后填入即可。
-    ///   🔴 **`iss` 是否就是 404 的成因：未确认**—— 见记忆「和风凭据实测失效」。
-    ///   本仓实测「坏 token 请求 v1 也返回 404 而非 401」，指向路由层而非认证层。
-    let developerID: String?
-
     /// 凭据 ID（JWT Header 的 `kid`）。
     ///
     /// ⚠️ **必须是「JSON Web Token」类型凭据的 ID**——
@@ -93,6 +77,28 @@ struct QWeatherCredentials: Equatable, Sendable {
     ///
     /// 🔴 **绝不落盘到仓库、绝不写进源码**。仅存在于用户自己的配置里。
     let privateKeyPEM: String
+
+    /// 开发者 ID（JWT Payload 的 `iss`）。
+    ///
+    /// 🔴 **2026-10-08 新增。此前本实现完全缺失 `iss`。**
+    ///   依据：和风官方 iOS SDK 的 `JWTGenerator` 签名（逐字读自
+    ///   `QWeatherSDK.swiftinterface:1348`）：
+    ///   `public init(privateKey: String, sub: String, kid: String, iss: String)`
+    ///   —— `iss` 是**必需参数且无默认值**。
+    ///
+    /// ⚠️ **取值未知 → 故为可选**：主理人尚未提供开发者 ID，
+    ///   我**不编**这个值（编值= 编造事实，属 P-24 同类错误）。
+    ///   缺失时 payload **不带** `iss`（保持改动前的行为），待拿到真实值后填入。
+    ///   🔴 **`iss` 是否就是 404 的成因：未确认** —— 见记忆「和风凭据实测失效」。
+    ///   本仓实测「坏 token 请求 v1 也返回 404 而非 401」，指向路由层而非认证层。
+    ///
+    /// 🔴 **必须放在最后**：Swift 的成员构造器按**声明顺序**要求实参顺序。
+    ///   本字段曾被插在 `projectID` 与 `credentialID` 之间（按逻辑分组更「好看」），
+    ///   结果既有调用点全部编译报错：
+    ///   `argument 'developerID' must precede argument 'credentialID'`
+    ///   （CI run#37774888643 实测）。
+    ///   → **新增字段一律追加到末尾**，不做「按逻辑分组重排」。
+    let developerID: String?
 
     /// 四个字段是否齐备（**任一为空/纯空白 → false**）。
     ///
