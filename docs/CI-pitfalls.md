@@ -530,3 +530,122 @@ git merge-base --is-ancestor <引入SHA> <run 的 head SHA>   # 判断它进了�
 | `path/File.swift:行:列: error:` | **编译失败**，测试未执行 |
 | 两者都没有 | 归因不了，看不出是编译还是测试（run110 的情况） |
 
+
+---
+
+## 2026-10-08 追加：连续 9 轮 failure 暴露出来的四类新坑
+
+> 背景：`dce9875` 之后连续多轮 CI 全红，每修一条就浮出下一条。
+> 下面每条都有当次 CI 注解或 Apple 官方文档原文作证，**不是推测**。
+
+### P-23 可用性门槛不够时，编译器报的是「无此成员」，不是「版本太新」
+
+- **现象**（CI 注解原文，`7702ec4`）：
+  `ZhishengWeather/AppDiagnosticsStore.swift:350:64: error: value of type
+  'WidgetCenter' has no member 'currentConfigurations'`
+- **真因**：`WidgetCenter.currentConfigurations() async throws -> [WidgetInfo]`
+  在 Apple 官方文档上标注 **iOS 18.0+ / iPadOS 18.0+ / macOS 15.0+ / watchOS 11.0+**，
+  而本工程 `IPHONEOS_DEPLOYMENT_TARGET = "17.0"`（`project.yml`）。
+- **为什么危险**：报错文案里**没有"版本"两个字**，只有"没有这个成员"。
+  第一反应几乎必然是「名字写错了」→ 去改名字 → **越改越错**。
+- **正解**：改用 iOS 14+ 的完成回调版
+  `getCurrentConfigurations(_ completion: @escaping (Result<[WidgetInfo], any Error>) -> Void)`，
+  用 `withCheckedThrowingContinuation` 桥接成 async（`6eefcb0`）。
+- **判据**：遇到 `has no member` 而符号名**看起来完全正确**时，
+  **先去官方文档页看 availability 徽章**，不要先怀疑拼写。
+
+### P-24 **编造 API** 是一个反复发作的独立错误类（MapKit 已三例）
+
+本仓已三度写出「听起来应该有、实际不存在」的 API：
+
+| 被编造的 API | 真相 | 证据 |
+|---|---|---|
+| `MKTileOverlay.loadingPolicy` | 该属性在 `MKTileOverlay` / `MKTileOverlayRenderer` / `MKMapView` 上**都不存在** | 官方文档逐页核对；曾两次改归属（renderer→overlay）**两次都错** |
+| `MKMapPoint(coord).mapRect(using: .longitudeLatitude)` | `MKMapPoint` **无** `mapRect` 成员；`.longitudeLatitude` **不是任何类型上的符号** | CI 注解 `value of type 'MKMapPoint' has no member 'mapRect'` + `cannot infer contextual base in reference to member 'longitudeLatitude'` |
+| `MKPolygon(center:radius:sides:)` | `MKPolygon` **只有** `init(points:count:)` / `init(coordinates:count:)` 两族，**也没有**同名类方法。`center:radius:` 是 **`MKCircle`** 的初始化器 | CI 注解 `argument passed to call that takes no arguments`；官方文档「Creating a polygon overlay」只有两族 |
+
+- **共同机理**：写代码时先想出「这里应该有个开关/便捷构造器」，
+  然后照着直觉把名字拼出来 —— **名字看起来非常合理**，所以极易蒙混过关。
+- **纪律**：**API 的存在性与归属版本只能查官方文档，不能靠推理。**
+  特别是「跨类型搬运」：`MKCircle(center:radius:)` 存在，**不代表** `MKPolygon(center:radius:)` 存在。
+- **替代写法（已验证）**：圆 → 自家按正多边形算顶点后走 `init(coordinates:count:)`；
+  包围盒 → `MKMapRect(origin: MKMapPoint, size: MKMapSize)` + `union(_:)`
+  （三者均已在官方文档核对：`union(_ rect2: MKMapRect) -> MKMapRect` iOS 4.0+、
+  `MKMapSize.init(width:height:)`、`MKMapRect.init(origin:size:)`）。
+
+### P-25 保留字不能当属性名，**反引号也救不了**
+
+- **现象**（CI 注解原文，`9660e9d` 的前一个提交）：
+  ```
+  Core/Networking/SevenTimerResponse.swift:61:9: error: property declaration does not bind any variables
+  Core/Networking/SevenTimerResponse.swift:61:9: error: keyword 'init' cannot be used as an identifier here
+  ```
+- **场景**：7timer! 的 JSON 键就叫 `"init"`（模型初始化时刻），
+  于是 DTO 直接写了 `let init: String?`。
+- **反引号不够用**：就算写成 `` let `init` ``，读取处 `response.init` 也会被解析成
+  **「引用构造器」**而不是「取属性」。
+- **正解**：Swift 侧改名为普通标识符（`initTime`）+ **显式 `CodingKeys`**
+  映射回原 JSON 键 → **对外 JSON 契约一字未变**。
+- **推论**：**解码 DTO 的字段名不能照着 JSON 键直接抄**，
+  必须先过一遍「这名字在 Swift 里合法吗 / 是保留字吗」。
+
+### P-26 未推送的提交 = 从未被验证过
+
+- 实证：`f1478e4`（7Timer 源）在本地躺了多轮才推送，**一推送就暴露 P-25 那条编译错**。
+- **"我本地提交了"与"CI 见过它"是两件事。**
+- 判断是否已推送**只看远端**（`git ls-remote` / GitHub API），
+  本地 `git log` / reflog 都**看不到远端**，不构成证据。
+
+### P-27 一轮 CI 通常只暴露一条编译错 —— 别期待「修完这个就绿」
+
+- 实证：`7702ec4` → 只报 `AppDiagnosticsStore` 一条；
+  修完推 `6eefcb0` → 只报 `SevenTimerResponse` 一条；
+  修完推 `9660e9d` → 才轮到 `TyphoonTrackMapView` 的三条。
+- **机理**：编译器在某一批次失败后不再往下编，注解里就只出现当前这批的错。
+  而 workflow 的注解步骤本身还**截前 40 行**（`awk 'NR<=40'`），
+  所以「注解条数」既不是错误总数、也不保证是全部。
+- **推论**：**每轮 failure 未必是"新问题"**，可能只是队列里还没轮到的老问题。
+  要有连续迭代的心理准备，不要每轮都当成回归。
+
+### P-28 测试 step 失败 → `Archive` / `Package` / `Upload` **全部 skipped** → 不产出 IPA
+
+- **实测**（`7702ec4`、`6eefcb0` 两次运行的 step 结论）：
+  step 7 `Run unit tests (simulator)` = failure →
+  step 9 `Archive (unsigned)` / step 10 `Package unsigned IPA` /
+  step 11 `Upload unsigned IPA` **全是 skipped**。
+- **直接后果**：**CI 红着的时候，根本不会有新的 `.ipa` 产物**。
+  真机上"装了新包却没变化"很可能就是**压根没有新包**，不是改动没生效。
+- **与版本号的关系**：`MARKETING_VERSION` 恒为 `0.1.0`（`project.yml`），
+  构建号才由 workflow 的 `CURRENT_PROJECT_VERSION="${{ github.run_number }}"` 注入。
+  所以用户若只看短版本号**永远不变**；而构建号要等 Archive 步骤真正跑起来才有意义。
+- **排查顺序**：遇到"改了没生效 / 版本号没变"，**先确认 CI 是否真的产出过 IPA**，
+  再去查代码。
+
+### P-29 `Logger` 的消息参数必须是 `OSLogMessage`，不能传运行时 `String`
+
+- **实证**：`017230b fix: Logger 消息参数是 OSLogMessage，不能直接传运行时 String（CI 编译失败）`。
+- **正解**：字符串插值 + 显式隐私级别 ——
+  `WeatherLog.widget.notice("\(message, privacy: .public)")`。
+- **反面**：`notice(someString)` 报类型不符（`someString` 是 `String`，形参是 `OSLogMessage`）。
+- **顺带**：日志内容有脱敏要求时，白名单式放行（`WidgetTrace` 的既有做法），
+  不要把整条消息标 `.public` 了事。
+
+### P-30 新建 `.swift` 文件容易漏 `import SwiftUI` / `import UIKit`
+
+- **实证**：`7702ec4 fix: TyphoonTrackMapView 缺 import SwiftUI（CI 编译失败）` ——
+  一次漏 import 直接产出 **6 条** `cannot find type 'View' in scope`。
+- **机理**：Core 层纪律是「仅 `import Foundation`」，但放到 App target 的视图文件
+  往往需要 `SwiftUI`（`View` / `@State`）或 `UIKit`（`UIColor` / `UIEdgeInsets`）。
+  **从一个目录拷到另一个目录时最容易漏。**
+- **判据**：新文件里出现 `View` / `UIColor` / `UIEdgeInsets` / `MKMapView` 等符号，
+  就回头确认 import 齐了。
+
+### P-31 本地无编译器时，「参考周围代码但没核实」是一类**独立的**错误
+
+- 这是本仓代价最高的一类：**逻辑没错，引用错了**。三种典型：
+  1. 写入用 `timeIntervalSince1970`、读取却写 `Date.timeIntervalSince(_:)` —— **自己跟自己不一致**；
+  2. `@Observable` 类被用 `@StateObject` 持有（Observation 与 ObservableObject 是两套机制，抄了旁边的写法）；
+  3. 属性被读写三次却**从无声明**；测试里引用**根本不存在的** `makeForTesting`。
+- **审这类代码时**：对每个「看起来像既有写法」的引用，**grep 确认它在当前作用域真的可用**；
+  **新增测试引用的每个 API 也要先核实存在**。
+- 与 P-18（单测 Stub 与实现共享同一套假设）同源，但发生在**编译期**而非运行期。

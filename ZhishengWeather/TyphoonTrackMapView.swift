@@ -139,9 +139,18 @@ struct TyphoonTrackMapView: UIViewRepresentable {
            let center = mapCoordinate(of: latest),
            let radiusKm = latest.windCircles.compactMap(\.maxRadiusKm).max(),
            radiusKm > 0 {
-            // ⚠️ `MKPolygon(center:radius:)` 的 radius 单位是**米**，
-            // 而上游风圈半径单位是**公里** → 必须 × 1000，否则画成 1/1000 大小。
-            let polygon = TyphoonWindCirclePolygon(center: center, radius: radiusKm * 1000)
+            // ⚠️ 上游风圈半径单位是**公里** → 必须 × 1000 换成米。
+            //
+            // ⚠️ **`MKPolygon` 没有 `init(center:radius:sides:)`**（也没有同名类方法）——
+            // 逐页核对 Apple 官方文档确认：「Creating a polygon overlay」只有
+            // `init(points:count:)` / `init(coordinates:count:)` 两族。
+            // 原代码写的 `TyphoonWindCirclePolygon(center:radius:)` 编译不过：
+            // `error: argument passed to call that takes no arguments`。
+            // 故此处自家按**正多边形**算顶点（半径数百公里，64 边形近似圆的误差可忽略）。
+            let circle = Self.circleCoordinates(center: center,
+                                                radiusMeters: radiusKm * 1000,
+                                                sides: 64)
+            let polygon = TyphoonWindCirclePolygon(coordinates: circle, count: circle.count)
             map.addOverlay(polygon, level: .aboveRoads)
         }
 
@@ -188,13 +197,52 @@ struct TyphoonTrackMapView: UIViewRepresentable {
     }
 
     /// 一组坐标的外接矩形（**自己求并集**，不依赖任何 MapKit 便捷 API）。
+    ///
+    /// ⚠️ 这里此前写的是 `MKMapPoint(coord).mapRect(using: .longitudeLatitude)` ——
+    /// **`MKMapPoint` 没有 `mapRect` 成员**，`.longitudeLatitude` 也不是任何类型上
+    /// 存在的符号（2026-10-08 逐页核对 Apple 官方文档确认，属编造 API）。
+    /// 站得住的做法是：把坐标转 `MKMapPoint`，各造一个**零尺寸** `MKMapRect`，再 `union` 求并集。
     private func boundingMapRect(of coordinates: [CLLocationCoordinate2D]) -> MKMapRect {
         guard let first = coordinates.first else { return MKMapRect.world }
-        var rect = MKMapPoint(first).mapRect(using: .longitudeLatitude)
+        var rect = MKMapRect(origin: MKMapPoint(first), size: MKMapSize(width: 0, height: 0))
         for coordinate in coordinates.dropFirst() {
-            rect = rect.union(MKMapPoint(coordinate).mapRect(using: .longitudeLatitude))
+            let pointRect = MKMapRect(origin: MKMapPoint(coordinate),
+                                      size: MKMapSize(width: 0, height: 0))
+            rect = rect.union(pointRect)
         }
         return rect
+    }
+
+    /// 以 `center` 为圆心、`radiusMeters` 为半径的正多边形顶点（单位：度）。
+    ///
+    /// ⚠️ **为什么自己算顶点**：`MKPolygon` 只有
+    /// `init(points:count:)` / `init(coordinates:count:)` 两族，**没有**
+    /// `init(center:radius:sides:)`，也没有同名类方法（逐页核对 Apple 文档）。
+    /// （`center:radius:` 那个初始化器是 **`MKCircle`** 的 —— 容易被误记到 `MKPolygon` 上。）
+    ///
+    /// 用**等距圆柱近似**把米折成度：
+    /// - 纬度：`1° ≈ 111_320 m`（常数）。
+    /// - 经度：同样米数在经度方向占的度数随纬度收缩，故除以 `cos(latitude)`。
+    ///
+    /// 台风风圈半径达数百公里，多边形近似圆的形状误差远小于风圈本身的不确定性，
+    /// 故不做任何球面精确投影，也**不做坐标纠偏** —— 风圈是气象意义的圆，
+    /// 不是「地图上看起来圆」。
+    ///
+    /// - Returns: 逆时针均匀分布的顶点，闭口由 `MKPolygon` 自动完成（首尾自动相连）。
+    private static func circleCoordinates(center: CLLocationCoordinate2D,
+                                          radiusMeters: CLLocationDistance,
+                                          sides: Int) -> [CLLocationCoordinate2D] {
+        let earthRadius = 6_378_137.0  // WGS-84 赤道半径（米）
+        let latitudeRadians = center.latitude * .pi / 180
+        let latitudeDelta = (radiusMeters / earthRadius) * 180 / .pi
+        // 高纬处 cos → 0；加下限避免经度跨度爆炸（画成环绕地球的条带）。
+        let longitudeDelta = latitudeDelta / max(cos(latitudeRadians), 0.01)
+        return (0..<sides).map { index in
+            let angle = 2 * Double.pi * Double(index) / Double(sides)
+            return CLLocationCoordinate2D(
+                latitude: center.latitude + latitudeDelta * cos(angle),
+                longitude: center.longitude + longitudeDelta * sin(angle))
+        }
     }
 
     /// 渲染器工厂。
