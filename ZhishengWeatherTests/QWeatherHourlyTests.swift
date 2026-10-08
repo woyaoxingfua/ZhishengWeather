@@ -404,7 +404,11 @@ final class QWeatherHourlyTests: XCTestCase {
                        "🔴 路径段是 `hourly`（不是 `hours`）；坐标保留两位小数")
         let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems)
-        let pairs = Dictionary(items.compactMap { item -> (String, String)? in
+        // ⚠️ `Dictionary(_:uniquingKeysWith:)` 与 `Dictionary(uniqueKeysWithValues:)`
+        //   是**两个不同的初始化器**：由元组序列构造字典**必须**写后者，
+        //   漏掉标签报 `missing argument label 'uniqueKeysWithValues:'`。
+        //   （实测 CI run#37758432521 在此报错。）
+        let pairs = Dictionary(uniqueKeysWithValues: items.compactMap { item -> (String, String)? in
             guard let value = item.value else { return nil }
             return (item.name, value)
         })
