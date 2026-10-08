@@ -245,17 +245,7 @@ struct EarthquakeCard: View {
             Text("USGS 地震目录 · 免 Key")
                 .font(.system(size: Theme.FontSize.caption))
                 .foregroundStyle(Theme.secondaryText)
-            if model.hasTimedOut {
-                // ⚠️ `loadTimeout` 是 **static** 常量，必须写
-                // `EarthquakeCardModel.loadTimeout`（写 `model.loadTimeout`
-                // 会报「static member cannot be used on instance」——
-                // 2026-10-08 CI 实测，同款错误在 QWeatherCard 也犯过一次）。
-                Text("加载超时（超过 "
-                     + String(Int(EarthquakeCardModel.loadTimeout))
-                     + " 秒）· 上方结果可能不是最新")
-                    .font(.system(size: Theme.FontSize.caption))
-                    .foregroundStyle(Theme.accent)
-            }
+            timedOutNotice
             Text("口径：" + Self.radiusText + " / 近 " + Self.lookbackText
                  + " / M" + Self.magnitudeThresholdText + "+ · 距离为本应用按 Haversine 公式计算")
                 .font(.system(size: Theme.FontSize.caption))
@@ -263,7 +253,35 @@ struct EarthquakeCard: View {
         }
     }
 
-    // MARK: - 格式化（纯函数，便于单测）
+    /// 超时提示（**独立子视图**）。
+    ///
+    /// ⚠️ **为什么要抽出来**：`footer` 里的表达式原本是
+    /// `VStack { Text(...); if ... { Text("加载超时（超过 " + String(Int(...)) + " 秒）...") } }`
+    /// —— 把 `String(...)` / `Int(...)` 转换**内联**在 `VStack` 的 ViewBuilder 里，
+    /// Swift 的类型检查器**在合理时间内无法完成**（2026-10-08 CI 实测：
+    /// `the compiler is unable to type-check this expression in reasonable time`，
+    /// 报错指向 `VStack` 那一行）。
+    /// → 抽成**独立计算属性**后，表达式规模变小、检查收敛。
+    /// 这是本仓**首次**遇到「类型检查超时」，与 P-24 同类：
+    /// **不是写错，是写法触发了编译器的复杂度上限**。
+    @ViewBuilder
+    private var timedOutNotice: some View {
+        if model.hasTimedOut {
+            // ⚠️ `loadTimeout` 是 **static** 常量，必须写
+            // `EarthquakeCardModel.loadTimeout`（写 `model.loadTimeout`
+            // 会报「static member cannot be used on instance」——
+            // 2026-10-08 CI 实测，同款错误在 QWeatherCard 也犯过一次）。
+            Text(Self.timeoutText)
+                .font(.system(size: Theme.FontSize.caption))
+                .foregroundStyle(Theme.accent)
+        }
+    }
+
+    /// 超时文案（**预先拼好**，避免在 ViewBuilder 里做数值转换）。
+    static let timeoutText: String = {
+        let seconds = Int(EarthquakeCardModel.loadTimeout)
+        return "加载超时（超过 " + String(seconds) + " 秒）· 上方结果可能不是最新"
+    }()
 
     /// 震级文本：`nil` → 「震级未提供」（**绝不**显示 M0.0）。
     static func magnitudeText(_ magnitude: Double?) -> String {

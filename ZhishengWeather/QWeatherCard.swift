@@ -187,16 +187,29 @@ struct QWeatherCard: View {
     ///    漏掉就是违反许可条件。
     private var footer: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if model.hasTimedOut {
-                // ⚠️ `loadTimeout` 是 **static** 常量，必须写`QWeatherCardModel.loadTimeout`
-                // （写 `model.loadTimeout` 会报「static member cannot be used on
-                // instance」—— 2026-10-08 CI 实测）。
-                Text("加载超时（超过 "
-                     + String(Int(QWeatherCardModel.loadTimeout))
-                     + " 秒）· 上方结果可能不是最新")
-                    .font(.system(size: Theme.FontSize.caption))
-                    .foregroundStyle(Theme.accent)
-            }
+            timedOutNotice
+
+    /// 超时文案（**预先拼好**，不内联数值转换）。
+    ///
+    /// ⚠️ `String(Int(QWeatherCardModel.loadTimeout))` 直接写在 `VStack` 的
+    /// ViewBuilder 里会让 Swift 类型检查器**超时** —— 同款写法在
+    /// `EarthquakeCard` 上实测报
+    /// `the compiler is unable to type-check this expression in reasonable time`。
+    /// 故预先拼成 `static let`，View 里只剩常量引用。
+    static let timeoutText: String = {
+        let seconds = Int(QWeatherCardModel.loadTimeout)
+        return "加载超时（超过 " + String(seconds) + " 秒）· 上方结果可能不是最新"
+    }()
+
+    /// 超时提示（**独立子视图**，同 `EarthquakeCard.timedOutNotice`）。
+    @ViewBuilder
+    private var timedOutNotice: some View {
+        if model.hasTimedOut {
+            Text(Self.timeoutText)
+                .font(.system(size: Theme.FontSize.caption))
+                .foregroundStyle(Theme.accent)
+        }
+    }
 
             // 🔴🔴 合规硬要求，不可删、不可条件化。
             if model.attributions.isEmpty {
