@@ -246,8 +246,9 @@ struct EarthquakeCard: View {
                 .font(.system(size: Theme.FontSize.caption))
                 .foregroundStyle(Theme.secondaryText)
             timedOutNotice
-            Text("口径：" + Self.radiusText + " / 近 " + Self.lookbackText
-                 + " / M" + Self.magnitudeThresholdText + "+ · 距离为本应用按 Haversine 公式计算")
+            // ⚠️ 四段拼接**预先拼成 static let**（同timeoutText 的理由：
+            //   ViewBuilder 里多段 `+` 会触发类型检查器超时，且报错指向外层容器）。
+            Text(Self.criteriaText)
                 .font(.system(size: Theme.FontSize.caption))
                 .foregroundStyle(Theme.secondaryText)
         }
@@ -281,6 +282,16 @@ struct EarthquakeCard: View {
     static let timeoutText: String = {
         let seconds = Int(EarthquakeCardModel.loadTimeout)
         return "加载超时（超过 " + String(seconds) + " 秒）· 上方结果可能不是最新"
+    }()
+
+    /// 口径说明（**预先拼好**；「附近」是本应用自定半径、距离是本应用自算，
+    /// 这两句限定是诚实纪律的落点，不可为了简洁删掉）。
+    static let criteriaText: String = {
+        let radius = String(Int(UsgsEarthquakeEndpoint.radiusKm)) + " km"
+        let lookback = String(EarthquakeCardModel.lookbackDays) + " 天"
+        let magnitude = String(format: "%g", UsgsEarthquakeEndpoint.minimumMagnitude)
+        return "口径：" + radius + " / 近 " + lookback + " / M" + magnitude
+            + "+ · 距离为本应用按 Haversine 公式计算"
     }()
 
     /// 震级文本：`nil` → 「震级未提供」（**绝不**显示 M0.0）。

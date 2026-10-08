@@ -189,28 +189,6 @@ struct QWeatherCard: View {
         VStack(alignment: .leading, spacing: 2) {
             timedOutNotice
 
-    /// 超时文案（**预先拼好**，不内联数值转换）。
-    ///
-    /// ⚠️ `String(Int(QWeatherCardModel.loadTimeout))` 直接写在 `VStack` 的
-    /// ViewBuilder 里会让 Swift 类型检查器**超时** —— 同款写法在
-    /// `EarthquakeCard` 上实测报
-    /// `the compiler is unable to type-check this expression in reasonable time`。
-    /// 故预先拼成 `static let`，View 里只剩常量引用。
-    static let timeoutText: String = {
-        let seconds = Int(QWeatherCardModel.loadTimeout)
-        return "加载超时（超过 " + String(seconds) + " 秒）· 上方结果可能不是最新"
-    }()
-
-    /// 超时提示（**独立子视图**，同 `EarthquakeCard.timedOutNotice`）。
-    @ViewBuilder
-    private var timedOutNotice: some View {
-        if model.hasTimedOut {
-            Text(Self.timeoutText)
-                .font(.system(size: Theme.FontSize.caption))
-                .foregroundStyle(Theme.accent)
-        }
-    }
-
             // 🔴🔴 合规硬要求，不可删、不可条件化。
             if model.attributions.isEmpty {
                 // 上游未给署名 ≠ 有署名没解出来：如实说「未提供」，
@@ -239,6 +217,28 @@ struct QWeatherCard: View {
     }
 
     // MARK: - 格式化（纯函数，便于单测）
+
+    /// 超时文案（**预先拼好**，不内联数值转换）。
+    ///
+    /// ⚠️ `String(Int(QWeatherCardModel.loadTimeout))` 直接写在 `VStack` 的
+    /// ViewBuilder 里会让 Swift 类型检查器**超时** —— 同款写法在
+    /// `EarthquakeCard` 上实测报
+    /// `the compiler is unable to type-check this expression in reasonable time`。
+    /// 故预先拼成 `static let`，View 里只剩常量引用。
+    static let timeoutText: String = {
+        let seconds = Int(QWeatherCardModel.loadTimeout)
+        return "加载超时（超过 " + String(seconds) + " 秒）· 上方结果可能不是最新"
+    }()
+
+    /// 超时提示（**独立子视图**，同 `EarthquakeCard.timedOutNotice`）。
+    @ViewBuilder
+    private var timedOutNotice: some View {
+        if model.hasTimedOut {
+            Text(Self.timeoutText)
+                .font(.system(size: Theme.FontSize.caption))
+                .foregroundStyle(Theme.accent)
+        }
+    }
 
     /// 🔴 **`[0,1]` → 百分比**。**实测依据**：北京 `humidity = 0.32`。
     ///
