@@ -201,7 +201,10 @@ struct EarthquakePagerAlert: RawRepresentable, Codable, Equatable, Hashable, Sen
     /// 警报等级被静默吞掉是信息丢失）。
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        self.rawValue = try container.decode(String())
+        // ⚠️ `String.self` 而**不是** `String()` —— 后者是把「类型当函数」调用，
+        // 报 `cannot convert value of type 'String' to expected argument type
+        // 'String.Type'`（2026-10-08 CI 实测）。
+        self.rawValue = try container.decode(String.self)
     }
 
     /// 编码：写回上游原值（往返无损）。
