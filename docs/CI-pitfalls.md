@@ -649,3 +649,23 @@ git merge-base --is-ancestor <引入SHA> <run 的 head SHA>   # 判断它进了�
 - **审这类代码时**：对每个「看起来像既有写法」的引用，**grep 确认它在当前作用域真的可用**；
   **新增测试引用的每个 API 也要先核实存在**。
 - 与 P-18（单测 Stub 与实现共享同一套假设）同源，但发生在**编译期**而非运行期。
+
+### P-32 局部变量**遮蔽标准库函数** → `cannot call value of non-function type`
+
+- **现象**（CI 注解原文，`de13ec8`）：
+  `ZhishengWeather/SatelliteCardModel.swift:226:18: error: cannot call value of non-function type 'Int'`
+- **真因**：同一个作用域里先写了 `let stride = 4`（本意是"每像素 4 字节"），
+  紧接着写 `for y in stride(from: 0, to: height, by: rowStep)` ——
+  局部常量 `stride` **遮蔽了标准库的 `stride(from:to:by:)` 函数**，
+  于是那行被解析成「调用一个 `Int` 值」，报的却是「不能调用非函数类型」，
+  **错误信息里完全不提遮蔽**，一眼看不出是名字冲突。
+- **正解**：**改局部变量名**（改成 `pixelStride`），而不是在被调处写 `Swift.stride(...)`。
+  理由：改名把地雷拆掉，下一个人再想用 `stride(...)` 不会重踩；
+  加限定名只是绕过，地雷还在。
+- **同类风险名单**（这些名字都别拿来当变量名）：
+  `stride` / `min` / `max` / `abs` / `sum` / `zip` / `map` / `filter` / `first` / `last` /
+  `count` / `distance` / `swap` / `repeatElement` / `sequence`。
+  ⚠️ 尤其 `min` / `max` / `abs`：本仓大量数值代码里极容易顺手写成 `let min = ...`。
+- **自查办法**（本机无编译器时唯一可行）：写完后 grep 一遍
+  `grep -nE '(let|var) *(stride|min|max|abs|count|first|last|map|filter|zip)\b'`，
+  命中就改名。

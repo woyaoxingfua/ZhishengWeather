@@ -220,11 +220,16 @@ final class SatelliteCardModel {
         var count: Double = 0
         var pureBlack = 0
 
-        let stride = 4
+        // ⚠️ 这个局部常量**不能叫 `stride`** —— 它会遮蔽 Swift 标准库的
+        // `stride(from:to:by:)` 函数，使下面那行循环变成
+        // 「调用 Int 类型的值」，CI 报：
+        // `error: cannot call value of non-function type 'Int'`（2026-10-08 实测）。
+        // 改名而不是写 `Swift.stride(...)`：把地雷拆掉，避免下一个人再踩。
+        let pixelStride = 4
         let rowStep = 4   // 每 4 行取1 行
         var index = 0
-        for y in stride(from: 0, to: height, by: rowStep) {
-            for x in 0..<width {
+        for _ in stride(from: 0, to: height, by: rowStep) {
+            for _ in 0..<width {
                 let r = pixels[index]
                 let g = pixels[index + 1]
                 let b = pixels[index + 2]
@@ -234,10 +239,10 @@ final class SatelliteCardModel {
                 count += 1
                 if r == 0 && g == 0 && b == 0 { pureBlack += 1 }
                 seen.insert(UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b))
-                index += stride * 1
+                index += pixelStride
             }
             // 跳到下一采样行的起始像素
-            index += (rowStep - 1) * width * stride
+            index += (rowStep - 1) * width * pixelStride
         }
 
         guard count > 0 else { return nil }
