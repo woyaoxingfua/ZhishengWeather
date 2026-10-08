@@ -89,7 +89,21 @@ struct ContentView: View {
     /// ⚠️ **凭据由 App 侧注入**（Core 不读凭据，`SC-42a` 静态门禁会扫）；
     /// 未配置时 `QWeatherService` 抛 `dataMissing` → 卡片显示
     /// 「未配置 API 凭据」，**绝不伪造数据、绝不静默换源**。
+    ///
+    /// 🔴 2026-10-10：`QWeatherCardModel` 的默认 service 已从
+    ///   `QWeatherService(now:)`（凭据恒为 nil）换成
+    ///   `QWeatherCredentialProviding` —— **每次取数前**读当前凭据。
+    ///   在此之前全仓没有任何一处构造过带凭据的 `QWeatherCredentials`，
+    ///   真机上和风卡必然恒显「未配置 API 凭据」。
     @State private var qWeatherModel = QWeatherCardModel()
+
+    /// 和风凭据存储（与设置页**同一实例**；设置页保存后由下方 `.onChange` 触发重取）。
+    ///
+    /// ⚠️ 之所以要在主屏持有：`QWeatherCardModel` 在本类型初始化时就构造完成，
+    ///   那时用户还没进设置页 → 若无「凭据已变」的信号，
+    ///   保存完凭据返回主屏将**看不到任何变化**（`.task(id: 城市 id)`
+    ///   只在城市切换时重跑）。
+    private let credentialStore = SourceCredentialStore.shared
 
     /// 台风卡的年份选择器所需的「当前年」。
     ///
@@ -255,6 +269,28 @@ struct ContentView: View {
                 }()
                 _ = await (radar, flood, earthquake, qWeather)
             }
+            // 🔴 凭据变更 → **只重跑和风这一条链路**。
+            //
+            // ⚠️ 为什么必须显式挂这个触发：上面的 `.task(id: 城市 id)` 只在
+            //   **城市切换**时重跑；而凭据是在**设置页**改的，返回主屏时
+            //   城市没变 → 那个 task 不会重跑 → 用户会看到
+            //   「凭据明明填对了，卡片还是说取不到」。
+            //   这是一个**真实的死局**，不是理论风险。
+            //
+            // ⚠️ 为什么只重跑和风、不重跑全部四条：其余三源与凭据无关，
+            //   重跑它们是**白耗流量与电量**。
+            //
+            // ⚠️ `.onChange` 闭包**不是 async** → 必须包一层 `Task`；
+            //   `Task { @MainActor in }` 的显式隔离是必要的：
+            //   体内要碰 `@MainActor` 的 `viewModel` 与 `qWeatherModel`。
+            //   错误已在 `QWeatherCardModel.load` 内部收敛，任务体不抛。
+            .onChange(of: credentialStore.revision) { _, _ in
+                Task { @MainActor in
+                    let resolved = viewModel.resolvedCoordinateForRadar
+                    await qWeatherModel.load(latitude: resolved.latitude,
+                                             longitude: resolved.longitude)
+                }
+            }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
             .navigationDestination(for: CityRoute.self) { route in
                 switch route {
@@ -269,7 +305,10 @@ struct ContentView: View {
                                  freshnessWindow: viewModel.freshnessWindowInterval,
                                  appearance: appearance,
                                  reminderScheduler: viewModel.reminderSchedulerForSettings,
-                                 activityManager: activityManager)
+                                 activityManager: activityManager,
+                                 // 透传**同一个**凭据 store 实例：本页写入 → 主屏读取
+                                 // 是同一份，否则会退化成「读 A 实例、写 B 实例」。
+                                 credentialStore: SourceCredentialStore.shared)
                 }
             }
         }

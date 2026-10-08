@@ -115,6 +115,34 @@ struct SettingsView: View {
     /// 这里改「绘制时往哪挪」（`draw` 里 `translateBy`）。别混为一谈。
     @State private var radarPixelShiftMode: RadarPixelShiftMode
 
+    // MARK: - 和风天气凭据（需 Key 的源）
+
+    /// 凭据存储（App 本地 `UserDefaults`；与主屏取数链路**同一实例**）。
+    ///
+    /// ⚠️ 由 `ContentView` 透传**同一个** `SourceCredentialStore.shared`，
+    ///   而本页**从不**自行 `SourceCredentialStore.shared`——
+    ///   否则会出现「读A 实例、写 B 实例」的镜像缝
+    ///   （同 `AppearanceStore` 在本文件 init 里那条纪律）。
+    private let credentialStore: SourceCredentialStore
+
+    /// 页面上正在编辑的凭据字段（**未保存**；保存才落盘 + 推进版本号）。
+    ///
+    /// ⚠️ 初值经**注入的 store** 读取（`credentialStore.fields`），
+    ///   与 `.appearance` 同一纪律：不绕过注入实例直接读静态。
+    @State private var credentialDraft: SourceCredentialFields
+
+    /// 逐字段校验结果（**实时**驱动行内错误提示，不静默失败）。
+    @State private var credentialValidation = SourceCredentialValidation()
+
+    /// 探测结论（`nil` = 还没点过「测试连接」）。
+    @State private var probeOutcome: QWeatherProbeOutcome?
+
+    /// 探测进行中（禁用按钮，避免并发重复请求）。
+    @State private var isProbing: Bool = false
+
+    /// 保存成功后的短提示（**不静默保存**：必须让用户知道已生效）。
+    @State private var credentialSavedHint: String?
+
     /// 本机内容缩放因子（@1x/@2x/@3x），用于把平移量折成**设备像素**。
     ///
     /// ⚠️ 走 SwiftUI 的 `displayScale` 而**不**读 `UIScreen.main.scale`：
@@ -184,7 +212,8 @@ struct SettingsView: View {
          reminderScheduler: UmbrellaReminderScheduler? = nil,
          iconSwitcher: AppIconSwitcher? = nil,
          activityManager: WeatherActivityManager? = nil,
-         diagnostics: AppDiagnosticsStore? = nil) {
+         diagnostics: AppDiagnosticsStore? = nil,
+         credentialStore: SourceCredentialStore? = nil) {
         self.lastUpdated = lastUpdated
         self.timeZone = timeZone
         self.freshnessWindow = freshnessWindow
@@ -198,6 +227,11 @@ struct SettingsView: View {
         // 生产路径下三者都落在 App 本地 `.standard`：切换器与活动管理器默认的
         // 诊断 store 同为 standard（或 shared），故本页读得到它们写的记录。
         self.diagnostics = diagnostics ?? AppDiagnosticsStore.shared
+        // 同 P-04 纪律：default 参数在调用方非隔离上下文求值，而
+        // `SourceCredentialStore.shared` 是类型级 @MainActor 的 static
+        // → default 给 nil，真正创建移到本 init 体内（本类型 @MainActor，合法）。
+        let store = credentialStore ?? SourceCredentialStore.shared
+        self.credentialStore = store
         // @State 初值必须在 init 内赋（不能在属性默认值处触碰非隔离参数）。
         // 外观初值走注入的 AppearanceStore（与 .onChange 的写路径同一个 store）。
         _appearanceSetting = State(initialValue: appearance.setting)
@@ -208,6 +242,11 @@ struct SettingsView: View {
         _radarCoordinateMode = State(initialValue: RadarCoordinateModeStore.current())
         // 像素级平移档位：同一个理由（store 内回落 `.off` 这个安全默认档）。
         _radarPixelShiftMode = State(initialValue: RadarPixelShiftStore.current())
+        // 凭据草稿初值走**注入的** store（与 save 的写路径同一实例）。
+        let storedFields = store.fields
+        _credentialDraft = State(initialValue: storedFields)
+        // 初值即校验一次：让用户一进页面就看到「哪些还缺」，而不是必须先点保存。
+        _credentialValidation = State(initialValue: SourceCredentialStore.validate(storedFields))
     }
 
     var body: some View {
@@ -509,6 +548,100 @@ struct SettingsView: View {
                                                          timeZone: timeZone))
                             .foregroundStyle(Theme.secondaryText)
                     }
+                }
+            }
+
+            // ── 和风天气凭据（第九源· 需 Key）────────────────────────────
+            //位置：本「数据源」区之后、「数据状态」之前 —— 它是「数据源」的
+            // **配置入口**，紧邻其语义归属最紧。
+            //
+            // 🔴 纪律：**四个字段缺一不可**，任一为空/非法 → 如实显示
+            //   「未配置 API 凭据」，**绝不**静默换源、**绝不**伪造数据。
+            Section("和风天气凭据") {
+                Text(Self.credentialIntroHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+
+                //当前状态（读**注入的** store，非草稿）。
+                Text(credentialStore.hasCompleteCredentials
+                     ? Self.credentialConfiguredHint
+                     : Self.credentialMissingHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(credentialStore.hasCompleteCredentials
+                                     ? .green : Theme.secondaryText)
+
+                credentialField("API Host",
+                                placeholder: "如 xxxxxx.re.qweatherapi.com",
+                                text: $credentialDraft.apiHost,
+                                error: credentialValidation.apiHostError)
+                credentialField("项目 ID",
+                                placeholder: "控制台项目列表里的 Project ID",
+                                text: $credentialDraft.projectID,
+                                error: credentialValidation.projectIDError)
+                credentialField("凭据 ID",
+                                placeholder: "「JSON Web Token」类型凭据的 ID",
+                                text: $credentialDraft.credentialID,
+                                error: credentialValidation.credentialIDError)
+                credentialField("开发者 ID（可选）",
+                                placeholder: "留空则签名不带 iss",
+                                text: $credentialDraft.developerID,
+                                error: nil)
+
+                // 🔴 私钥用**多行 TextEditor**：PEM 天然是多行文本，
+                //   单行 SecureField 会把换行吞掉 → base64 解码失败，
+                //   而用户完全看不出错在哪（粘贴进来就已经坏了）。
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Ed25519 私钥（PEM）")
+                        .font(.system(size: 13))
+                    TextEditor(text: $credentialDraft.privateKeyPEM)
+                        .font(.system(size: 12))
+                        // 🔴 `.textInputAutocapitalization(.never)` 不可省：
+                        //   自动大写会把 PEM 头尾 `BEGIN`/`END` 之外的
+                        //   base64 字母改成大写 → **base64 解码失败**，
+                        //   错误信息还只会说「解码失败」，极难定位。
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .frame(minHeight: 90)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Theme.secondaryText.opacity(0.4), lineWidth: 1)
+                        )
+                        // 与单行字段同一个重算入口（`credentialField` 走的是它）。
+                        .onChange(of: credentialDraft.privateKeyPEM) { _, _ in
+                            revalidateDraft()
+                        }
+                    if let error = credentialValidation.privateKeyError {
+                        Text(error)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Text(Self.credentialPrivacyHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+
+                // 保存 / 清除。
+                Button("保存凭据") { saveCredentials() }
+                    .disabled(!credentialValidation.isValid)
+                Button("清除凭据") { clearCredentials() }
+                    .disabled(!credentialStore.isConfigured)
+                if let hint = credentialSavedHint {
+                    Text(hint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+
+                // ── 测试连接（**真实请求**，展示真实结果）─────────────────
+                Button(isProbing ? "测试中…" : "测试连接") {
+                    Task { await probeConnection() }
+                }
+                .disabled(isProbing || !credentialValidation.isValid)
+                if let outcome = probeOutcome {
+                    // 🔴 `.noData` 与 `.unavailable` 在 `summary` 里是**两套文案**。
+                    Text(outcome.summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(outcome.isSuccess ? .green : Theme.secondaryText)
                 }
             }
 
@@ -995,4 +1128,114 @@ struct SettingsView: View {
         guard let build, !build.isEmpty else { return v }
         return "\(v) (\(build))"
     }
+
+    // MARK: - 和风天气凭据（视图与动作）
+
+    /// 单行凭据字段（标签 + 输入框 + **行内**错误提示）。
+    ///
+    /// ⚠️ 错误**显示在字段下方**而不是汇总成一句：Host 非法与私钥不是
+    ///   Ed25519 是两件不同的事，用户要能一眼看出**哪个字段**要改。
+    private func credentialField(_ title: String,
+                                 placeholder: String,
+                                 text: Binding<String>,
+                                 error: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 13))
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                // 🔴 Host / ID 段禁用自动大写与自动纠错：
+                //   iOS 默认首字母大写会把 `xxxxxx.re.qweatherapi.com`
+                //   变成 `Xxxxxx.…`（非法 Host），而错误提示只会说
+                //   「Host 非法」，用户根本猜不到是自己键盘搞的。
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .onChange(of: text.wrappedValue) { _, _ in revalidateDraft() }
+            if let error {
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    /// 草稿变化 → 重算校验（**实时**行内提示，不等到点保存才发现）。
+    private func revalidateDraft() {
+        credentialValidation = SourceCredentialStore.validate(credentialDraft)
+        // 草稿一改，旧的探测结论与保存提示就**过期**了 → 清掉，
+        // 否则会显示「上一次的探测结果」，像是当前这份凭据的结论。
+        probeOutcome = nil
+        credentialSavedHint = nil
+    }
+
+    /// 保存凭据（**先校验，不合法则不写盘**）。
+    private func saveCredentials() {
+        let validation = SourceCredentialStore.validate(credentialDraft)
+        credentialValidation = validation
+        guard validation.isValid else {
+            // 🔴 不静默失败：明确告诉用户**为什么**没存。
+            credentialSavedHint = nil
+            return
+        }
+        credentialStore.save(credentialDraft)
+        // 草稿对齐落盘后的值（Host 会被规范化成裸主机名）。
+        credentialDraft = credentialStore.fields
+        probeOutcome = nil
+        credentialSavedHint = Self.credentialSavedMessage
+    }
+
+    /// 清除凭据（回到「未配置」如实空态）。
+    private func clearCredentials() {
+        credentialStore.clear()
+        credentialDraft = credentialStore.fields
+        credentialValidation = SourceCredentialStore.validate(credentialDraft)
+        probeOutcome = nil
+        credentialSavedHint = Self.credentialClearedMessage
+    }
+
+    /// 「测试连接」：**发真实请求**，展示**真实**结论。
+    ///
+    /// ⚠️ 探测用**当前选中城市**的坐标 —— 本页不新建第二套城市来源。
+    private func probeConnection() async {
+        guard !isProbing else { return }
+        isProbing = true
+        defer { isProbing = false }
+        let probeCoordinate = Self.credentialProbeCoordinate
+        probeOutcome = await QWeatherCredentialProbe.probe(
+            fields: credentialDraft,
+            latitude: probeCoordinate.latitude,
+            longitude: probeCoordinate.longitude)
+        // 🔴 探测**不落盘**：只回答「这份凭据能不能用」，
+        //   是否保存由用户自己点「保存凭据」决定（探测≠提交）。
+        credentialSavedHint = nil
+    }
+
+    // MARK: - 和风天气凭据（文案，单一真源）
+
+    /// 探测用坐标（`39.90, 116.40` 北京）。
+    ///
+    /// 🔴 **为什么是常量而不是传入选中城市**：设置页**没有**城市上下文
+    ///   （它接收的是 `lastUpdated` 与 `timeZone`，没有坐标），
+    ///   而为一个「探测」给整条构造链加一个坐标参数并不划算。
+    ///   固定用一个**真实**坐标即可回答「凭据能否签名并通过鉴权」——
+    ///   探测的判据是**鉴权结果**，不是那个城市的天气。
+    ///   （若哪天真要按选中城市探测，只需给本页加一个坐标参数并在
+    ///   `ContentView` 透传 `viewModel.resolvedCoordinateForRadar`。）
+    static let credentialProbeCoordinate = (latitude: 39.90, longitude: 116.40)
+
+    static let credentialIntroHint = "和风天气需在 App 内填写你自己的凭据（本仓库不含任何密钥）。"
+        + "四项必填：API Host / 项目 ID / 凭据 ID / Ed25519 私钥。"
+        + "开发者 ID 官方 SDK 要求必填，但取值未知，故设为可选、留空则签名不带 iss。"
+
+    static let credentialConfiguredHint = "已配置完整凭据，主屏和风卡将用它取数。"
+
+    static let credentialMissingHint = "尚未配置完整凭据 —— 主屏和风卡会如实显示「未配置 API 凭据」，"
+        + "不会伪造数据、也不会静默换成别的源。"
+
+    static let credentialPrivacyHint = "私钥保存在本App 的 UserDefaults（未加密明文落盘）。"
+        + "这是侧载自用场景的取舍：改用 Keychain 需一并处理老数据迁移。"
+
+    static let credentialSavedMessage = "已保存。返回主屏后和风卡会用这份凭据重新取数。"
+
+    static let credentialClearedMessage = "已清除。和风卡将回到「未配置 API 凭据」。"
 }

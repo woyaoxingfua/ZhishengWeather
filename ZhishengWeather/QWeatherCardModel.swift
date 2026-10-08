@@ -98,18 +98,33 @@ final class QWeatherCardModel {
     private let health: SourceHealthTracker
 
     /// 初始化。
-    /// - Parameter service: 取数实现（测试注入 Stub）。
     ///
     /// 🔴 `QWeatherService()` **必须显式传 `now`**（2026-10-08 门禁 SC-11 教训）：
     ///   Core层禁 `Date()`，所以 `QWeatherService.init` 的 `now` 参数**没有默认值**；
     ///   本类在 **App 层**（`ZhishengWeather/`），此处传 `Date()` 是合规的
     ///   —— SC-11 只扫 `Core/`。
+    ///
+    /// 🔴🔴 `service` 的 default **给`nil`、真正创建移到 init 体内**（2026-10-10）。
+    ///   为什么不能写 `= QWeatherCredentialProviding(store: .shared)`：
+    ///   `SourceCredentialStore.shared` 是 **类型级 `@MainActor`** 的 static，
+    ///   而**默认参数表达式在调用方的非隔离上下文求值** —— 本仓 P-04 陷阱
+    ///   （`SettingsView` 的 `iconSwitcher` / `activityManager` 同款，
+    ///   `LocationProvider` 亦然）。写进默认参数会挂 CI 编译。
+    ///   本类型整体 `@MainActor` → init 体内已隔离，取 `.shared` 合法。
+    ///
+    ///   ⚠️ 这条改动**不是**「换个默认值」那么轻：`service` 由
+    ///   `QWeatherService(now:)`（凭据 nil）换成了
+    ///   `QWeatherCredentialProviding`（每次取数前读当前凭据）——
+    ///   在此之前，真机上和风卡**必然**显示「未配置 API 凭据」，
+    ///   因为全仓没有任何一处构造过带凭据的 `QWeatherCredentials`。
+    ///
     /// - Parameters:
-    ///   - service: 取数实现（测试注入 Stub）。
+    ///   - service: 取数实现（测试注入 Stub；nil → 用 App 侧凭据接线）。
     ///   - health: 用量计数落点（默认共享实例；测试注入隔离 ledger）。
-    init(service: any QWeatherProviding = QWeatherService(now: { Date() }),
+    init(service: (any QWeatherProviding)? = nil,
          health: SourceHealthTracker = .shared) {
         self.service = service
+            ?? QWeatherCredentialProviding(store: SourceCredentialStore.shared)
         self.health = health
     }
 
