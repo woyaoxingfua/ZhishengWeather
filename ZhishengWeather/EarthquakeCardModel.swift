@@ -73,7 +73,13 @@ final class EarthquakeCardModel {
     /// ⚠️ **必须有超时兜底**（与 `FloodCardModel` 同款纪律）：取数卡住时
     /// 一直转圈，用户看到的就是「转圈卡死」——那是最容易被当成
     /// 「功能正常只是慢」的失败态。
-    static let loadTimeout: TimeInterval = 12
+    /// 🔴🔴 **为什么 25 秒**（2026-10-08 改，实测定位）：
+    /// 原本 12 秒，而主屏**同 id 的多个 `.task` 会串行排队** → 排在后面的链路
+    /// 等十几秒才轮到 → 12 秒阈值被打爆 → 用户频繁看到「加载超时」。
+    /// → 已把四条链路**合并成一个 `.task` + `async let` 并发**（治本）；
+    /// 本阈值上调到 25 秒是**兜底**（承弱网 / 限流 / 冷启动 DNS），不是治本。
+    /// ⚠️ 别再用「调大超时」掩盖排队问题 —— 那会让真慢的请求更难被发现。
+    static let loadTimeout: TimeInterval = 25
 
     /// 本次加载是否已超时。
     private(set) var hasTimedOut: Bool = false

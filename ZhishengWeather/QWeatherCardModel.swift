@@ -71,7 +71,10 @@ final class QWeatherCardModel {
     // MARK: - 超时
 
     /// 取数超时阈值（**秒**）。
-    static let loadTimeout: TimeInterval = 12
+    /// 🔴 **25 秒**（2026-10-08 改）：原 12 秒在主屏多 `.task` 串行排队下被误爆。
+    /// 排队问题已由「合并成单 `.task` + `async let` 并发」治本；
+    /// 此值上调仅作弱网兜底。同 `EarthquakeCardModel` 注释。
+    static let loadTimeout: TimeInterval = 25
 
     // MARK: - 依赖
 

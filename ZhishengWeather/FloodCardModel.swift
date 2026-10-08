@@ -72,7 +72,10 @@ final class FloodCardModel {
     /// ⚠️ **必须有超时兜底**（与 `RadarCardModel` 同款纪律）：取数卡住时
     /// 一直转圈，用户看到的就是「转圈卡死」——那是最容易被当成
     /// 「功能正常只是慢」的失败态。
-    static let loadTimeout: TimeInterval = 12
+    /// 🔴 **25 秒**（2026-10-08 改）：原 12秒在主屏多 `.task` 串行排队下被误爆。
+    /// 排队问题已由「合并成单 `.task` + `async let` 并发」治本；
+    /// 此值上调仅作弱网兜底。同 `EarthquakeCardModel` 注释。
+    static let loadTimeout: TimeInterval = 25
 
     /// 本次加载是否已超时。
     private(set) var hasTimedOut: Bool = false

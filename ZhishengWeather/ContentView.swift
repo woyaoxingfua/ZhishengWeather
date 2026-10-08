@@ -176,61 +176,48 @@ struct ContentView: View {
                 }
                 await attributionCoordinator.refresh(for: city, primarySolar: primary, now: Date())
             }
-            // 降水雷达（第四链路）：随城市切换加载，覆盖探测 + 元数据并发。
-            // ⚠️ 坐标**复用既有真源**（`directory.selectedCity`；"当前位置"项用
-            // VM 已解析的 `location` 覆盖，与 `WeatherViewModel` 自身取
-            // latitude/longitude 的口径逐字一致）——**不新建第二套城市来源**。
+// 🔴🔴 降水雷达 / 河道流量 / 地震 / 和风：**合并成唯一一个 `.task`**，
+            // 内部用 `async let` **并发**发出。
+            //
+            // ⚠️⚠️ **为什么必须合并**（本轮实测定位的「超时误报」根因）：
+            // 这四条链路原本各自挂一个 `.task(id: 选中城市 id)`。
+            // **SwiftUI 对相同 `id` 的多个 `.task` 不并发执行 —— 它们排队串行**。
+            // 于是切城市时：雷达（含覆盖探测）→ 河道 → 地震 → 和风 依次跑，
+            // 排在后面的链路等十几秒才轮到 → 各自 12 秒的 `loadTimeout`
+            // 被打爆 → 用户看到「加载超时」—— **而那不是网络慢，是排队**。
+            //
+            // 🔴 **这个 bug 的性质**：它把「架构缺陷」伪装成「网络问题」，
+            // 靠调大超时只能**掩盖**症状（并让真慢的请求更难被发现）。
+            // 正解是消除串行排队。
+            //
+            // 📌 并发的代价（诚实说明）：同一时刻并发 4 个请求，
+            // 对弱网 / 限流场景**更不友好**。故：
+            // · 坐标在**并发发起前一次性解析**（不各算一遍）；
+            // · 任一链路失败**不影响**其它链路（各自 model 内部独立收敛状态）；
+            // · 保留「未配置凭据 → 如实空态」（和风不做静默换源）；
+            // · flood / 地震 / 和风**均无坐标可用性门禁**
+            //   （实测 flood 内陆有值、地震内陆常为 0 条但那是真实结果）。
             .task(id: viewModel.directory.selectedCity?.id) {
                 guard let city = viewModel.directory.selectedCity else { return }
+                // ⚠️ 坐标**复用既有真源** `viewModel.resolvedCoordinateForRadar`
+                //（"当前位置"项已由 VM 用 location 覆盖）——
+                // **绝不新建第二套城市来源**，否则两卡会出现口径分歧。
                 let resolved = viewModel.resolvedCoordinateForRadar
-                await radarModel.load(cityID: city.id,
-                                      latitude: resolved.latitude,
-                                      longitude: resolved.longitude)
-            }
-            // 河道流量（第五源 Open-Meteo Flood）：随城市切换加载。
-            //
-            // ⚠️ **挂在与雷达同一个 `.task(id:)` 触发族下**（同一个
-            // `id` = 选中城市 id），**不新开刷新生命周期**（硬约束⑦）。
-            // 坐标同样取`viewModel.resolvedCoordinateForRadar` —— 与雷达卡
-            // **逐字同一个真源**，故两卡绝不会出现"一个按城市、一个按定位"的分歧。
-            //
-            // ⚠️ flood **无坐标判据**（实测内陆城市照样有值：北京 39.9,116.4
-            // → `[5.07, 5.05, ...]`），所以这里**不套任何"是否沿海/内陆"的门禁**。
-            .task(id: viewModel.directory.selectedCity?.id) {
-                guard viewModel.directory.selectedCity != nil else { return }
-                let resolved = viewModel.resolvedCoordinateForRadar
-                await floodModel.load(latitude: resolved.latitude,
-                                      longitude: resolved.longitude)
-            }
-            // 地震（第十源 USGS）：随城市切换加载。
-            //
-            // ⚠️ **挂在与雷达同一个 `.task(id:)` 触发族下**（同一个
-            // `id` = 选中城市 id），**不新开刷新生命周期**（硬约束⑦）。
-            // 坐标同样取 `viewModel.resolvedCoordinateForRadar` —— 与雷达 /
-            // 洪水卡**逐字同一个真源**。
-            //
-            // ⚠️ 地震**无坐标可用性判据**（实测北京 300km/30天/M2.5+ 就是 0 条，
-            // 那是**真的没地震**）→ 这里**不套任何门禁**，也不对 0 条做特殊处理：
-            // 「附近没有达到口径的地震」由卡内 `.none` 态如实呈现。
-            .task(id: viewModel.directory.selectedCity?.id) {
-                guard viewModel.directory.selectedCity != nil else { return }
-                let resolved = viewModel.resolvedCoordinateForRadar
-                await earthquakeModel.load(latitude: resolved.latitude,
-                                           longitude: resolved.longitude)
-            }
-            // 和风天气（第九源 QWeather · 需 Key）：随城市切换加载。
-            //
-            // ⚠️ 挂在与雷达同一个 `.task(id:)` 触发族下（同 id = 选中城市 id），
-            // **不新开刷新生命周期**（硬约束⑦）。
-            //
-            // 🔴 **未配置凭据时会抛 `dataMissing`** → 卡片显示
-            // 「未配置 API 凭据」。这是**如实空态**，不是故障 ——
-            // **绝不**为此静默换源、或拿别的源的数据冒充和风。
-            .task(id: viewModel.directory.selectedCity?.id) {
-                guard viewModel.directory.selectedCity != nil else { return }
-                let resolved = viewModel.resolvedCoordinateForRadar
-                await qWeatherModel.load(latitude: resolved.latitude,
-                                         longitude: resolved.longitude)
+                let latitude = resolved.latitude
+                let longitude = resolved.longitude
+
+                // 四条链路**并发**（不是串行）：`async let` 保证同时发起，
+                // 最后一起 await —— 任何一条都不是另三条的**前置阻塞**。
+                async let radar: Void = radarModel.load(cityID: city.id,
+                                                          latitude: latitude,
+                                                          longitude: longitude)
+                async let flood: Void = floodModel.load(latitude: latitude,
+                                                          longitude: longitude)
+                async let earthquake: Void = earthquakeModel.load(latitude: latitude,
+                                                                     longitude: longitude)
+                async let qWeather: Void = qWeatherModel.load(latitude: latitude,
+                                                               longitude: longitude)
+                _ = await (radar, flood, earthquake, qWeather)
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
             .navigationDestination(for: CityRoute.self) { route in
