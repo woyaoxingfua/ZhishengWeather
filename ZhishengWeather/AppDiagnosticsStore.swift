@@ -347,7 +347,7 @@ final class AppDiagnosticsStore {
         let message: String
         let succeeded: Bool
         do {
-            let configurations = try await WidgetCenter.shared.currentConfigurations()
+            let configurations = try await Self.loadCurrentWidgetConfigurations()
             succeeded = true
             if configurations.isEmpty {
                 // 空数组 ≠ 失败：它意味着「系统当前没有登记任何本App 的小组件实例」，
@@ -358,10 +358,12 @@ final class AppDiagnosticsStore {
                 若你确实在桌面上看到小组件卡片，说明系统侧登记与桌面显示不一致。
                 """
             } else {
-                // ⚠️ 不写死返回值的类型名：Apple 文档在不同版本里把这个元素类型
-                // 分别写成 `WidgetInfo` / `WidgetConfiguration`，故此处只靠类型推断
-                // （`let configurations = try await ...`），**不出现任何字面类型名** ——
-                // 写死一个名字就可能在某个 SDK 上编译不过。
+                // ⚠️ 元素类型名在此处**不出现**：靠类型推断（`configurations`）。
+                // 【更正 2026-10-08】此前的注释说「Apple 文档把这个元素类型分别写成
+                // `WidgetInfo` / `WidgetConfiguration`」—— 逐页核对官方文档后更正：
+                // `WidgetCenter` 页明确写的是 `struct WidgetInfo`（含 `configuration`
+                // / `family` / `kind` 三个字段），文档没有第二种写法。
+                // 保留不写死类型名只是**减少编译面**的工程选择，不是因为文档有歧义。
                 let lines = configurations
                     .map { conf in
                         "kind=\(conf.kind) family=\(Self.familyName(conf.family))"
@@ -381,9 +383,35 @@ final class AppDiagnosticsStore {
         }
         store.record(source: .widgetSystemProbe,
                      succeeded: succeeded,
-                     target: "WidgetCenter.currentConfigurations",
+                     target: "WidgetCenter.getCurrentConfigurations",
                      message: message,
                      error: succeeded ? nil : WidgetProbeError.queryFailed)
+    }
+
+    /// 桥接 `WidgetCenter.getCurrentConfigurations(_:)`（**iOS 14+** 的完成回调版）到 async。
+    ///
+    /// ── 为什么必须绕这一层（这是本方法存在的唯一理由）─────────────────────
+    /// 直觉上该写 `WidgetCenter.shared.currentConfigurations()` —— Apple 文档里
+    /// 确实有这个 async 方法，但它的可用性是 **iOS 18.0+**（同页标注
+    /// iOS 18.0+ / iPadOS 18.0+ / macOS 15.0+ / watchOS 11.0+）。
+    /// 而本工程 `IPHONEOS_DEPLOYMENT_TARGET = 17.0`（`project.yml`）→
+    /// 直接调用它会在 CI 编译期失败：
+    /// `value of type 'WidgetCenter' has no member 'currentConfigurations'`。
+    ///
+    /// **可用性门槛不够时编译器报的是「无此成员」，不是「版本太新」**，
+    /// 很容易被误判成「名字写错了」而去改名字 —— 改名字只会更错。
+    ///
+    /// 结论（本项目第三次同类事故，前两次是 `MKTileOverlay.loadingPolicy`
+    /// 与 `UnkeyedDecodingContainer.decode(_:at:)`）：
+    /// **API 的存在性与归属版本只能查官方文档，不能靠推理。**
+    ///
+    /// - Returns: 系统当前登记的本 App 小组件实例；失败时抛出底层错误。
+    private static func loadCurrentWidgetConfigurations() async throws -> [WidgetInfo] {
+        try await withCheckedThrowingContinuation { continuation in
+            WidgetCenter.shared.getCurrentConfigurations { result in
+                continuation.resume(with: result)
+            }
+        }
     }
 
     /// 探针失败时的占位错误。
