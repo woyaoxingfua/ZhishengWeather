@@ -553,7 +553,49 @@ final class QWeatherCityLookupTests: XCTestCase {
                            TimeZone.current.identifier,
                            "非法 tz → 必须回退设备当前时区（既有单一真源），"
                            + "**绝不**硬编码固定偏移")
+            // 🔴🔴 同一判据，**走模型自己的入口**再验一次。
+            // ⚠️ 为什么必须多这一条：`resolvedTimeZone` 才是 **UI 实际会调用的
+            //   那一个**（上面那条调的是 `WeatherTimeFormatter`，绕过了模型）。
+            //   若模型里这个属性写错（比如误写成 `.gmt` 或硬编码偏移），
+            //   上面那条**照样绿** —— 测的不是被测物。
+            //   这正是本仓P-18 的形态：断言没落在真实消费路径上。
+            XCTAssertEqual(place.resolvedTimeZone.identifier,
+                           TimeZone.current.identifier,
+                           "🔴 `resolvedTimeZone`（UI 的真实入口）也必须回退设备时区")
         }
+    }
+
+    /// 🔴 `resolvedTimeZone` 在**合法** `tz` 上必须解析成正确时区。
+    ///
+    /// ⚠️ 与上一条成对：上一条钉「非法 → 回退」，这条钉「合法 → **不**回退」。
+    ///   缺了这条，一个「无论什么输入都返回 `.current`」的退化实现
+    ///   也能通过上一条 —— 那会让异地城市的时区**静默退化成设备时区**，
+    ///   表现为「北京的城市显示了 UTC 时刻」，**没有任何报错**。
+    func testResolvedTimeZoneUsesUpstreamIdentifierWhenLegal() throws {
+        let decoded = try ResponseDecoding.decode(
+            QWeatherCityResponse.self, from: Data(Self.lookupJSON.utf8))
+        let place = try XCTUnwrap(QWeatherMapper.mapCityLookup(decoded).mostGranular)
+
+        XCTAssertEqual(place.resolvedTimeZone.identifier, "Asia/Shanghai",
+                       "🔴 合法 tz 必须**真的生效** —— 否则异地城市会静默用设备时区"
+                       + "渲染时刻（表现为「北京显示 UTC」，无任何报错）")
+    }
+
+    /// 🔴 `resolvedTimeZone` 必须是**纯派生**：与既有单一真源逐字一致。
+    ///
+    /// ⚠️ 这条钉住「模型没有另写一套时区解析」——
+    ///   若有人在 `QWeatherResolvedPlace` 里手写一份 `TimeZone(identifier:)`
+    ///   之外的回退逻辑（例如「非法就当 GMT+8」），这条会红。
+    func testResolvedTimeZoneIsDerivedFromTheSingleSourceOfTruth() throws {
+        let decoded = try ResponseDecoding.decode(
+            QWeatherCityResponse.self, from: Data(Self.lookupJSON.utf8))
+        let place = try XCTUnwrap(QWeatherMapper.mapCityLookup(decoded).mostGranular)
+
+        XCTAssertEqual(place.resolvedTimeZone.identifier,
+                       WeatherTimeFormatter.resolveTimeZone(
+                        identifier: place.timeZoneIdentifier).identifier,
+                       "🔴 `resolvedTimeZone` 必须**委托**既有单一真源，"
+                       + "绝不另写一套回退逻辑（本仓已吃过「各自发明回退」导致漂移的亏）")
     }
 
     /// 合法 `tz` → 保留原串，且能经既有裁定解析成正确时区。
