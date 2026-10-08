@@ -416,11 +416,15 @@ final class QWeatherHourlyTests: XCTestCase {
         XCTAssertEqual(pairs["lang"], "zh")
     }
 
-    /// 默认 `hours` 逐字是 **24**（产品取舍，官方上限是 360）。
+    /// 默认 `hours` 逐字是 **24**（产品取舍，官方上限是 240）。
     func testDefaultHoursIsTwentyFour() {
         XCTAssertEqual(QWeatherEndpoint.defaultHours, 24)
-        XCTAssertEqual(QWeatherEndpoint.hoursRange.upperBound, 360,
-                       "官方文档：`hours` 上限 360")
+        // 🔴🔴 2026-10-08 **更新前提 + 纠正断言值**：官方文档逐字是 `1-240`
+        //   （本轮重新查 dev.qweather.com 核实），此前此处断言 `360` 是错的，
+        //   且**测试反过来把错误钉死**。教训：「有测试」≠「事实正确」——
+        //   测试只能钉住当时写下的值，钉不住值本身对不对。
+        XCTAssertEqual(QWeatherEndpoint.hoursRange.upperBound, 240,
+                       "官方文档逐字：`hours` 支持 1-240 小时")
     }
 
     /// 🔴 `hours` 越界 → **URL 为 nil**，**绝不**静默改成 24。
@@ -434,13 +438,15 @@ final class QWeatherHourlyTests: XCTestCase {
                                                  latitude: 39.9, longitude: 116.4, hours: -1),
                      "负数越界 → nil")
         XCTAssertNil(QWeatherEndpoint.hourlyURL(apiHost: "h.qweatherapi.com",
-                                                 latitude: 39.9, longitude: 116.4, hours: 361),
-                     "361 越过官方上限 360 → nil")
-        // 边界值必须**放行**（1 与 360 都合法）。
+                                                 latitude: 39.9, longitude: 116.4, hours: 241),
+                     "241 越过官方上限 240 → nil")
+        // 边界值必须**放行**（1 与 240 都合法）。
+        // ⚠️ 旧版本这里断言的是 1 与 360 —— 360 按官方文档本就非法，
+        //   断言 `NotNil` 会把「非法值被放行」也一起钉死。
         XCTAssertNotNil(QWeatherEndpoint.hourlyURL(apiHost: "h.qweatherapi.com",
                                                     latitude: 39.9, longitude: 116.4, hours: 1))
         XCTAssertNotNil(QWeatherEndpoint.hourlyURL(apiHost: "h.qweatherapi.com",
-                                                    latitude: 39.9, longitude: 116.4, hours: 360))
+                                                    latitude: 39.9, longitude: 116.4, hours: 240))
     }
 
     /// Host 规范化沿用逐日那套（容忍带 `https://` / 带尾斜杠的粘贴）。

@@ -67,6 +67,22 @@ struct QWeatherCredentials: Equatable, Sendable {
     /// 项目 ID（JWT Payload 的 `sub`）。
     let projectID: String
 
+    /// 开发者 ID（JWT Payload 的 `iss`）。
+    ///
+    /// 🔴 **2026-10-08 新增。此前本实现完全缺失 `iss`。**
+    ///   依据：和风官方 iOS SDK 的 `JWTGenerator` 签名（逐字读自
+    ///   `QWeatherSDK.swiftinterface:1348`）：
+    ///   `public init(privateKey: String, sub: String, kid: String, iss: String)`
+    ///   —— `iss` 是**必需参数且无默认值**。
+    ///
+    /// ⚠️ **取值未知 → 故为可选**：主理人尚未提供开发者 ID，
+    ///   我**不编**这个值（编值= 编造事实，属P-24 同类错误）。
+    ///   缺失时 payload **不带** `iss`（保持改动前的行为），
+    ///   待拿到真实值后填入即可。
+    ///   🔴 **`iss` 是否就是 404 的成因：未确认**—— 见记忆「和风凭据实测失效」。
+    ///   本仓实测「坏 token 请求 v1 也返回 404 而非 401」，指向路由层而非认证层。
+    let developerID: String?
+
     /// 凭据 ID（JWT Header 的 `kid`）。
     ///
     /// ⚠️ **必须是「JSON Web Token」类型凭据的 ID**——
@@ -79,6 +95,10 @@ struct QWeatherCredentials: Equatable, Sendable {
     let privateKeyPEM: String
 
     /// 四个字段是否齐备（**任一为空/纯空白 → false**）。
+    ///
+    /// ⚠️ `developerID` **不参与**判定：它当前是可选字段，
+    ///   缺失时 payload 不带 `iss`（保持改动前行为），
+    ///   故**不填也应视为凭据完整**，否则会把已有可用凭据判成不完整。
     var isComplete: Bool {
         !apiHost.isBlank && !projectID.isBlank
             && !credentialID.isBlank && !privateKeyPEM.isBlank
@@ -185,7 +205,13 @@ actor QWeatherTokenSigner: QWeatherTokenSigning {
         let header = #"{"alg":"EdDSA","kid":"\#(credentials.credentialID)"}"#
         let issuedAt = Int(now.addingTimeInterval(-Self.issuedAtBackdateSeconds).timeIntervalSince1970)
         let expires = Int(now.addingTimeInterval(Self.validitySeconds).timeIntervalSince1970)
-        let payload = #"{"sub":"\#(credentials.projectID)","iat":\#(issuedAt),"exp":\#(expires)}"#
+        // 🔴 `iss`（开发者 ID）**仅在有值时写入** —— 取值未知（主理人未提供），
+        //   不编造（编值= 编造事实）。官方 SDK 的 `JWTGenerator` 要求 `iss`
+        //   必填（`QWeatherSDK.swiftinterface:1348`），但本项目当前仍走手写签名。
+        let issField = credentials.developerID?
+            .flatMap { $0.isBlank ? nil : $0 }
+            .map { #","iss":"\#($0)""# } ?? ""
+        let payload = #"{"sub":"\#(credentials.projectID)"\#(issField),"iat":\#(issuedAt),"exp":\#(expires)}"#
 
         let signingInput = "\(base64URL(Data(header.utf8))).\(base64URL(Data(payload.utf8)))"
         let signature = try ed25519Signature(of: Data(signingInput.utf8),

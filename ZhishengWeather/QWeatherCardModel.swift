@@ -126,7 +126,7 @@ final class QWeatherCardModel {
     ///   - latitude: 选中城市纬度（WGS84，**由调用方从既有真源取**）。
     ///   - longitude: 选中城市经度（WGS84）。
     ///   - days: 请求逐日天数（官方 1–10；越界由 Endpoint 收敛为 `badURL`）。
-    ///   - hours: 请求逐时小时数（官方 1–360；越界收敛为 `badURL`）。
+    ///   - hours: 请求逐时小时数（官方 1–240；越界收敛为 `badURL`）。
     ///   - now: 本次加载的**起点**（**注入**，单测可固定；超时判定用它）。
     func load(latitude: Double,
               longitude: Double,
