@@ -208,10 +208,20 @@ actor QWeatherTokenSigner: QWeatherTokenSigning {
         // 🔴 `iss`（开发者 ID）**仅在有值时写入** —— 取值未知（主理人未提供），
         //   不编造（编值= 编造事实）。官方 SDK 的 `JWTGenerator` 要求 `iss`
         //   必填（`QWeatherSDK.swiftinterface:1348`），但本项目当前仍走手写签名。
-        let issField = credentials.developerID?
-            .flatMap { $0.isBlank ? nil : $0 }
-            .map { #","iss":"\#($0)""# } ?? ""
-        let payload = #"{"sub":"\#(credentials.projectID)"\#(issField),"iat":\#(issuedAt),"exp":\#(expires)}"#
+        //
+        // ⚠️ 刻意用最直白的 `if let` 而非 `flatMap` 链
+        //   （CI run#37774356973 实测两处编译错）：`Optional.flatMap` 的闭包
+        //   收到的是**解包后的值**，`$0.isBlank` 会把字符当字符串用；且
+        //   `flatMap` 后接 `.map { } ?? ""` 的类型推断会失败
+        //   （`cannot be applied to operands of type '[String]?' and 'String'`）。
+        //   → 可读性更好的 `if let` 在此**零成本**。
+        let issFragment: String
+        if let raw = credentials.developerID, !raw.isBlank {
+            issFragment = #","iss":"\#(raw)""#
+        } else {
+            issFragment = ""
+        }
+        let payload = #"{"sub":"\#(credentials.projectID)"\#(issFragment),"iat":\#(issuedAt),"exp":\#(expires)}"#
 
         let signingInput = "\(base64URL(Data(header.utf8))).\(base64URL(Data(payload.utf8)))"
         let signature = try ed25519Signature(of: Data(signingInput.utf8),
