@@ -60,12 +60,18 @@ actor QWeatherService: QWeatherProviding {
     ///   - session: 可注入的 `URLSession`（测试传带 `URLProtocol` 桩的配置）。
     ///   - credentials: **由 App 侧注入**的凭据；`nil` = 未配置（每次调用抛错）。
     ///   - signer: JWT 签名器（测试可注入固定 token 的桩）。
+    /// - Parameter now: 取当前时刻的闭包（Core禁 `Date()`，故**必须注入**）。
     init(session: URLSession = .shared,
          credentials: QWeatherCredentials? = nil,
-         signer: any QWeatherTokenSigning = QWeatherTokenSigner()) {
+         signer: (any QWeatherTokenSigning)? = nil,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.session = session
         self.credentials = credentials
-        self.signer = signer
+        // ⚠️ `QWeatherTokenSigner.init(now:)` **没有默认值**（Core 内禁 `Date()`，
+        // 门禁 SC-11 会扫），故此处**显式构造**并把时间闭包透传下去。
+        // `signer` 给了桩就用桩，没给就建真的。
+        self.signer = signer ?? QWeatherTokenSigner(now: now)
+    }
     }
 
     /// 取回逐日预报。

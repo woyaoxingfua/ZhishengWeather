@@ -180,7 +180,14 @@ enum EarthquakeMagnitudeLevel: Equatable, Sendable, CaseIterable {
 /// 实测样本 `alert = null`（**大多数事件没有 PAGER 产品** —— PAGER 只对
 /// 可能有重大影响的地震触发）→ `nil` 是**常态**，不是缺测。
 /// 另实测存在 `felt = null`，同样是「没人上报有感」的常态。
-struct EarthquakePagerAlert: RawRepresentable, Equatable, Hashable, Sendable {
+/// 🔴 **`RawRepresentable` + `Codable` 是必需的**（2026-10-08 CI 实测）：
+/// 外层 `EarthquakeEvent` 声明了 `Codable`，而它含 `pagerAlert: EarthquakePagerAlert?`
+/// → 本类型**必须**也 `Codable`，否则**整个外层的 Codable 合成失败**
+/// （CI 报 `type 'EarthquakeEvent' does not conform to protocol 'Decodable'`）。
+/// ⚠️ 因已有手写 `init(rawValue:)`（**不返回 nil**，故**不**用 `RawRepresentable`
+/// 的默认 `Codable` 合成——那套合成依赖 `init?(rawValue:)`），
+/// 这里**手写 `Codable`**，语义与构造器保持一致：**任何字符串都收**。
+struct EarthquakePagerAlert: RawRepresentable, Codable, Equatable, Hashable, Sendable {
 
     /// 上游原值（逐字保留，如 `"yellow"`）。
     let rawValue: String
@@ -188,6 +195,19 @@ struct EarthquakePagerAlert: RawRepresentable, Equatable, Hashable, Sendable {
     /// 构造（实测档位以外的取值**照样收**，不返回 nil）。
     init(rawValue: String) {
         self.rawValue = rawValue
+    }
+
+    /// 解码：**任何**字符串都收（不因未知档位失败 ——
+    /// 警报等级被静默吞掉是信息丢失）。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.rawValue = try container.decode(String())
+    }
+
+    /// 编码：写回上游原值（往返无损）。
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 
     // 实测四档（构造常量而非 enum case，便于将来上游加档而不改本文件）。

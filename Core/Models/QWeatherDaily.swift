@@ -186,7 +186,12 @@ struct QWeatherDayPart: Codable, Equatable, Sendable {
     var part: Part?
 
     /// 分块身份（**本地派生**，非上游字段）。
-    enum Part: String, Equatable, Sendable {
+    /// 🔴 **`Codable` 是必需的**（2026-10-08 CI 实测）：
+/// 外层 `QWeatherDayPart` 声明了 `Codable`，而它含 `part: Part?` 字段
+/// → `Part` **必须**也`Codable`，否则**整个外层的 Codable 合成失败**
+/// （CI 报 `type 'QWeatherDayPart' does not conform to protocol 'Decodable'`）。
+/// 本仓P-18纪律：字段类型逐个可解码 → 外层才可解码。
+enum Part: String, Codable, Equatable, Sendable {
         /// 白天块（响应键 `daytime`）。
         case daytime
         /// 夜晚块（响应键 `nighttime`）。

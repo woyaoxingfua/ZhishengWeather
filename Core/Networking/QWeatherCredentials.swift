@@ -204,23 +204,115 @@ actor QWeatherTokenSigner: QWeatherTokenSigning {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    /// PEM → `Curve25519.Signing.PrivateKey` → 签名。
-    private static func ed25519Signature(of data: Data,
-                                         privateKeyPEM: String) throws -> Data {
+    /// PEM → PKCS#8 DER → **32 字节 Ed25519 seed** → 签名。
+    ///
+    /// 🔴🔴 **为什么必须自己解 PKCS#8（踩过的坑，务必读完）**──────────────
+    /// **CryptoKit 的 `Curve25519.Signing.PrivateKey` 没有 `pemRepresentation:`**
+    /// —— 那是 **NIST 曲线**（`P256` / `P384` / `P521`）才有的 API。
+    /// Curve25519 **只支持 `rawRepresentation:`**（32 字节 seed）。
+    /// → 若照直觉写 `init(pemRepresentation:)` 会编译失败
+    ///   （2026-10-08 CI 实测：`argument passed to call that takes no arguments`）。
+    /// **这就是 P-24「编造 API」的又一次实例**：不能靠"看起来应该有"来写。
+    ///
+    /// ── PKCS#8 结构（**openssl 3.5.7 实测**，48 字节）────────────────────
+    /// ```text
+    /// 30 2e 02 01 00 30 05 06 03 2b 65 70 04 22 04 20 │ 前 16 字节（固定头）
+    /// dd 0b af 7c ... 88 32                              │ 后 32 字节 = Ed25519 seed
+    /// ```
+    /// 末 4 字节 `04 20` 是「后续 32 字节是 OCTET STRING」的长度标记。
+    /// → 故实现：**校验长度 + 校验那 4 字节标记**，
+    /// 然后取**末 32 字节**作`rawRepresentation`。
+    /// 🔴 **绝不用"直接取末 32 字节"而不校验标记** —— 那样一个
+    /// **P-256 私钥**（DER 长度完全不同）会被静默截成错误的 seed，
+    /// 表现为「签名算出来但服务端 401」，极难排查。
+    ///
+    /// - Throws: PEM 格式错/ 不是 Ed25519 PKCS#8 / DER 长度不对 → `dataMissing`。
+    static func ed25519Signature(of data: Data,
+                                 privateKeyPEM: String) throws -> Data {
+        let seed = try ed25519Seed(fromPKCS8PEM: privateKeyPEM)
         let key: Curve25519.Signing.PrivateKey
         do {
-            key = try Curve25519.Signing.PrivateKey(
-                pemRepresentation: privateKeyPEM)
+            // ✅ 真实 API：Curve25519 只有 `rawRepresentation:`。
+            key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
         } catch {
-            //🔴 如实归因「私钥无法解析」——用户填了错的东西就明说，
-            // **不**含糊成网络错误（否则用户会去查网络，而问题在凭据）。
             throw WeatherError.dataMissing("Ed25519 私钥无法解析："
                 + error.localizedDescription)
         }
-        // `signature(for:)` 对 Ed25519 是**纯确定性**签名（RFC 8032），
-        // 故无需 `isValidSignature` 校验——那是给验证方用的。
+        // `signature(for:)` 对 Ed25519 是**确定性**签名（RFC 8032）。
         return try key.signature(for: data)
     }
+
+    /// PKCS#8 PEM → 32 字节 Ed25519 seed（**纯函数**，便于单测）。
+    ///
+    /// - Parameter pem: 含 `-----BEGIN PRIVATE KEY-----` / `END` 的完整 PEM。
+    /// - Returns: 32 字节 seed。
+    /// - Throws: 结构不符 → `WeatherError.dataMissing`（如实说明是哪一步不对）。
+    static func ed25519Seed(fromPKCS8PEM pem: String) throws -> Data {
+        let beginMarker = "-----BEGIN PRIVATE KEY-----"
+        let endMarker = "-----END PRIVATE KEY-----"
+        guard let beginRange = pem.range(of: beginMarker),
+              let endRange = pem.range(of: endMarker),
+              beginRange.upperBound <= endRange.lowerBound else {
+            throw WeatherError.dataMissing(
+                "私钥格式错：需要 PKCS#8 PEM（以 \(beginMarker) 开头）")
+        }
+
+        // 剥头尾后取中间的 base64（**去掉所有空白**，用户粘贴常带换行）。
+        let base64Body = String(pem[beginRange.upperBound..<endRange.lowerBound])
+            .filter { !$0.isWhitespace }
+        guard !base64Body.isEmpty,
+              let der = Data(base64Encoded: base64Body) else {
+            throw WeatherError.dataMissing("私钥 base64 解码失败（是否粘贴完整？）")
+        }
+
+        // 🔴 Ed25519 的 PKCS#8 是**固定 48 字节**（openssl 3.5.7 实测逐字节）：
+        // ```
+        // 偏移 0..15 : 30 2e 02 01 00 30 05 06 03 2b 65 70 04 22 04 20
+        // 偏移 16..47: dd 0b af 7c ... 88 32← Ed25519 seed（32 字节）
+        // ```
+        // 其中 `30 2e` = SEQUENCE(46 字节)、`06 03 2b 65 70` = OID 1.3.101.112
+        //（**Ed25519 的算法标识**）、`04 22` = OCTET STRING(34)、
+        // `04 20` = 内层 OCTET STRING(32)。
+        //
+        // ⚠️ **必须校验这 16 字节前缀**，不能只取「末 32 字节」——
+        //   否则一个 **P-256 私钥**（DER 长度与布局完全不同）会被静默截成
+        //   错误 seed，表现为「签名算得出来但服务端一律 401」，极难排查。
+        //   （这正是本函数存在的理由。）
+        guard der.count == expectedEd25519PKCS8Length else {
+            throw WeatherError.dataMissing(
+                "私钥不是 Ed25519 PKCS#8（DER 应 \(expectedEd25519PKCS8Length) 字节，"
+                + "实得 \(der.count) 字节）。请用 `openssl genpkey -algorithm ED25519` 生成。")
+        }
+        let prefix = der.prefix(ed25519PKCS8PrefixLength)
+        guard prefix.elementsEqual(expectedEd25519PKCS8Prefix) else {
+            throw WeatherError.dataMissing(
+                "私钥 DER 前缀不符（不是 Ed25519 算法标识 1.3.101.112）。")
+        }
+        return Data(der.suffix(ed25519SeedLength))
+    }
+
+    /// Ed25519 seed 长度（**字节**；RFC 8032 规定 32）。
+    static let ed25519SeedLength = 32
+
+    /// Ed25519 PKCS#8 的 DER **固定总长度**（**实测** = 16 前缀 + 32 seed）。
+    static let expectedEd25519PKCS8Length = 48
+
+    /// 固定前缀的长度（前 16 字节，见`ed25519Seed(fromPKCS8PEM:)` 的结构图）。
+    static let ed25519PKCS8PrefixLength = 16
+
+    /// Ed25519 PKCS#8 的**实测**固定前缀（openssl 3.5.7 逐字节dump）。
+    ///
+    /// ⚠️ 其中 `06 03 2b 65 70` 是 **OID 1.3.101.112 = id-Ed25519** ——
+    /// 这才是「确实 Ed25519」的判据；长度相同但 OID 不同（P-256 等）
+    /// 绝不能放行。
+    static let expectedEd25519PKCS8Prefix: [UInt8] = [
+        0x30, 0x2e,             // SEQUENCE，长 46
+        0x02, 0x01, 0x00,       // INTEGER version = 0
+        0x30, 0x05,             // SEQUENCE，长 5
+        0x06, 0x03, 0x2b, 0x65, 0x70,  // OID 1.3.101.112（Ed25519）
+        0x04, 0x22,             // OCTET STRING，长 34
+        0x04, 0x20              // OCTET STRING，长 32← 内层即 seed
+    ]
 }
 
 // MARK: - 私有小工具
