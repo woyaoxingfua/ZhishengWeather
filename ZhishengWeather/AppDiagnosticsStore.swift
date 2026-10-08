@@ -58,6 +58,17 @@ enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
     /// 它与Console 里的 timeline 日志互补，合起来才能定位问题层级。
     case widgetSystemProbe
 
+    /// 导航栈落盘 / 恢复（`NavigationPathStore` 的存盘与恢复结果）。
+    ///
+    /// ⚠️ **为什么值得单独记一条**：导航栈恢复失败**在屏幕上完全看不出来**
+    /// —— 它降级成空路径后，用户看到的就是一个「普普通通的首页」，与
+    /// 「本来就该在首页」在视觉上**没有任何区别**。若只打印日志，这个故障
+    /// 在用户侧就彻底消失了。故必须落盘，让设置页可读。
+    ///
+    /// ⚠️ 只记**失败**（`succeeded: false`）：恢复成功 / 本来就没有记录都是
+    /// 正常态，不需要占用「最近一次失败」的位置。
+    case navigationPathRestore
+
     /// 面向用户的来源名（设置页展示用）。
     var displayName: String {
         switch self {
@@ -71,6 +82,8 @@ enum AppDiagnosticSource: String, Codable, Sendable, CaseIterable {
             return "雷达纠偏探针"
         case .widgetSystemProbe:
             return "小组件系统探针"
+        case .navigationPathRestore:
+            return "导航栈恢复"
         }
     }
 }

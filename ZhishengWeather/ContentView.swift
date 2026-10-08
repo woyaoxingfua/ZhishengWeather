@@ -30,7 +30,25 @@ struct ContentView: View {
     let activityManager: WeatherActivityManager
 
     /// 编程式 push（AppRouter 触发跳转用）。
-    @State private var navigation: NavigationPath = NavigationPath()
+    ///
+    /// 🔴 **本轮修复：「切后台再打开回到首页」** ──────────────────────
+    /// 本字段原本无 initializer，每次视图实例创建都得到一个**空栈**。
+    /// 而 `@State` 挂在**视图实例**上：App 被切后台后若被系统回收、或视图
+    /// 因重建而重新创建，这份状态即丢失 → 用户回来看到的是首页，
+    /// 真实返回路径（设置页 / 城市管理页）消失。
+    ///
+    /// 现在初值由 `NavigationPathStore` 从 App 本地 `UserDefaults` 恢复。
+    /// ⚠️ 恢复放在**初值求值**（即视图初始化）而不是 `.onAppear`：
+    /// 本仓多处注释说明**刻意不用** `.onAppear`（它在视图每次出现时都会触发，
+    /// 语义上等价于「重复初始化」），且初值求值只发生一次，语义更准。
+    ///
+    /// ⚠️ 解码失败时 `NavigationPathStore` **已内部降级为空路径并如实上报**
+    /// （见该文件「.empty vs .unavailable」纪律），故此处拿到的一定是合法值，
+    /// 无需、也不允许在此再加一层 `try!` / `fatalError`。
+    @State private var navigation: NavigationPath = NavigationPathStore.shared.restore().path
+
+    /// 场景生命周期（用于「切后台时把导航栈落盘」）。
+    @Environment(\.scenePhase) private var scenePhase
 
     /// 来源标注协调器（接线点 (b)：拉辅助源 + 逐字段合并 + 写归属）。
     /// 由下方 `.task(id: 城市 id)` 驱动，复用既有刷新节拍，不引入第二刷新生命周期。
@@ -128,6 +146,24 @@ struct ContentView: View {
             }
             // 自定义顶部栏（F-B：城市名变按钮），隐藏系统导航条。
             .navigationBarHidden(true)
+            // 🔴 **切后台 / 非活跃时把导航栈落盘**（本轮「回到首页」修复的另一半）。
+            //
+            // 为什么是这两个 phase 而不是只挂 `.background`：`.inactive` 排在
+            // `.background` **之前**触发，是 App 失去前台资格的第一个信号
+            // （来电、App 切换器上滑都会经过它）。系统回收内存通常发生在
+            // App 已 inactive/background 之后 —— 只挂 `.background` 时，
+            // 从后台**一步跳到被回收**的机型上有丢失窗口；两个都挂上就没有。
+            //
+            // ⚠️ 判据是**显式白名单**（只列 `.background` / `.inactive` 两个），
+            // 不是「只要不是 `.active` 就存」：后者会把将来新增的 phase
+            // （如 iOS 18+ 的扩展状态）也顺手牵进来，白名单则不会静默扩大。
+            //
+            // ⚠️ 落盘**永不抛错**（`NavigationPathStore.save` 内部全在
+            // `do/catch` 内），故这里不需要、也不允许加 `try!` / `fatalError`。
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .background || newPhase == .inactive else { return }
+                NavigationPathStore.shared.save(navigation)
+            }
             // A1-7/A1-8：深链路由出口（zhisheng://refresh 等，与快捷方式共用 AppRouter）。
             // 挂在 body 层：state 任何分支（loading/empty/failed）都能接住深链。
             .onOpenURL { url in
@@ -326,10 +362,20 @@ struct ContentView: View {
     private var spotlightSignature: String {
         let cityIDs: String = viewModel.directory.cities.map { $0.id }.joined(separator: ",")
         let temperatures: String = viewModel.snapshotsByCity
-            .map { "\($0.key)=\(Int($0.value.temperature.rounded()))" }
+            .map { "\($0.key)=\(Self.signatureTemperature($0.value.temperature))" }
             .sorted()
             .joined(separator: ",")
         return "\(cityIDs)#\(temperatures)"
+    }
+
+    /// 索引签名里的温度片段：非有限/nil → `"--"`，否则整度文本。
+    ///
+    /// 🔴 v1.6：`temperature` 已可选，nil = 没测到。这里**必须**先挡掉 nil/非有限：
+    ///   `Int(Double.nan)` 在 Swift 里是**运行时 trap**（不是返回 0），
+    ///   写`?? 0` 则是把「没测到」谎报成 0℃。两者都不能要，故走静态纯函数收口。
+    private static func signatureTemperature(_ celsius: Double?) -> String {
+        guard let celsius, celsius.isFinite else { return "--" }
+        return "\(Int(celsius.rounded()))"
     }
 
     /// 把当前城市列表写入系统搜索索引。**失败只打印**：索引不是数据源，
@@ -734,9 +780,16 @@ if !CardVisibilityStore.isHidden(.radar) {
             VStack(alignment: .leading, spacing: 2) {
                 // F-B：城市名变为可点按钮（+ ⌄），push 城市管理页。
                 // 其余（日期、刷新按钮）零改动。
-                NavigationLink {
-                    CityListView(viewModel: viewModel)
-                } label: {
+                //
+                // 🔴 本轮修复：这里是**闭包式** `NavigationLink { CityListView }`，
+                // 而闭包式目的地**根本不进 `NavigationPath`** —— 它由 SwiftUI
+                // 内部单独持有，因此「切后台恢复」对它**完全无效**（这是本轮
+                // 排查中最容易漏掉的一点：栈存下来了，最常按的那个入口却不在栈里）。
+                // 改成**值式** `NavigationLink(value:)` 后：
+                //   · 目的地仍是同一个 `CityListView`（下方 `navigationDestination`
+                //     的 `.cities` 分支早就注册好了），**渲染结果逐字不变**；
+                //   · 但它从此进入 `NavigationPath` → 能被落盘与恢复。
+                NavigationLink(value: CityRoute.cities) {
                     HStack(spacing: 4) {
                         Text(snapshot.location.name)
                             .font(.system(size: Theme.FontSize.city, weight: .semibold))
@@ -787,7 +840,9 @@ if !CardVisibilityStore.isHidden(.radar) {
 
     private func heroSection(snapshot: WeatherSnapshot) -> some View {
         VStack(spacing: 12) {
-            Text("\(Int(snapshot.temperature.rounded()))°")
+            // 🔴 v1.6：温度可选。nil = 没测到 → 如实显示 `--°`，
+            //   **绝不**显示 `0°`（缺测 ≠ 零值，本仓铁律）。
+            Text(Self.heroTemperatureText(snapshot.temperature))
                 .font(.system(size: Theme.FontSize.temperature, weight: .bold))
                 .foregroundStyle(Theme.primaryText)
                 .lineLimit(1)
@@ -844,11 +899,15 @@ if !CardVisibilityStore.isHidden(.radar) {
     private func metricsGrid(snapshot: WeatherSnapshot) -> some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                   spacing: 12) {
+            // 🔴 v1.6：风速/风向/湿度已可选。三者任一为 nil → 整格显示 `--`
+            //   （风速与风向成对显示：缺任一都不给半截值，避免用户误读）。
+            //   绝不显示 `0.0 m/s` / `0%` 冒充（静风 0 与缺测必须严格区分）。
             MetricCell(icon: "wind",
-                       value: "\(String(format: "%.1f", UnitPreference.displayWindSpeed(ms: snapshot.windSpeed))) \(UnitPreference.windSpeedSymbol()) \(WindDirectionFormatter.text(from: snapshot.windDirection))",
+                       value: Self.windMetricText(speed: snapshot.windSpeed,
+                                                  degrees: snapshot.windDirection),
                        caption: "风速")
             MetricCell(icon: "humidity.fill",
-                       value: "\(snapshot.humidity)%",
+                       value: Self.humidityMetricText(snapshot.humidity),
                        caption: "湿度")
             // A1-1：气压格。hPa 保留 1 位小数；nil → "--"（AC-A1-3，绝不显示 0 冒充）。
             MetricCell(icon: "barometer",

@@ -185,7 +185,12 @@ final class AppRouter {
 
 /// NavigationPath 的值类型（ContentView navigationDestination 注册）。
 /// A3：settings 已指向真实设置页（D-A3 备案解除）。
-enum CityRoute: Hashable {
+///
+/// 🔴 **必须 `Codable`**（不只是 `Hashable`）：`NavigationPath` 落盘走的是
+/// `path.codable`，而 Apple 文档明确写着该属性在**任一元素不满足 `Codable`**
+/// 时返回 `nil` —— 元素类型只有 `Hashable` 时整条栈**存不下来**。
+/// 本枚举两个 case 均无关联值，合成 `Codable` 零成本。
+enum CityRoute: Hashable, Codable {
     case cities
     case settings
 }
