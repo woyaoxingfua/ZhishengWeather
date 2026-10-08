@@ -56,8 +56,15 @@ final class SourceUsageCountingGuardTests: XCTestCase {
         XCTAssertFalse(files.isEmpty, "未在 \(appDir) 找到任何 .swift 文件 —— 守卫退化为恒真")
 
         // 目录里没出现过的源码片段全文（用于跨行匹配调用点）。
-        let corpus = files
-            .map { (path: $0, text: try String(contentsOfFile: $0, encoding: .utf8)) }
+        //
+        // 🔴 `String(contentsOfFile:)` **会抛**，`map` 只在 `rethrows` 闭包里
+        // 才替我们转发错误 —— 此处是**普通 map 闭包**（非 rethrows），
+        // 故必须**逐元素显式 `try`**。
+        // 漏掉时报 `call can throw but is not marked with 'try'`
+        //（CI run#37770782331 实测，第 59行）。
+        let corpus = try files.map { path in
+            (path: path, text: try String(contentsOfFile: path, encoding: .utf8))
+        }
         let joined = corpus.map(\.text).joined(separator: "\n")
 
         for descriptor in SourceDirectory.all where descriptor.countsUsage {
@@ -95,7 +102,9 @@ let directCallSite = "recordSuccess(."
     func testNoSourceDeclaresNotCountedWhileHavingCallSites() throws {
         let appDir = Self.repositoryRoot() + "/ZhishengWeather"
         let files = try Self.swiftFiles(in: appDir)
-        let joined = files
+        // ⚠️ 同上：闭包内 `String(contentsOfFile:)` 会抛，
+        // 这里用 `try` 显式转发（外层方法已标 `throws`）。
+        let joined = try files
             .map { try String(contentsOfFile: $0, encoding: .utf8) }
             .joined(separator: "\n")
 
@@ -110,7 +119,12 @@ let directCallSite = "recordSuccess(."
     // MARK: - 2. 计数语义：成功 +1 / 失败不变
 
     /// 成功路径 `recordSuccess` → 用量 +1，且 `lastSuccessAt` 被推进。
-    func testRecordSuccessIncrementsUsageByExactlyOne() async {
+    ///
+    /// 🔴 本方法签名原本是 `async`（**漏了 `throws`**）而函数体里用了 `try` →
+    /// 编译器报「errors thrown from here are not handled」且**报错行指向函数体内**
+    /// （第 126 行那几处），不是签名行 —— 排查时容易误以为是别的问题。
+    /// （CI run#37770782331 实测）
+    func testRecordSuccessIncrementsUsageByExactlyOne() async throws {
         let (tracker, cleanup) = try Self.makeTracker()
         defer { cleanup() }
         let now = Date()
