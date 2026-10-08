@@ -65,6 +65,9 @@ struct SatelliteCard: View {
     /// 时刻渲染时区（D-4：选中城市时区；缺省设备时区）。
     var timeZone: TimeZone = .current
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.satellite)
+
     /// 云图画布高度（pt）。
     ///
     /// ⚠️ 实测帧恒为 **860×540**（`SatelliteFrameValidator` 文件头），
@@ -74,8 +77,17 @@ struct SatelliteCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            content
-            footer
+            // 折叠态：只保留标题行，云图 + 页脚不渲染。
+            //
+            // ⚠️ 取数**不**随折叠停止：`SatelliteCard` 的 `.task(id:)` 挂在
+            // 外层卡片上（不在 `content` 内），而「折叠 = 停止取数」是
+            // `CardVisibilityStore` 的**设计意图**、由 ContentView 侧统一
+            // 实施（不在本卡范围内）。此处只做**渲染层**折叠，不改取数行为
+            // —— 擅自改会让「折叠后展开看不到刚加载的图」，那是更坏的故障。
+            if !isCollapsed {
+                content
+                footer
+            }
         }
         .padding(12)
         .background(Theme.surface,
@@ -120,6 +132,17 @@ struct SatelliteCard: View {
                 set: { newValue in model.isEnabled = newValue }
             ))
             .tint(Theme.accent)
+            CardCollapseButton(card: .satellite, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.satellite)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

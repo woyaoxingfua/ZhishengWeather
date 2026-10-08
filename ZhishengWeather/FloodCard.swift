@@ -48,6 +48,9 @@ struct FloodCard: View {
     /// 日期渲染时区（D-4：选中城市时区；缺省设备时区）。
     var timeZone: TimeZone = .current
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.flood)
+
     /// 序列最多展示多少天（**实测端点 `forecast_days = 7`**）。
     ///
     /// ⚠️ 这里**按数据长度截取**，不写死"7 天"当契约：
@@ -61,8 +64,11 @@ struct FloodCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            content
-            footer
+            // 折叠态：只保留标题行，主体内容（列表 + 页脚）不渲染。
+            if !isCollapsed {
+                content
+                footer
+            }
         }
         .padding(12)
         .background(Theme.surface,
@@ -94,6 +100,17 @@ struct FloodCard: View {
                 ProgressView()
                     .scaleEffect(0.6)
             }
+            CardCollapseButton(card: .flood, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.flood)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

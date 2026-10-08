@@ -36,11 +36,17 @@ struct TyphoonCard: View {
     /// 当前年份（**注入**，视图不读 `Date()`；单测可固定）。
     var currentYear: Int
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.typhoon)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            yearPicker
-            content
+            // 折叠态：只保留标题行，年份选择器与四态内容全部不渲染。
+            if !isCollapsed {
+                yearPicker
+                content
+            }
         }
         .padding(12)
         .background(Theme.surface,
@@ -67,6 +73,17 @@ struct TyphoonCard: View {
                 ProgressView()
                     .scaleEffect(0.6)
             }
+            CardCollapseButton(card: .typhoon, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.typhoon)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

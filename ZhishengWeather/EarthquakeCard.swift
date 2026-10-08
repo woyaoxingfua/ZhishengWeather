@@ -55,6 +55,9 @@ struct EarthquakeCard: View {
     /// 日期渲染时区（D-4：选中城市时区；缺省设备时区）。
     var timeZone: TimeZone = .current
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.earthquake)
+
     /// 最多展示多少条（实测端点 `limit = 20`）。
     ///
     /// ⚠️ 按数据长度截取，**不写死 20 当契约** —— 端点改 `limit` 这里跟着变。
@@ -67,8 +70,11 @@ struct EarthquakeCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            content
-            footer
+            // 折叠态：只保留标题行，主体内容（列表 + 页脚）不渲染。
+            if !isCollapsed {
+                content
+                footer
+            }
         }
         .padding(12)
         .background(Theme.surface,
@@ -97,6 +103,17 @@ struct EarthquakeCard: View {
                 ProgressView()
                     .scaleEffect(0.6)
             }
+            CardCollapseButton(card: .earthquake, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.earthquake)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

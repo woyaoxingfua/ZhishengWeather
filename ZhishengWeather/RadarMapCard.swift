@@ -533,21 +533,31 @@ struct RadarMapCard: View {
     /// 回放选中帧（受控：由本视图的 scrubber 写入）。
     @State private var selectedIndex: Int?
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.radar)
+
     /// 地图高度（pt）。
     private let mapHeight: CGFloat = 220
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            mapArea
-            pixelShiftNote
-            if availability.allowsScrubbing, let timeline {
-                timelineBar(timeline)
+            // 折叠态：只保留标题行，地图与时间轴等主体内容不渲染。
+            //
+            // ⚠️ **降级四态的硬要求不受影响**：`RadarMapCard` 要求「四态都必须
+            // 渲染出可见内容、绝不允许空白页」。折叠是**用户主动**的操作
+            // （非降级），标题行仍在、按钮仍可点回展开，故不违反该要求。
+            if !isCollapsed {
+                mapArea
+                pixelShiftNote
+                if availability.allowsScrubbing, let timeline {
+                    timelineBar(timeline)
+                }
+                // `delayNote` 是 `@ViewBuilder -> some View`（内部自行判空并用
+                // TimelineView 更新），**不是** Optional —— 用 `if let` 解它会
+                // 让 `note` 变成 `some View`，而 `Text(_:)` 要的是 StringProtocol。
+                delayNote(timeline)
             }
-            // `delayNote` 是 `@ViewBuilder -> some View`（内部自行判空并用
-            // TimelineView 更新），**不是** Optional —— 用 `if let` 解它会
-            // 让 `note` 变成 `some View`，而 `Text(_:)` 要的是 StringProtocol。
-            delayNote(timeline)
         }
         .padding(12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
@@ -626,6 +636,17 @@ struct RadarMapCard: View {
                 .foregroundStyle(Theme.secondaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+            CardCollapseButton(card: .radar, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.radar)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

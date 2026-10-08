@@ -56,18 +56,24 @@ struct QWeatherCard: View {
     /// 日期渲染时区（D-4：选中城市时区；缺省设备时区）。
     var timeZone: TimeZone = .current
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.qWeather)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            content
-            // 🔴 逐时区块（**渲染在本卡内部**，不是独立卡片）。
-            //   它与逐日**共用同一个 `model`**，但状态是**独立的**
-            //   （`hourlyState` vs `state`）→ 「逐日成功 + 逐时 401」
-            //   会被如实分区显示，而不会被压成一句「和风天气取不到」。
-            //   ⚠️ **无条件渲染**：四态由 `model.hourlyState` 派生，
-            //   各自渲染（`.idle` / `.noData` / `.available` / `.unavailable`）。
-            QWeatherHourlyCard(model: model, timeZone: timeZone)
-            footer
+            // 折叠态：只保留标题行，逐日 + 逐时 + 页脚全部不渲染。
+            if !isCollapsed {
+                content
+                // 🔴 逐时区块（**渲染在本卡内部**，不是独立卡片）。
+                //   它与逐日**共用同一个 `model`**，但状态是**独立的**
+                //   （`hourlyState` vs `state`）→ 「逐日成功 + 逐时 401」
+                //   会被如实分区显示，而不会被压成一句「和风天气取不到」。
+                //   ⚠️ **无条件渲染**：四态由 `model.hourlyState` 派生，
+                //   各自渲染（`.idle` / `.noData` / `.available` / `.unavailable`）。
+                QWeatherHourlyCard(model: model, timeZone: timeZone)
+                footer
+            }
         }
         .padding(12)
         .background(Theme.surface,
@@ -95,6 +101,17 @@ struct QWeatherCard: View {
                 ProgressView()
                     .scaleEffect(0.6)
             }
+            CardCollapseButton(card: .qWeather, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.qWeather)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

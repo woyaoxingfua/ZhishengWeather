@@ -49,6 +49,9 @@ struct UVIndexCard: View {
     /// 城市时区（D-4）。默认设备时区；由 `ContentView` 透传 `viewModel.selectedTimeZone`。
     var timeZone: TimeZone = .current
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.uv)
+
     /// 分档语义色（UV 越高越警示）。
     ///
     /// ⚠️ **不引入新配色体系**：低档用 `Theme.accentSecondary`，
@@ -107,15 +110,22 @@ struct UVIndexCard: View {
     private func card(_ resolved: Resolved) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             header(resolved)
-            if let advice = resolved.advice {
-                Text(advice.adviceText)
-                    .font(.system(size: Theme.FontSize.caption, weight: .medium))
-                    .foregroundStyle(Self.color(for: advice.level))
+            // 折叠态：只保留标题行，建议 / 峰值 / 补充行全部不渲染。
+            //
+            // ⚠️ `header` 内仍按 `resolved` 渲染当前档位大字—— 用户折叠后
+            // 仍能在标题行看到「当前 UV 值 + 档位」，这正是折叠的价值
+            // （收起长文、保留一眼可读的读数）。
+            if !isCollapsed {
+                if let advice = resolved.advice {
+                    Text(advice.adviceText)
+                        .font(.system(size: Theme.FontSize.caption, weight: .medium))
+                        .foregroundStyle(Self.color(for: advice.level))
+                }
+                if let peak = resolved.peak, let peakLevel = UVIndexLevel(uv: peak.value) {
+                    peakRow(peak: peak, level: peakLevel, timeIsReliable: resolved.peakTimeIsReliable)
+                }
+                extraRows
             }
-            if let peak = resolved.peak, let peakLevel = UVIndexLevel(uv: peak.value) {
-                peakRow(peak: peak, level: peakLevel, timeIsReliable: resolved.peakTimeIsReliable)
-            }
-            extraRows
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,6 +155,17 @@ struct UVIndexCard: View {
                     .font(.system(size: Theme.FontSize.caption))
                     .foregroundStyle(Theme.secondaryText)
             }
+            CardCollapseButton(card: .uv, isCollapsed: isCollapsed, onToggle: toggleCollapse)
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.uv)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 

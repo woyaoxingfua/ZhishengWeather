@@ -90,6 +90,9 @@ struct OfficialWarningCard: View {
     /// 套到 B 上 —— 与 `OfficialWarningItem.id` 存在的原因同款。
     @State private var expandedIDs: Set<String> = []
 
+    /// 本卡折叠态（初值读持久化；点标题行右侧按钮翻转）。
+    @State private var isCollapsed: Bool = CardVisibilityStore.isCollapsed(.warning)
+
     var body: some View {
         // `.none` → 整卡隐藏（不留空白）；其余三态都有可见输出。
         if case .none = state {
@@ -104,20 +107,24 @@ struct OfficialWarningCard: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            switch state {
-            case .none:
-                // **不可达**：`body` 已在此之前返回 `EmptyView`。
-                // 这里保留分支只为让 `switch` 在类型上完备（编译器要求），
-                // **不会**渲染出内容。
-                EmptyView()
-            case .active(let items):
-                activeBody(items)
-            case .stale(let reason):
-                staleBody(reason)
-            case .unavailable:
-                noticeBody(icon: "bell.slash",
-                           title: "未接入官方预警源",
-                           detail: "当前构建未启用中国气象局预警链路。")
+            // 折叠态：只保留标题行（卡名 + 档位徽标 + 折叠按钮），
+            // 四态正文与条目内部的「防御指南」展开区全部不渲染。
+            if !isCollapsed {
+                switch state {
+                case .none:
+                    // **不可达**：`body` 已在此之前返回 `EmptyView`。
+                    // 这里保留分支只为让 `switch` 在类型上完备（编译器要求），
+                    // **不会**渲染出内容。
+                    EmptyView()
+                case .active(let items):
+                    activeBody(items)
+                case .stale(let reason):
+                    staleBody(reason)
+                case .unavailable:
+                    noticeBody(icon: "bell.slash",
+                               title: "未接入官方预警源",
+                               detail: "当前构建未启用中国气象局预警链路。")
+                }
             }
         }
         .padding(14)
@@ -135,7 +142,20 @@ struct OfficialWarningCard: View {
                 .font(.system(size: Theme.FontSize.sectionTitle, weight: .semibold))
                 .foregroundStyle(Theme.secondaryText)
             Spacer(minLength: 8)
+            // 折叠按钮放在 `headerBadge` **之前**：徽标是「当前档位」这一
+            // 语义信息（如「红色预警」），必须留在最右侧不被按钮割裂。
+            CardCollapseButton(card: .warning, isCollapsed: isCollapsed, onToggle: toggleCollapse)
             headerBadge
+        }
+    }
+
+    // MARK: - 折叠切换
+
+    /// 翻转折叠态：落库 + 改本地状态（动画与图标统一由 `CardCollapseButton` 驱动）。
+    private func toggleCollapse() {
+        let next = CardCollapseButton.toggleCollapsed(.warning)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isCollapsed = next
         }
     }
 
