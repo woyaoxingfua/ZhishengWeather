@@ -206,31 +206,51 @@ struct ContentView: View {
                 let latitude = resolved.latitude
                 let longitude = resolved.longitude
 
+                // 🔴🔴 **可见性必须在进入 `async let` 之前读出**。
+                //
+                // ⚠️ 踩坑记录（CI run#37757972635 编译错：
+                //    `expression is 'async' but is not marked with 'await'`）：
+                // `CardVisibilityStore` 是 **类型级 `@MainActor`**，故连它的
+                // `static func isHidden` 也是 MainActor 隔离的；
+                // 而 `async let` 的闭包是**非隔离** async 上下文，
+                // 在里面调MainActor 方法**必须**写 `await`。
+                // → 写法A（守卫搬进闭包）：四处都得加 `await`，
+                //   且闭包内 `isHidden` 与 `load` 两次跨 actor 往返；
+                // → 写法B（本处采用）：**在 MainActor 上先同步读出四个Bool**，
+                //   闭包内只做纯值判断 + 一次 `load` 的 `await`。
+                //
+                // ⚠️ 顺带一个由此产生的**真实收益**：读一次即定格，
+                // 四路用的是同一批快照，不会出现「有的卡读到 true、
+                // 有的卡读到 false」的撕裂（同一次取数过程内一致）。
+                let radarHidden = CardVisibilityStore.isHidden(.radar)
+                let floodHidden = CardVisibilityStore.isHidden(.flood)
+                let quakeHidden = CardVisibilityStore.isHidden(.earthquake)
+                let qWeatherHidden = CardVisibilityStore.isHidden(.qWeather)
+
                 // 四条链路**并发**（不是串行）：`async let` 保证同时发起，
                 // 最后一起 await —— 任何一条都不是另三条的**前置阻塞**。
                 //
                 // 🔴🔴 **被用户关掉的卡：连请求都不发**（不只是不渲染）。
                 // 守卫用 `if` 包裹时，闭包在条件为假时**根本不会执行** → 零请求。
-                // 这正是「关掉一张卡真的省流量与电量」的实现方式，
-                // 也让「折叠 = 不关心 = 不该耗电」的取舍在取数层同样成立。
+                // 这正是「关掉一张卡真的省流量与电量」的实现方式。
                 // ⚠️ 坐标系里的 satellite 由卡内 `.task(id: isEnabled)` 自管，
                 //   不在这四路里（它默认关闭，用户拨开关才取数）。
                 async let radar: Void = {
-                    guard !CardVisibilityStore.isHidden(.radar) else { return }
+                    guard !radarHidden else { return }
                     await radarModel.load(cityID: city.id,
                                           latitude: latitude,
                                           longitude: longitude)
                 }()
                 async let flood: Void = {
-                    guard !CardVisibilityStore.isHidden(.flood) else { return }
+                    guard !floodHidden else { return }
                     await floodModel.load(latitude: latitude, longitude: longitude)
                 }()
                 async let earthquake: Void = {
-                    guard !CardVisibilityStore.isHidden(.earthquake) else { return }
+                    guard !quakeHidden else { return }
                     await earthquakeModel.load(latitude: latitude, longitude: longitude)
                 }()
                 async let qWeather: Void = {
-                    guard !CardVisibilityStore.isHidden(.qWeather) else { return }
+                    guard !qWeatherHidden else { return }
                     await qWeatherModel.load(latitude: latitude, longitude: longitude)
                 }()
                 _ = await (radar, flood, earthquake, qWeather)
