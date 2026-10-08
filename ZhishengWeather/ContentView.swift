@@ -55,6 +55,26 @@ struct ContentView: View {
     /// 注释里记录的 run 37463237543 / 37458644694 实证）。
     @State private var typhoonModel = TyphoonCardModel()
 
+    /// 卫星云图卡状态（风云四号真彩云图：独立域名 + 独立失败域）。
+    ///
+    /// 持有方式与 `radarModel` / `typhoonModel` **同款**（`@State`，因为
+    /// `@Observable` 宏**不合成 `$` 投影**，用 `@StateObject` 会编译失败 ——
+    /// 见上方 radarModel 注释里记录的 run 37463237543 / 37458644694 实证）。
+    ///
+    /// ⚠️ **不引入第二个城市来源**：卫星云图产品**与选中城市无关**
+    /// （`SatelliteCardModel.load(now:)` 只吃时间，URL 也只由时戳决定），
+    /// 故它的加载触发写在 `SatelliteCard` **卡内**（`.task(id: isEnabled)`），
+    /// 本文件不调`satelliteModel.load(...)` —— 与台风卡「不绑 id」的判据同款。
+    @State private var satelliteModel = SatelliteCardModel()
+
+    /// 河道流量卡状态（第五源 Open-Meteo Flood：独立子域名 + 独立失败域）。
+    ///
+    /// 持有方式同上（`@State`，不是 `@StateObject`）。
+    /// 坐标**复用既有真源** `viewModel.resolvedCoordinateForRadar`
+    /// （与雷达卡同一个属性，"当前位置"项已由 VM 用 `location` 覆盖），
+    /// **绝不新建第二套城市来源**。
+    @State private var floodModel = FloodCardModel()
+
     /// 台风卡的年份选择器所需的「当前年」。
     ///
     /// ⚠️ 由 `Date()` 在**视图构造期**取值并显式传给卡片（卡片自己不读时钟），
@@ -149,6 +169,21 @@ struct ContentView: View {
                 let resolved = viewModel.resolvedCoordinateForRadar
                 await radarModel.load(cityID: city.id,
                                       latitude: resolved.latitude,
+                                      longitude: resolved.longitude)
+            }
+            // 河道流量（第五源 Open-Meteo Flood）：随城市切换加载。
+            //
+            // ⚠️ **挂在与雷达同一个 `.task(id:)` 触发族下**（同一个
+            // `id` = 选中城市 id），**不新开刷新生命周期**（硬约束⑦）。
+            // 坐标同样取`viewModel.resolvedCoordinateForRadar` —— 与雷达卡
+            // **逐字同一个真源**，故两卡绝不会出现"一个按城市、一个按定位"的分歧。
+            //
+            // ⚠️ flood **无坐标判据**（实测内陆城市照样有值：北京 39.9,116.4
+            // → `[5.07, 5.05, ...]`），所以这里**不套任何"是否沿海/内陆"的门禁**。
+            .task(id: viewModel.directory.selectedCity?.id) {
+                guard viewModel.directory.selectedCity != nil else { return }
+                let resolved = viewModel.resolvedCoordinateForRadar
+                await floodModel.load(latitude: resolved.latitude,
                                       longitude: resolved.longitude)
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
@@ -362,6 +397,38 @@ struct ContentView: View {
                         guard case .idle = typhoonModel.state else { return }
                         await typhoonModel.load(year: nil)
                     }
+                // 卫星云图卡（风云四号真彩 · 独立失败域）。
+                //
+                // **插入位置**：台风卡之后、可排序区块 `ForEach(orderedVisibleSections)`
+                // **之前**（与 `RadarMapCard` / `UVIndexCard` / `OfficialWarningCard` /
+                // `TyphoonCard` 同款：**不占用 `HomeSection`**，避免老用户持久化顺序
+                // 把它补到尾部）。
+                //
+                // ⚠️ **无条件挂载**：四态（未开启 / 加载中 / 已加载 / 取不到）由
+                // `SatelliteCardModel` 派生，卡内**各自**渲染可见内容 ——
+                // 尤其「取不到」的**原因文案分类**（未找到时次 / 不是图片 /
+                // 该时次为空白）是三类不同的事实，**绝不含糊成一句"加载失败"**。
+                //
+                // ⚠️ **加载触发在卡内**（`.task(id: isEnabled)`）：云图**默认关闭**
+                // （整幅亚洲区域位图会完全遮住地图底图，理由见
+                // `SatelliteCardModel.isEnabled`），故未开启时**一个请求都不发**；
+                // 用户拨开开关才取数。本文件**不调** `satelliteModel.load(...)`。
+                SatelliteCard(model: satelliteModel,
+                              timeZone: viewModel.selectedTimeZone)
+                // 河道流量卡（第五源 Open-Meteo Flood · 独立失败域）。
+                //
+                // **插入位置**：卫星云图卡之后、可排序区块**之前**（同上款：
+                // **不占用 `HomeSection`**）。
+                //
+                // ⚠️ **无条件挂载**：四态（`.idle` / `.noData` / `.available` /
+                // `.unavailable`）由 `FloodCardModel` 派生，卡内各自渲染可见内容。
+                // 特别地 **`.noData`（这一带没有河道数据）与 `.unavailable`（取不到）
+                // 是两套不同的文案** —— 混用会把"正常地理事实"说成"产品坏了"。
+                //
+                // ⚠️ **无坐标判据**：实测内陆城市同样有值（北京、拉萨），
+                // 故不按"是否沿海"过滤（那会错杀真实数据）。
+                FloodCard(model: floodModel,
+                          timeZone: viewModel.selectedTimeZone)
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in
