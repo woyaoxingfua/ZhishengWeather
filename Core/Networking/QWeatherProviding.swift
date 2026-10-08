@@ -72,7 +72,6 @@ actor QWeatherService: QWeatherProviding {
         // `signer` 给了桩就用桩，没给就建真的。
         self.signer = signer ?? QWeatherTokenSigner(now: now)
     }
-    }
 
     /// 取回逐日预报。
     func fetchDaily(latitude: Double,
