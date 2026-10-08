@@ -188,7 +188,12 @@ struct QWeatherCard: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 2) {
             if model.hasTimedOut {
-                Text("加载超时（超过 " + String(Int(model.loadTimeout)) + " 秒）· 上方结果可能不是最新")
+                // ⚠️ `loadTimeout` 是 **static** 常量，必须写`QWeatherCardModel.loadTimeout`
+                // （写 `model.loadTimeout` 会报「static member cannot be used on
+                // instance」—— 2026-10-08 CI 实测）。
+                Text("加载超时（超过 "
+                     + String(Int(QWeatherCardModel.loadTimeout))
+                     + " 秒）· 上方结果可能不是最新")
                     .font(.system(size: Theme.FontSize.caption))
                     .foregroundStyle(Theme.accent)
             }

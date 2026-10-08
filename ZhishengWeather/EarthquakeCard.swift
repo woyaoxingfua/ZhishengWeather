@@ -246,7 +246,13 @@ struct EarthquakeCard: View {
                 .font(.system(size: Theme.FontSize.caption))
                 .foregroundStyle(Theme.secondaryText)
             if model.hasTimedOut {
-                Text("加载超时（超过 " + String(Int(model.loadTimeout)) + " 秒）· 上方结果可能不是最新")
+                // ⚠️ `loadTimeout` 是 **static** 常量，必须写
+                // `EarthquakeCardModel.loadTimeout`（写 `model.loadTimeout`
+                // 会报「static member cannot be used on instance」——
+                // 2026-10-08 CI 实测，同款错误在 QWeatherCard 也犯过一次）。
+                Text("加载超时（超过 "
+                     + String(Int(EarthquakeCardModel.loadTimeout))
+                     + " 秒）· 上方结果可能不是最新")
                     .font(.system(size: Theme.FontSize.caption))
                     .foregroundStyle(Theme.accent)
             }
