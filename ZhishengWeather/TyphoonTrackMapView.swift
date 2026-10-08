@@ -48,6 +48,7 @@
 //  "台风数据 by 中央气象台台风网" + 可点链接（CC BY 4.0 署名义务）。
 //
 
+import SwiftUI
 import CoreLocation
 import MapKit
 // `UIEdgeInsets` 属**UIKit**，SwiftUI / MapKit 都不保证 re-export
