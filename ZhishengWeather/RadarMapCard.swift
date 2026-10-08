@@ -519,6 +519,19 @@ struct RadarMapView: UIViewRepresentable {
     }
 
     /// 渲染器工厂。
+    ///
+    /// 🔴 **必须带类型级 `@MainActor`**（CI run#37769887372 实测 3 处编译错：
+    /// `call to main actor-isolated static method 'calibration(of:)' /
+    /// 'minimumCenterDistance(calibration:)' / 'isAtMaximumZoom(...)'
+    /// in a synchronous nonisolated context`）。
+    ///
+    /// 原因与 `docs/CI-pitfalls.md` 的 **P-06b** 同源：
+    /// `RadarZoomCap` 是类型级 `@MainActor`（它要读 `MKMapView`），
+    /// **故其 `static` 方法也全是 MainActor 隔离的**；
+    /// 而本Coordinator 是 `NSObject` 子类、**默认非隔离**。
+    /// ⚠️ `MKMapViewDelegate` 的回调**运行时确实在主线程**，
+    ///   但编译器不靠这个做隔离推断 —— 必须**显式标注**。
+    @MainActor
     final class Coordinator: NSObject, MKMapViewDelegate {
         /// 当前已装上的帧路径（nil = 无回波层）。
         var installedFramePath: String?
