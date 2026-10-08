@@ -186,7 +186,14 @@ enum SourceDirectory {
                          // 域内（属于 `RiverDischarge` 模型）→ 诚实留空、无 EV-1 信号源。
                          requiredFields: [],
                          needsCredential: false,
-                         // 同 marine：未接线，诚实置 false。
+                         // ⚠️ **已接线**（2026-10-08）：`FloodCardModel` +
+                         // `FloodCard` 已挂进 ContentView，走
+                         // `viewModel.resolvedCoordinateForRadar` 同一坐标真源。
+                         // 但 `riverDischarge` 仍**不在 `WeatherFieldKey` 域内**
+                         // → `requiredFields` 诚实留空、无 EV-1 信号源，
+                         // 故**仍不参与**按字段的自动摘除（摘除判据是
+                         // "该源声明的字段无人需要"，而本源的字段不在该域内，
+                         // 参与会出现"摘了它界面也没变化"的假开关）。
                          participatesInAutoExclusion: false,
                          websiteURLString: "https://open-meteo.com/en/docs/flood-api",
                          // 同 marine：官方免费档功能表**逐字列出** "Flood API" → 无需备注。
