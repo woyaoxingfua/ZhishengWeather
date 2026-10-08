@@ -73,4 +73,39 @@ enum SourceCapability: String, Codable, CaseIterable, Sendable {
                                  //   且会让下游把档位码当物理量渲染出**错误数据**。
                                  //  单列同时也是「兜底源」这个**角色**的显式声明：
                                  //   它与「参与常规链路的源」在语义与触发时机上都不同。
+
+    case qWeatherDailyForecast   // 和风侧逐日预报（高低温/现象/昼夜分块/天文）← 第九源 和风天气。
+                                 //  ⚠️ **不复用 `.dailyForecast`**：那一条隐含的是
+                                 //  **本项目既有逐日域**（`WeatherFieldKey` 内的
+                                 //  温度 / 天气码 / 降水概率等标量），而和风的逐日结构是
+                                 //  **自带单位的量纲对象 + 昼夜分块 + 天文时刻**
+                                 //  （`temperatureMax.value` 与 `unit` 成对、
+                                 //  `humidity` / `cloudCover` 是 **[0,1] 而非 0–100**、
+                                 //  `daytime` / `nighttime` **同构但分块**）——
+                                 //  语义与既有逐日预报**不同源、不同量纲**。
+                                 //  复用即虚报能力，且会让下游按既有逐日域去寻址，
+                                 //  把 [0,1] 的湿度当成百分数渲染（**量纲事故**）。
+                                 //  单列的另一个理由（与 warning / typhoon 同款）：
+                                 //  和风逐日要素**不在** `WeatherFieldKey` 域内
+                                 //  （它属于 `QWeatherDailyForecast` 模型），
+                                 //  → `requiredFields` 必须**诚实留空**。
+                                 //  ⚠️ 本条仅覆盖**逐日**端点 `/weather/v1/daily/...`；
+                                 //  实况端点是 `/weather/v1/current/{lat}/{lon}`
+                                 //  （**不是** `/now/`，主理人 2026-10-08 逐字核实官方文档
+                                 //  并**真实请求实测 200** 确认），本轮**未接入**，
+                                 //  故**不**声明 `.currentObservation`（未接即不声明）。
+
+    case earthquakeEvents        // 地震事件（震级/震中/深度/时刻/PAGER警报）← 第十源 USGS。
+                                 //  ⚠️ **不复用任何既有 case**：地震要素**完全不在**
+                                 //  天气域内（既不是标量气象量，也不是海洋/预警/台风），
+                                 //  属于**另一个学科域**（地震学）。
+                                 //  复用 `.officialWarning` 是**语义错配**——
+                                 //  预警是「官方发布的警示信息」，地震是「自然界发生的物理事件」，
+                                 //  两者的权威性、时效性、用户心智都不同；
+                                 //  且 USGS 是**美国地质调查局**、不是气象机构。
+                                 //  单列的另一个理由（同marine / flood / typhoon / warning）：
+                                 //  地震要素不在 `WeatherFieldKey` 域内
+                                 //  （属于 `EarthquakeEvent` 模型）
+                                 //  → `requiredFields` 必须**诚实留空**。
+                                 //  ⚠️ 本源**免 Key、免注册、零鉴权**（实测 2026-10-08）。
 }

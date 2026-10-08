@@ -75,6 +75,22 @@ struct ContentView: View {
     /// **绝不新建第二套城市来源**。
     @State private var floodModel = FloodCardModel()
 
+    /// 地震卡状态（第十源 USGS 地震：免 Key、零鉴权、独立域名）。
+    ///
+    /// 持有方式同上（`@State`，不是 `@StateObject`）。
+    /// 坐标**复用既有真源** `viewModel.resolvedCoordinateForRadar`
+    /// （与雷达 / 洪水卡同一个属性），**绝不新建第二套城市来源** ——
+    /// 否则两卡会出现「一个按城市、一个按定位」的分歧。
+    @State private var earthquakeModel = EarthquakeCardModel()
+
+    /// 和风天气卡状态（第九源 QWeather：**需 Key**）。
+    ///
+    /// 持有方式同上（`@State`，不是 `@StateObject`）。
+    /// ⚠️ **凭据由 App 侧注入**（Core 不读凭据，`SC-42a` 静态门禁会扫）；
+    /// 未配置时 `QWeatherService` 抛 `dataMissing` → 卡片显示
+    /// 「未配置 API 凭据」，**绝不伪造数据、绝不静默换源**。
+    @State private var qWeatherModel = QWeatherCardModel()
+
     /// 台风卡的年份选择器所需的「当前年」。
     ///
     /// ⚠️ 由 `Date()` 在**视图构造期**取值并显式传给卡片（卡片自己不读时钟），
@@ -185,6 +201,36 @@ struct ContentView: View {
                 let resolved = viewModel.resolvedCoordinateForRadar
                 await floodModel.load(latitude: resolved.latitude,
                                       longitude: resolved.longitude)
+            }
+            // 地震（第十源 USGS）：随城市切换加载。
+            //
+            // ⚠️ **挂在与雷达同一个 `.task(id:)` 触发族下**（同一个
+            // `id` = 选中城市 id），**不新开刷新生命周期**（硬约束⑦）。
+            // 坐标同样取 `viewModel.resolvedCoordinateForRadar` —— 与雷达 /
+            // 洪水卡**逐字同一个真源**。
+            //
+            // ⚠️ 地震**无坐标可用性判据**（实测北京 300km/30天/M2.5+ 就是 0 条，
+            // 那是**真的没地震**）→ 这里**不套任何门禁**，也不对 0 条做特殊处理：
+            // 「附近没有达到口径的地震」由卡内 `.none` 态如实呈现。
+            .task(id: viewModel.directory.selectedCity?.id) {
+                guard viewModel.directory.selectedCity != nil else { return }
+                let resolved = viewModel.resolvedCoordinateForRadar
+                await earthquakeModel.load(latitude: resolved.latitude,
+                                           longitude: resolved.longitude)
+            }
+            // 和风天气（第九源 QWeather · 需 Key）：随城市切换加载。
+            //
+            // ⚠️ 挂在与雷达同一个 `.task(id:)` 触发族下（同 id = 选中城市 id），
+            // **不新开刷新生命周期**（硬约束⑦）。
+            //
+            // 🔴 **未配置凭据时会抛 `dataMissing`** → 卡片显示
+            // 「未配置 API 凭据」。这是**如实空态**，不是故障 ——
+            // **绝不**为此静默换源、或拿别的源的数据冒充和风。
+            .task(id: viewModel.directory.selectedCity?.id) {
+                guard viewModel.directory.selectedCity != nil else { return }
+                let resolved = viewModel.resolvedCoordinateForRadar
+                await qWeatherModel.load(latitude: resolved.latitude,
+                                         longitude: resolved.longitude)
             }
             // 跳转目的地注册（A1-8 搜索 → 城市列表；A3-4 设置 → SettingsView）。
             .navigationDestination(for: CityRoute.self) { route in
@@ -429,6 +475,32 @@ struct ContentView: View {
                 // 故不按"是否沿海"过滤（那会错杀真实数据）。
                 FloodCard(model: floodModel,
                           timeZone: viewModel.selectedTimeZone)
+                // 地震卡（第十源 USGS地震 · 免 Key· 独立失败域）。
+                //
+                // **插入位置**：河道流量卡之后、可排序区块**之前**（同上款：
+                // **不占用 `HomeSection`**）。
+                //
+                // ⚠️ **无条件挂载**：四态（`.idle` / `.none` / `.available` /
+                // `.unavailable`）由 `EarthquakeCardModel` 派生，卡内各自渲染。
+                // 🔴 **`.none` 与 `.unavailable` 必须是两套文案** ——
+                // 实测**北京 300km/30天/M2.5+ 就是 0 条**（已用 `/count` 交叉验证，
+                // 确认真的没地震），也就是说**绝大多数用户看到的就是「没有」**。
+                // 若把「没有」与「取不到」混用，用户会以为 App 坏了。
+                EarthquakeCard(model: earthquakeModel,
+                              timeZone: viewModel.selectedTimeZone)
+                // 和风天气卡（第九源 QWeather · 需 Key · 独立失败域）。
+                //
+                // **插入位置**：地震卡之后、可排序区块**之前**（同款：
+                // **不占用 `HomeSection`**）。
+                //
+                // ⚠️ **无条件挂载**：四态由 `QWeatherCardModel` 派生。
+                // 🔴 **未配置凭据时显示「未配置 API 凭据」**（如实空态）。
+                //
+                // 🔴🔴 **`attributions` 必须渲染**（和风官方明文：
+                // 「必须与当前数据共同显示」）—— 这是**许可条件，非可选**。
+                // 漏渲染 = 违反许可条件，比少一个 UI 元素严重得多。
+                QWeatherCard(model: qWeatherModel,
+                             timeZone: viewModel.selectedTimeZone)
                 // A2-7：可排序/可隐藏区块按 HomeSectionOrder 渲染
                 //（Hero 与页脚固定不参与，AC-A2-21 例外条款）。
                 ForEach(orderedVisibleSections) { section in

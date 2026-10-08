@@ -86,6 +86,53 @@ enum SourceID: String, CaseIterable, Sendable {
     /// ⚠️ rawValue 用 `7timer`（**不是** `7timer-info`）：与前七源「域名/服务名」
     ///   的命名口径一致，且这是本仓该源的稳定持久化键。
     case sevenTimer = "7timer"
+
+    /// 第九源：**和风天气**（QWeather，**需 Key**：JWT + 控制台分配的专属 API Host）——
+    /// 仅补**和风侧逐日预报**能力（逐日高低温 / 天气现象 / 昼夜分块 / 天文）。
+    ///
+    /// ⚠️ **rawValue 用 `qweather`**（与真实服务语义一致：官方品牌英文名 QWeather，
+    ///   域名 `qweatherapi.com`）。**不是** `q-weather`、不是 `devapi-qweather`
+    ///   ——那会把一个并不存在的主机名写进持久化键。
+    ///
+    /// ⚠️ **已实测（2026-10-08，主理人用真实凭据打通）**：先前记为「未实测（无 Key）」，
+    ///   现已作废 —— 实测结论如下：
+    ///   · 不带 `Authorization` → **HTTP 401**（证明专属 Host 与端点路径正确）；
+    ///   · 带正确 JWT（Ed25519 签名）→ **HTTP 200**，返回 gzip JSON，
+    ///     实况顶层结构与官方文档**逐字一致**（`condition` / `temperature` /
+    ///     `humidity` / `wind` / `precipitation` / `pressure` / `visibility` /
+    ///     `dewPoint` / `cloudCover` / `uvIndex`，**无** `now` 包装层）。
+    ///   · 实测 `humidity = 0.32`、`cloudCover = 0` → **确认官方文档的 `[0,1]`
+    ///     量纲正确**（不是 0–100），此点已在 `QWeatherMapper` 用断言钉死。
+    ///   · `daily` 端点 `?days=3` 实测 200，`astro`(15 键) / `daytime`(10 键) 结构
+    ///     亦与文档一致。
+    ///   · 实测 Host 需代理（无代理时本机 HTTP 000）——**这是本机网络环境事实，
+    ///     不等于 API 不可用**。
+    ///
+    /// ⚠️ **鉴权方式已改版，勿照抄老博客**：网上大量样例写的是老式
+    ///   `https://devapi.qweather.com/v7/...?key=xxx`，**那套实测 403**。
+    ///   官方现行方式是 **JWT（Ed25519 数字签名）+ 控制台分配的专属 API Host**，
+    ///   形如 `https://<你的Host>.qweatherapi.com`，认证头 `Authorization: Bearer <JWT>`。
+    case qWeather = "qweather"
+
+    /// 第十源：**USGS 地震**（`earthquake.usgs.gov`，FDSN Event Web Service，
+    /// **完全免 Key、免注册、零鉴权**）——提供「附近有感地震」。
+    ///
+    /// ⚠️ rawValue 用 `usgs-earthquake`：USGS 的服务域名是
+    ///   `earthquake.usgs.gov`（**不是** `usgs.gov` 主站，主站上没有这个路径）。
+    ///
+    /// ⚠️ **本轮已完整实测（2026-10-08，主理人真实 curl）**：
+    ///   · `.../event/1/query?format=geojson&latitude=&longitude=&maxradiuskm=
+    ///     &minmagnitude=&starttime=&orderby=time&limit=` → **HTTP 200**；
+    ///   · 半径查询（`latitude`+`longitude`+`maxradiuskm`）可用，语义上对应「附近」；
+    ///   · **北京 300km / 30 天 / M2.5+ 实测返回 0 条**（另用 `/count` 端点交叉验证，
+    ///     确认是**真的没地震**，不是参数写错）→ **「附近无地震」是常态而非故障**，
+    ///     故状态机必须把 `.none`（查过了、没有）与 `.unavailable`（取不到）分开。
+    ///   · 🔴 实测坑：`metadata` **加了 `limit` 后就不再返回 `count`**
+    ///     （改为 `limit`/`offset`）→ 判有无地震一律用 `features.count`。
+    ///
+    /// 地震要素**不在 `WeatherFieldKey` 域内**（与 marine / flood 同处境），
+    /// 故 `requiredFields: []` 诚实留空、`participatesInAutoExclusion: false`。
+    case usgsEarthquake = "usgs-earthquake"
 }
 
 // MARK: - Codable

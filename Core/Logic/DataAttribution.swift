@@ -26,8 +26,14 @@
 //    CC BY 4.0 义务不因「没注册成降级源」而消失。
 //  故本文件按**「实际在用」**列全部出处，并对未注册端点**显式标注性质**。
 //
-//  ⚠️ 付费源（和风 / 彩云等）**未接入**，故**不在**此列——
+//  ⚠️ 付费源**仅在「已接线」时才出现在此列**——
 //  列一个没在用的源等于虚假署名，比不署名更糟。
+//  · **和风天气（QWeather）已于 2026-10-08 接线**（第九源，需用户自备凭据）：
+//    它经 `SourceDirectory` 派生获得署名条目，其 `usageNote` 如实写明
+//    「需自备凭据 + 尚未经真机核验」。⚠️ 另：和风官方要求
+//    `metadata.attributions`（响应里逐条下发的署名 URL）**必须与数据共同显示**，
+//    那是**许可条件**、不是可选项 → 由 `QWeatherCard` 在卡片上逐条渲染。
+//  · **彩云 / 心知等仍未接入**，故**不在**此列（保持原纪律）。
 //
 //  Core 纪律：仅 import Foundation；禁 UIKit / 内部 Date() / try! / fatalError。
 //
@@ -211,6 +217,7 @@ enum DataAttribution {
         case .typhoonTrack: return "台风路径与官方预报（含风圈）"
         case .marineTide: return "潮汐（逐15 分钟潮高，含高低潮极值）"
         case .coarseFallbackFields: return "兜底标量（气温/气压/风向）"
+        case .qWeatherDailyForecast: return "逐日预报（和风：逐日高低温/天气现象/昼夜分块/天文，含和风指定署名）"
         @unknown default: return "（未命名能力）"
         }
     }

@@ -297,7 +297,90 @@ enum SourceDirectory {
                          // 明确「无需 API 密钥即可直接使用」，不存在「现状可用但矩阵不含」，
                          // 故**不**套用那句谨慎备注（那是虚假谨慎）。许可条款官方未声明 →
                          // 不臆测、不美化，保持 nil。
-                         usageNote: nil)
+                         usageNote: nil),
+
+        // 第九源：和风天气（QWeather，**需 Key**：JWT + 控制台专属 API Host）。
+        //
+        // ⚠️ **本轮未实测（无 Key）**：字段清单来自和风官方文档页
+        //   `https://dev.qweather.com/docs/api/weather/weather-daily-forecast`
+        //   （主理人 2026-10-08 抓取）。**官方文档示例 ≠ 该账号真实响应**，
+        //   接入后必须真机核验（见 `Core/Models/QWeatherDaily.swift` 文件头）。
+        SourceDescriptor(id: .qWeather,
+                         displayName: "和风天气",
+                         role: .auxiliary,
+                         capabilities: [.qWeatherDailyForecast],
+                         // ⚠️ **诚实留空**：和风逐日要素（自带单位的量纲对象 /
+                         // 昼夜分块 / 天文时刻）**不在 `WeatherFieldKey` 域内**
+                         // （它们属于 `QWeatherDailyForecast` 模型）——
+                         // 同 flood / marine / warning 的处境，塞假字段充数
+                         // 只会让 EV-1 判"永远缺字段"→ **误摘**。
+                         // → 后果：**无 EV-1 信号源**。
+                         requiredFields: [],
+                         // 🔴 **true**：本源**无免费免 Key 路径**，必须配置
+                         // API Host / Project ID / Credential ID / Ed25519 私钥
+                         // 才能取数。无凭据 → 卡片显示「未配置 API 凭据」，
+                         // **绝不静默换源、绝不伪造数据**（本仓铁律：
+                         // 缺失就渲染如实空态）。
+                         needsCredential: true,
+                         // ⚠️ **false**，理由与 flood 同款且更明确：
+                         //  ① `riverDischarge` 类比 —— 本源字段不在
+                         //  `WeatherFieldKey` 域内 → 无 EV-1 按字段摘除信号；
+                         //  ② 本轮**无任何调用点**上报 `recordMissingFields` /
+                         //  `recordHTTPStatus` → 置 true 会给设置页一个
+                         //  「点了没反应」的开关（违反诚实纪律）。
+                         participatesInAutoExclusion: false,
+                         // ⚠️ 填**开发者门户**而非某个具体 API 路径：
+                         // 本源的关键前提（专属 API Host 因账号而异）只在该站说明，
+                         // 写死某条文档路径会在文档改版后 404。
+                         // CC BY 4.0 署名义务要求可追溯的 credit，故填官网。
+                         websiteURLString: "https://dev.qweather.com/",
+                         // ⚠️⚠️ **必须如实写明"未接入 / 未实测"，不得美化**。
+                         // 三件事都要让用户知道：
+                         // ① 需要用户自备账号与凭据（不是开箱即用）；
+                         // ② 本轮**未实测**（无 Key）→ 字段可能与文档不一致；
+                         // ③ 和风官方要求 `metadata.attributions`
+                         //    **必须与数据共同显示**（许可条件，非可选），
+                         //    本应用已在卡片上逐条渲染。
+                         usageNote: "数据来自和风天气（QWeather），需自行申请账号并配置"
+                             + "API Host / Project ID / Credential ID / Ed25519 私钥；"
+                             + "和风要求署名与数据同时展示，本应用会在卡片上显示其指定的署名内容。"),
+
+        // 第十源：USGS 地震（`earthquake.usgs.gov`，FDSN Event Web Service）。
+        //
+        // ⚠️ 这是本仓**第一个非气象学科域**的数据源 —— 前面九个全是天气/海洋/
+        // 预警/台风，本源是**地震学**（另一个学科域）。
+        SourceDescriptor(id: .usgsEarthquake,
+                         displayName: "USGS 地震",
+                         role: .auxiliary,
+                         capabilities: [.earthquakeEvents],
+                         // ⚠️ **诚实留空**：地震要素（震级 / 震中 / 深度 / 时刻 /
+                         // PAGER 警报）**不在 `WeatherFieldKey` 域内**
+                         // （它们属于 `EarthquakeEvent` 模型）——
+                         // 同 marine / flood / warning / typhoon 的处境，
+                         // 塞假天气字段充数只会让 EV-1 判"永远缺字段"→ **误摘**。
+                         // → 后果：**无 EV-1 信号源**。
+                         requiredFields: [],
+                         // 实测 2026-10-08：**完全免 Key、免注册、零鉴权**，
+                         // 请求不带任何 Authorization 头即返回 200 → false。
+                         needsCredential: false,
+                         // 同marine / flood / warning / typhoon / qWeather：
+                         // 地震要素不在 `WeatherFieldKey` 域内 → 无按字段摘除信号；
+                         // 置 true 只会给设置页一个「点了没反应」的开关。
+                         participatesInAutoExclusion: false,
+                         websiteURLString: "https://earthquake.usgs.gov/",
+                         // ⚠️ 如实写明**查询口径**（这是最容易被误读的地方）：
+                         // 本源说的「附近无地震」**不等于**「附近没有震动」——
+                         // 它实际是「**300 km 内没有 M2.5 以上的地震**」。
+                         // 把这句话写清楚，才不会让用户以为「没报= 没发生」。
+                         //
+                         // 署名：USGS 数据属**美国联邦政府作品**，在美国境内
+                         // 属公有领域（public domain），**一般不强制署名**；
+                         // 但仍如实标注来源，不夸大也不虚构许可。
+                         usageNote: "数据来自美国地质调查局（USGS）FDSN 地震目录，"
+                             + "免注册、免密钥。查询口径为所选位置 300 公里内、"
+                             + "近30 天内 M2.5 及以上地震；"
+                             + "「附近无地震」指该口径下无记录，不代表该范围无任何震动。"
+                             + "震级量表（mb/md/ml/mww 等）不同之间不可直接横向比较。")
     ]
 
     /// 按 id 取描述符（未登记 → nil；调用方按「未知源一律不参与自动摘除」处理）。
